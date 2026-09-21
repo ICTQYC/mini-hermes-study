@@ -147,7 +147,7 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ```bash
 python3 tests/test_packaging.py        # 7 条：零依赖 / 无硬编码路径 / 密钥发现链
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
-python3 tests/test_prompt_assembly.py  # 125 条：提示词装配（43 个函数 / 13 组，含字节稳定性）
+python3 tests/test_prompt_assembly.py  # 138 条：提示词装配（45 个函数 / 13 组，含字节稳定性）
 ```
 
 > **测试跑起来是按组报告的**（第 3 章那个文件），一眼看得出失败的是哪一类保证。

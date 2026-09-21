@@ -569,9 +569,10 @@ block = pb.build_context_files_prompt(
 
 ---
 
-# 10. 代码检查发现的三个真问题
+# 10. 代码检查发现的四个真问题
 
-这三个都是**检查时才发现的**，值得单独记——它们的共同点是"**没有场景覆盖所以没被测出来**"。
+这四个都是**检查时才发现的**，值得单独记——它们的共同点是"**没有场景覆盖所以没被测出来**"，
+或者"**校验跑在了错误的时机上**"。
 
 ## ① `and` / `or` 写反了（真 bug）
 
@@ -638,6 +639,112 @@ git 工作区快照   → 探到 mini-hermes 那个仓库
 > 只要你的启动脚本为了 import 而 `cd`，就必须显式把用户目录传下去。
 > （Hermes 管这个叫 launch artifact，见 §9。）
 
+## ④ 预算告警插了一条合成的 user 行（违反 Hermes 的明文约束）
+
+**这条是用户问"临时层到底是什么"时挖出来的**——为了讲清临时层，我去看 Hermes
+怎么注入它自己的预算告警，结果发现两边做的是**相反的事**。
+
+**mini 第一版**（往末尾插一条新行）：
+
+```python
+api_messages = api_messages + [{"role": "user", "content": f"（系统提示：还剩 {remaining} 次迭代…）"}]
+```
+
+实测结果：
+
+```console
+注入后每行的 role：
+   system     SYS
+   user       帮我查一下文件
+   user       （系统提示：还剩 2 次迭代，请尽快收尾并给出结论。）
+
+→ 用 mini **自己的** _validate_alternation 校验注入后的结果：
+   ✗ 消息 2 违反交替规则：连续两条 user
+```
+
+**而且这个违规自己永远发现不了**——`_validate_alternation` 在 `_build_api_messages` 里被调用，
+也就是跑在**注入之前**。**校验对着中间态，发出去的却是最终态。**
+
+**Hermes 的明文约束**（顶层 `AGENTS.md`）：
+
+> *never two same-role messages in a row; **never a synthetic user message injected mid-loop***
+
+**Hermes 的做法**（`agent/turn_iteration_prep.py:32`）：
+
+```python
+def _maybe_inject_iteration_budget_warning(agent, messages) -> bool:
+    """Append the opt-in one-shot warning to **the newest tool result**."""
+    ...
+    # Only the current tool-result tail is mutable; an older turn may already be cached.
+    if (not messages or messages[-1].get("role") != "tool"
+            or messages[-1].get(_DB_PERSISTED_MARKER)):
+        return False                                    # ← 没有合法落点就**放弃**
+    message = messages[-1]
+    content = message.get("content", "")
+    if isinstance(content, str):
+        message["content"] = content + f"\n\n{notice}"   # ← 改尾巴，不新增行
+    elif isinstance(content, list) or content is None:
+        message["content"] = [*(content or []), {"type": "text", "text": notice}]
+    else:
+        return False
+    agent._iteration_budget_warning_injected = True      # ← 一次性
+    return True
+```
+
+**四条差异**：
+
+| | mini 第一版 | Hermes |
+|---|---|---|
+| 落点 | **新插一条 user 行** | **追加进最新工具结果的内容里** |
+| 角色交替 | ✗ `user, user` | ✓ 不新增行 |
+| 最后一行不是工具结果 | 照样插 | **放弃**（`return False`） |
+| 注入次数 | **每轮重复注入** | **一次性**（有标志位） |
+| 多模态结果 | 不涉及 | 追加 `text` 块，不碰 image 块 |
+
+**为什么"改尾巴"是缓存安全的**——源码注释原文：
+
+> *Only the current tool-result tail is mutable; an older turn may already be cached.*
+> （只有当前工具结果的尾巴是可改的；更早的轮次可能已经被缓存了。）
+
+**前缀缓存比的是"从第一个字节起的最长公共前缀"——改尾巴不影响前缀。**
+而"插一条新行"改的是**角色结构**，那是另一种性质的变化。
+
+**修法**（`run_agent.py`）：改尾巴 + 最后一行必须是工具结果 + 一次性标志。
+
+```python
+if (
+    self.max_turns
+    and not self._budget_warning_injected
+    and remaining <= max(3, self.max_turns // 20)
+    and api_messages
+    and api_messages[-1].get("role") == "tool"          # ★ 只在尾巴是工具结果时才改
+):
+    last = dict(api_messages[-1])
+    last["content"] = str(last.get("content", "")) + f"\n\n（系统提示：还剩 {remaining} 次迭代…）"
+    api_messages = [*api_messages[:-1], last]           # ★ 不新增行
+    self._budget_warning_injected = True                # ★ 一次性
+```
+
+并**把校验挪到注入之后**（循环里第 7.5 步）——`_build_api_messages` 里那次**保留**，
+但两次校验的对象不同：
+
+| 位置 | 校验什么 |
+|---|---|
+| `_build_api_messages` 里 | **历史本身**合法（防止历史被污染） |
+| 循环第 7.5 步 | **最终请求**合法（含临时层） |
+
+> 🎓 **规律**：这已经是这个项目第二次"**校验跑在错误的时机上**"了。
+> 上一次是 `test_truncation_warning_surfaces`（断言对着被 drain 之后的状态）。
+> **校验的对象必须是最终产物，不是中间态。**
+
+**新增测试**（13 条）：最后一行不是工具结果时不注入、是工具结果时不新增行、
+提示进到工具结果内容里、注入后序列仍合法、一次性生效、历史没被污染、
+以及"循环里确实在注入之后还有一次校验"（用 `inspect.getsource` 断言的）。
+
+> 📌 这条的**发现路径**很值得记：它不是我读代码读出来的，而是**为了回答一个概念问题
+> （"临时层是什么"）去看参照实现**，才发现两边做反了。
+> **"为了讲清楚一个概念去核对源码"本身就是一种代码检查。**
+
 ## 附：一个观察（不是 bug）
 
 三条"必须包含 X 个字"的人工规则同时喂进去时（SOUL.md 一条 + 根 AGENTS.md 一条 +
@@ -684,7 +791,7 @@ git 工作区快照   → 探到 mini-hermes 那个仓库
 
 # 12. 测试覆盖了什么
 
-`tests/test_prompt_assembly.py` —— **43 个测试函数 / 125 条断言 / 13 组**。
+`tests/test_prompt_assembly.py` —— **45 个测试函数 / 138 条断言 / 13 组**。
 跑一次就按组打印，一眼看得出"失败的是哪一类保证"：
 
 ```console
@@ -711,14 +818,14 @@ MINI_HOME = /var/folders/.../mini_test_home_xxx
    → 4 通过
 ══ 10. 时间戳 ══ 当天字节稳定；跨天才出现第二行
    → 8 通过
-══ 11. 调用时临时层 ★ ══ 进请求、不进历史；缓存键要区分调用方传的 system_message
-   → 13 通过
+══ 11. 调用时临时层 ★ ══ 进请求、不进历史；只改尾巴不插行；最终请求要再校验一次
+   → 26 通过
 ══ 12. 读文件与运行时环境块 ══ 读不返回也要能继续；环境块内部的边界标记必须转义
    → 7 通过
 ══ 13. 诊断命令 ══ /prompt 要能回答「我看到的就是正在用的那份吗」
    → 5 通过
 
-125 通过 / 0 失败　（13 组）
+138 通过 / 0 失败　（13 组）
 ```
 
 **★ 标的三组是这一章最核心的承诺**，改代码时最容易破坏。
@@ -737,7 +844,7 @@ MINI_HOME = /var/folders/.../mini_test_home_xxx
 | **8. 平台提示与配置** | 「append 保留默认 + 追加」「replace 完全替换」「裸字符串 = append」「坏配置（数字/列表/None）回退默认」「config.json 坏掉不抛异常」 |
 | **9. 工作区快照的 pin** | 「cwd 没变时不重复探 git（pin 生效）」「cwd 变了才重探」「非 git 目录也钉住空值」 |
 | **10. 时间戳** | 「同一天只输出一行」「不含时刻」「跨天时出现第二行并给出重建当天」「同一天内两次渲染字节完全相同」 |
-| **11. 调用时临时层 ★** | 「请求里的 system 消息含临时提示」「**历史里的不含**」「历史原样未动」「没设时请求与历史逐字相同」「调用方 system_message 进 context 层」「切回旧 key 会重建（单槽缓存的已知取舍）」 |
+| **11. 调用时临时层 ★** | 「请求里的 system 消息含临时提示」「**历史里的不含**」「没设时请求与历史逐字相同」「**最后一行不是工具结果 → 不注入（不硬塞）**」「**是工具结果 → 不新增行，提示追加进那条结果的内容里**」「**注入后序列仍然合法**」「一次性：第二次不再注入」「历史没被污染」「循环里在注入之后还有一次校验」（用 `inspect.getsource` 断言） |
 | **12. 读文件与环境块** | 「读不存在的文件返回 None」「内部的边界标题被转义成引用行」「远端后端不给主机 cwd」 |
 | **13. 诊断命令** | 「预览标出与当前生效的一致」「输入变了但没重建 → 预览报出不一致，并告诉用户 /new」 |
 

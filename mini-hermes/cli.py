@@ -196,6 +196,8 @@ class MiniCLI:
                 self.agent.session_id = self.session_id
                 self.agent.session_start = datetime.now()
                 invalidate_system_prompt(self.agent)
+                # 预算也重置了，所以"预算告警已注入"的一次性标志要跟着清
+                self.agent._budget_warning_injected = False
                 print(f"{DIM}已开新会话 {self.session_id}{RESET}")
                 continue
             if user == "/prompt":

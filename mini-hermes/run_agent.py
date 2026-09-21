@@ -222,6 +222,10 @@ class AIAgent:
         self._cached_system_prompt_static: Optional[str] = None
         # 工作区快照的 pin（按 cwd 作 key；"" 是真实值，见 _workspace_parts）
         self._frozen_workspace_snapshot: Optional[tuple] = None
+        # ★ 预算告警的一次性标志（对应 Hermes 的 _iteration_budget_warning_injected）。
+        #   为什么必须一次性：它不是"每轮要提醒的事"，而是"该收尾了"的一次通告。
+        #   每轮重复注入 = 白占上下文 + 让请求每轮都多两行。
+        self._budget_warning_injected = False
 
         # agent 私有状态（不落盘、不进 session）
         self.todo = TodoStore()
@@ -333,11 +337,23 @@ class AIAgent:
             # 5. 内部消息格式 → 该 api_mode 的线上格式
             api_messages = self._build_api_messages(messages)
 
-            # 6. 注入临时提示层（预算告警 / 上下文压力）—— 内部格式，不进历史
+            # 6. 注入临时提示层（预算告警 / ephemeral_system_prompt）—— 只改请求副本，不进历史
             api_messages = self._inject_ephemeral_layers(api_messages)
 
             # 7. 打 prompt 缓存标记（只有 Anthropic 需要；这里留空位）
             self._apply_prompt_caching(api_messages)
+
+            # 7.5 ★ 校验**最终要发出去的那份**。
+            #
+            #     ⚠️ 我原来的顺序有问题：`_validate_alternation` 在 `_build_api_messages`
+            #        里被调用，也就是跑在**注入之前**。后果是"注入自己把消息序列弄违规"
+            #        这件事**永远发现不了**——校验对着中间态，发出去的却是最终态。
+            #
+            #     `_build_api_messages` 里那次校验**保留**，但它管的是别的事：
+            #       · 早期那次 → 校验**历史本身**合法（防止历史被污染）
+            #       · 这次     → 校验**最终请求**合法（含临时层）
+            #     两个不同的对象，都该被校验。
+            self._validate_alternation(api_messages)
 
             # 8. 发请求（可中断，带回退）
             if self.thinking_callback:
@@ -414,6 +430,11 @@ class AIAgent:
           codex_responses    → 转成 Responses API 的 input items
           anthropic_messages → 经 anthropic_adapter.py 转换
         我们只有第一种；另外两种的转换点在这里标注出来。
+
+        ★ 这里的 `_validate_alternation` 校验的是**历史本身**（`messages`），
+          **不是**最终请求。它防的是"历史已经被污染"。
+          最终请求还要再校验一次——因为临时层是在这之后才注入的，
+          而注入也可能把序列弄违规（见循环里第 7.5 步）。
         """
         self._validate_alternation(messages)
         if self.api_mode == "chat_completions":
@@ -472,15 +493,46 @@ class AIAgent:
                 ).strip()
                 api_messages = [head, *api_messages[1:]]
 
-        # 6b. 预算告警（第 2 章就有的一次性提示）
+        # 6b. 预算告警 —— ★ **只改"尾巴"**，而且只在尾巴是工具结果时才改。
+        #
+        #     Hermes 顶层 AGENTS.md 的原文规矩：
+        #
+        #       never two same-role messages in a row;
+        #       **never a synthetic user message injected mid-loop**
+        #
+        #     ⚠️ 我第一版往末尾**插了一条新的 user 行**，实测结果是
+        #        `['system', 'user', 'user']` —— 被 mini **自己的** `_validate_alternation`
+        #        判违规（"连续两条 user"）。而且那个校验跑在注入**之前**，所以自己发现不了。
+        #
+        #     Hermes 的做法（`agent/turn_iteration_prep.py:32`，逐条抄过来）：
+        #
+        #       · `messages[-1]["role"] != "tool"` → **直接放弃**，不找地方硬塞
+        #         （源码注释：*Appended to the newest tool result; never a synthetic
+        #          user/system row.*）
+        #       · 那一行已被持久化过 → 也放弃（改了它，"重放历史"就和"当时真正发的
+        #         请求"不一致了）
+        #       · 否则把提示**追加进那条工具结果的 content 里**（改尾巴，不新增行）
+        #       · **一次性标志**（`_iteration_budget_warning_injected`）——
+        #         只提醒一次，不每轮唠叨
+        #
+        #     为什么"改尾巴"是缓存安全的（源码注释原文）：
+        #       *Only the current tool-result tail is mutable; an older turn may already
+        #        be cached.*  —— 前缀缓存比的是"从头开始的最长公共前缀"，**改尾巴不影响前缀**。
         remaining = self.budget.remaining
-        if self.max_turns and remaining <= max(3, self.max_turns // 20):
-            api_messages = api_messages + [
-                {
-                    "role": "user",
-                    "content": f"（系统提示：还剩 {remaining} 次迭代，请尽快收尾并给出结论。）",
-                }
-            ]
+        if (
+            self.max_turns
+            and not self._budget_warning_injected
+            and remaining <= max(3, self.max_turns // 20)
+            and api_messages
+            and api_messages[-1].get("role") == "tool"
+        ):
+            last = dict(api_messages[-1])
+            last["content"] = (
+                str(last.get("content", ""))
+                + f"\n\n（系统提示：还剩 {remaining} 次迭代，请尽快收尾并给出结论。）"
+            )
+            api_messages = [*api_messages[:-1], last]
+            self._budget_warning_injected = True
         return api_messages
 
     def _apply_prompt_caching(self, api_messages: List[Dict]) -> None:

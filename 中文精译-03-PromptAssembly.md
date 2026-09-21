@@ -1495,10 +1495,40 @@ if self.ephemeral_system_prompt and api_messages:
                            + self.ephemeral_system_prompt).strip()
         api_messages = [head, *api_messages[1:]]
 
-# 6b. 预算告警（第 2 章就有的一次性提示）
+# 6b. 预算告警 —— ★ **只改尾巴**，最后一行必须是工具结果，而且一次性
+if (
+    self.max_turns
+    and not self._budget_warning_injected
+    and remaining <= max(3, self.max_turns // 20)
+    and api_messages
+    and api_messages[-1].get("role") == "tool"      # ← 没有合法落点就放弃
+):
+    last = dict(api_messages[-1])
+    last["content"] = str(last.get("content", "")) + "\n\n（系统提示：还剩 … 次迭代…）"
+    api_messages = [*api_messages[:-1], last]       # ← 不新增行
+    self._budget_warning_injected = True
 ```
 
+> ⚠️ **6b 我第一版写错了**：原来是往末尾**插一条新的 user 行**，实测得到
+> `['system', 'user', 'user']`——被 mini **自己的**交替校验判违规。
+>
+> Hermes 顶层 `AGENTS.md` 对这件事有明文约束：
+>
+> > *never two same-role messages in a row;
+> > **never a synthetic user message injected mid-loop***
+>
+> 完整对照和修法见《源码讲解-03-PromptAssembly.md》§10 的第 ④ 条。
+
 命令行入口：`./mini --system "这次回答尽量短"`，或设 `MINI_EPHEMERAL_SYSTEM_PROMPT`。
+
+**还有一处相关的修复**：校验的时机。原来 `_validate_alternation` 只在
+`_build_api_messages` 里跑（**注入之前**），所以"注入把序列弄违规"永远发现不了。
+现在循环里**注入之后、发请求之前**再校验一次：
+
+| 校验位置 | 校验对象 |
+|---|---|
+| `_build_api_messages` 里 | **历史本身**合法（防止历史被污染） |
+| 循环第 7.5 步 | **最终请求**合法（含临时层） |
 
 ---
 
@@ -1866,10 +1896,10 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 
 ### C.5 测试
 
-三个测试文件，**全量 186 条**：
+三个测试文件，**全量 199 条**（138 + 54 + 7）：
 
 ```console
-$ python3 tests/test_prompt_assembly.py    # 125 条（43 个测试函数 / 13 组）
+$ python3 tests/test_prompt_assembly.py    # 138 条（45 个测试函数 / 13 组）
 $ python3 tests/test_loop_mechanisms.py    # 54 条（第 2 章的 agent loop）
 $ python3 tests/test_packaging.py          # 7 条（发布前自检）
 ```
@@ -1897,14 +1927,14 @@ $ python3 tests/test_packaging.py          # 7 条（发布前自检）
    → 4 通过
 ══ 10. 时间戳 ══ 当天字节稳定；跨天才出现第二行
    → 8 通过
-══ 11. 调用时临时层 ★ ══ 进请求、不进历史；缓存键要区分调用方传的 system_message
-   → 13 通过
+══ 11. 调用时临时层 ★ ══ 进请求、不进历史；只改尾巴不插行；最终请求要再校验一次
+   → 26 通过
 ══ 12. 读文件与运行时环境块 ══ 读不返回也要能继续；环境块内部的边界标记必须转义
    → 7 通过
 ══ 13. 诊断命令 ══ /prompt 要能回答「我看到的就是正在用的那份吗」
    → 5 通过
 
-125 通过 / 0 失败　（13 组）
+138 通过 / 0 失败　（13 组）
 ```
 
 **每组具体在守什么承诺**（代表性的断言）见《源码讲解-03-PromptAssembly.md》§12——

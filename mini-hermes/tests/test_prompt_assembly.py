@@ -18,7 +18,7 @@
 | 8. 平台提示与配置 | append / replace / 裸字符串 / replace 优先 / **坏配置一律当没配、不抛** | 10 |
 | 9. 工作区快照的 pin | cwd 没变**不重探 git**；`""` 是真实值也要钉住 | 4 |
 | 10. 时间戳 | 当天只有一行、不含时刻、跨天才两行、当天内字节稳定 | 8 |
-| 11. 调用时临时层 ★ | ephemeral **进请求、不进历史**；调用方 system_message 进 context 层；缓存键区分 | 13 |
+| 11. 调用时临时层 ★ | ephemeral **进请求、不进历史**；**只改尾巴不插合成行**；最终请求要再校验一次 | 26 |
 | 12. 读文件与运行时环境块 | 读不到返回 None 不抛；环境块内部边界标记必须转义；远端后端不给主机 cwd | 7 |
 | 13. 诊断命令 | `/prompt` 能回答"我看到的就是正在用的那份吗" | 5 |
 
@@ -868,6 +868,101 @@ def test_prompt_preview_reports_match() -> None:
     check("重建结果里确实含新内容（说明差异是真的）", "标记_新记忆" in text2)
 
 
+def _alternation_error(ag: AIAgent, msgs: list) -> str:
+    """跑一遍交替校验，返回错误信息（空串 = 合法）。"""
+    try:
+        ag._validate_alternation(msgs)
+        return ""
+    except ValueError as exc:
+        return str(exc)
+
+
+def test_budget_warning_never_breaks_alternation() -> None:
+    """★ 预算告警必须**只改尾巴**，不能插一条合成的 user 行。
+
+    这是抄 Hermes 顶层 `AGENTS.md` 的硬约束：
+
+    > *never two same-role messages in a row; **never a synthetic user message
+    > injected mid-loop***
+
+    我第一版往末尾插了新的 user 行 → `['system','user','user']`，
+    被 mini **自己的** `_validate_alternation` 判违规——
+    但那次校验跑在注入**之前**，所以自己永远发现不了。
+
+    修法（抄 `agent/turn_iteration_prep.py:32`）：**改尾巴、最后一行必须是工具结果、
+    一次性标志**。这条测试就是钉这三件事。
+    """
+    ag = make_agent(max_turns=10)
+    for _ in range(8):
+        ag.budget.consume()  # 剩 2 次 → 低于告警阈值 max(3, 10//20)=3
+
+    # ① 最后一行是 user（第一次调 API，还没跑过工具）→ **放弃注入，不硬塞**
+    mid_turn = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"}]
+    api1 = ag._inject_ephemeral_layers(ag._build_api_messages(mid_turn))
+    check(
+        "最后一行不是工具结果 → 不注入（不找地方硬塞）",
+        [m["role"] for m in api1] == ["system", "user"],
+        str([m["role"] for m in api1]),
+    )
+    check("（放弃时序列仍然合法）", _alternation_error(ag, api1) == "")
+    check("（放弃时也**不**消耗一次性标志）", ag._budget_warning_injected is False)
+
+    # ② 最后一行是 tool → 追加进**那条工具结果的内容**，不新增行
+    after_tool = mid_turn + [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "1", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "1", "content": "目录内容"},
+    ]
+    api2 = ag._inject_ephemeral_layers(ag._build_api_messages(after_tool))
+    check(
+        "最后一行是工具结果 → **不新增行**",
+        [m["role"] for m in api2] == ["system", "user", "assistant", "tool"],
+        str([m["role"] for m in api2]),
+    )
+    check("提示被追加进那条工具结果的内容里", "还剩 2 次迭代" in str(api2[-1].get("content")))
+    check("工具结果原有内容还在", "目录内容" in str(api2[-1].get("content")))
+    check(
+        "★ 注入后序列仍然合法（这条就是修复前会挂的）",
+        _alternation_error(ag, api2) == "",
+        _alternation_error(ag, api2),
+    )
+    check("一次性标志被置位", ag._budget_warning_injected is True)
+
+    # ③ 再注入一次 → 不再重复
+    api3 = ag._inject_ephemeral_layers(ag._build_api_messages(after_tool))
+    check("一次性：第二次不再注入", "还剩 2 次迭代" not in str(api3[-1].get("content")))
+    check(
+        "★ 历史没被污染（messages 里那条工具结果没变）",
+        after_tool[-1]["content"] == "目录内容",
+    )
+
+
+def test_final_request_is_validated() -> None:
+    """★ 校验必须跑在**最终请求**上，不是中间态。
+
+    原来 `_validate_alternation` 只在 `_build_api_messages` 里被调用（注入之前），
+    于是"注入把序列弄违规"这件事没有任何地方能发现。
+    现在循环里第 7.5 步会再校验一次**最终要发出去的那份**。
+    """
+    import inspect
+
+    src = inspect.getsource(AIAgent._run_conversation_turn)
+    i_inject = src.find("_inject_ephemeral_layers")
+    i_validate = src.find("_validate_alternation")
+    i_call = src.find("_interruptible_api_call")
+    check("循环里在注入之后还有一次校验", i_validate > i_inject >= 0, f"{i_inject=} {i_validate=}")
+    check("那次校验在发请求之前", i_validate < i_call, f"{i_validate=} {i_call=}")
+    check(
+        "（`_build_api_messages` 里那次仍在，管的是历史）",
+        "_validate_alternation" in inspect.getsource(AIAgent._build_api_messages),
+    )
+
+
 def test_mini_md_walks_up_to_git_root() -> None:
     """① 优先级（.mini.md）也向上走到 git root（跨类型优先级 = 首个匹配者胜出）。"""
     clear_home()
@@ -994,12 +1089,14 @@ GROUPS: List[tuple] = [
     ),
     (
         "11. 调用时临时层 ★",
-        "进请求、不进历史；缓存键要区分调用方传的 system_message",
+        "进请求、不进历史；只改尾巴不插行；最终请求要再校验一次",
         [
             test_ephemeral_not_in_history,
             test_ephemeral_absent_when_unset,
             test_caller_system_message_goes_to_context_tier,
             test_cache_key_separates_system_message,
+            test_budget_warning_never_breaks_alternation,
+            test_final_request_is_validated,
         ],
     ),
     (
