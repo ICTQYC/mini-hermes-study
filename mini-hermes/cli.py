@@ -27,9 +27,11 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List
 
 import hermes_state
+from agent.system_prompt import invalidate_system_prompt, prompt_preview
 from hermes_cli.runtime_provider import resolve_provider
 from run_agent import AIAgent
 
@@ -40,15 +42,16 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 RESET = "\033[0m"
 
-BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent loop（第 2 章：Agent Loop）{RESET}
-{DIM}命令：/exit 退出 · /new 开新会话 · /todo 看任务清单 · /tools 看已注册工具 · /budget 看迭代预算 · Ctrl-C 中断当前 turn{RESET}
+BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（第 3 章：Prompt Assembly）{RESET}
+{DIM}命令：/exit 退出 · /new 开新会话 · /prompt 看三层提示词 · /todo 看任务清单 · /tools 看已注册工具 · /budget 看迭代预算 · Ctrl-C 中断当前 turn{RESET}
 """
 
 
 class MiniCLI:
     def __init__(self, provider: str = "deepseek", model: str | None = None,
                  max_turns: int = 500, resume: bool = False, quiet: bool = False,
-                 debug: bool = False):
+                 debug: bool = False, ephemeral_system_prompt: str | None = None,
+                 platform: str = "cli"):
         spec = resolve_provider(provider, model)
         self.quiet = quiet
         self.session_id = hermes_state.new_session_id()
@@ -71,7 +74,18 @@ class MiniCLI:
             tool_progress_callback=self._on_tool_progress,
             step_callback=self._on_step,
             approval_callback=self._ask_approval,
+            status_callback=self._on_status,
             debug=debug,
+            # ---- 第 3 章：提示词装配 ----
+            session_id=self.session_id,
+            platform=platform,
+            # ★ 临时系统提示：只作用于本次 API 调用，不写进历史。
+            #   命令行 --system 优先，其次环境变量（对应 Hermes 的 HERMES_EPHEMERAL_SYSTEM_PROMPT）。
+            ephemeral_system_prompt=(
+                ephemeral_system_prompt
+                or os.environ.get("MINI_EPHEMERAL_SYSTEM_PROMPT")
+                or None
+            ),
         )
         self._say(f"{DIM}provider={spec['provider']} model={spec['model']} api_mode={spec['api_mode']}{RESET}")
 
@@ -94,6 +108,19 @@ class MiniCLI:
             return
         first = reasoning.strip().splitlines()[0][:90] if reasoning.strip() else ""
         print(f"{DIM}· 推理：{first}…{RESET}")
+
+    def _on_status(self, text: str) -> None:
+        """系统提示（不是模型说的话）。
+
+        ★ 第 3 章接进来的：上下文文件被截断时，警告要**浮现到用户眼前**。
+          为什么重要——"我的 AGENTS.md 好像没生效"是个非常难猜的问题，
+          用户会以为是模型不听话，而不是"文件被截断了 20000 字之后的都没进去"。
+          **让代价可见。** 同时它不会污染历史（它不是助手说的话）。
+        """
+        if self.quiet:
+            print(text, file=sys.stderr)
+            return
+        print(f"{YELLOW}{text}{RESET}")
 
     def _on_tool_progress(self, name: str, args: Dict[str, Any], phase: str) -> None:
         if self.quiet:
@@ -162,7 +189,18 @@ class MiniCLI:
                 self.session_id = hermes_state.new_session_id()
                 self.history = []
                 self.agent.budget = self.agent.budget.__class__(self.agent.max_turns)
+                # ★ 新会话 = 提示词重建的时机之一（对应 Hermes 的 invalidate_system_prompt）。
+                #   如果忘了这一步会怎样：新会话还在用旧会话的系统提示词，
+                #   里面写着旧的 Session ID、旧的时间戳、旧的工作区快照。
+                #   ——**这就是"缓存复用"过度之后的样子**：省了重建，但内容是错的。
+                self.agent.session_id = self.session_id
+                self.agent.session_start = datetime.now()
+                invalidate_system_prompt(self.agent)
                 print(f"{DIM}已开新会话 {self.session_id}{RESET}")
+                continue
+            if user == "/prompt":
+                # 把三层分开显示 —— 肉眼验证"每块归属哪一层、顺序对不对"。
+                print(prompt_preview(self.agent))
                 continue
             if user == "/tools":
                 import model_tools

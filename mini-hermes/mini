@@ -7,7 +7,18 @@
 #   3. 检查版本下限 —— 报错清楚，而不是抛一堆看不懂的语法错误
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# ---- ① 先记下"用户敲命令时所在的目录"，再 cd 到项目根 ----
+# ★ 顺序**不能颠倒**：cd 之后 $PWD 就变成项目根了，用户的目录就永久丢了。
+#   Python 那边靠 MINI_LAUNCH_CWD 才知道"用户的项目在哪"——
+#   否则 AGENTS.md 的发现和工作区快照都会指向 mini-hermes 自己的目录。
+#   （对应 Hermes 的 launch artifact 问题，见 prompt_builder.resolve_context_cwd）
+export MINI_LAUNCH_CWD="${MINI_LAUNCH_CWD:-$PWD}"
+
+# ---- ② cd 到项目根目录 —— Python 靠"脚本目录在 sys.path 上"才 import 得到自己的模块 ----
+# ★ 这里取绝对路径：如果用户是 `bash mini` 且 $0 是相对路径，
+#   先 cd 再算 dirname 就会算到错的地方去。
+MINI_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$MINI_DIR"
 
 # ---- 挑解释器：显式指定 > 项目 venv > PATH 上的 python3 ----
 if [ -n "${MINI_PYTHON:-}" ]; then

@@ -26,6 +26,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", action="store_true", help="恢复最近一次会话")
     parser.add_argument("--quiet", action="store_true", help="只输出最终答复（看不到工具过程）")
     parser.add_argument("--debug", action="store_true", help="异常时直接把 traceback 打到 stderr")
+    parser.add_argument(
+        "--system",
+        default=None,
+        help="临时系统提示（只作用于本次请求，不写进历史）。"
+        "也可以用环境变量 MINI_EPHEMERAL_SYSTEM_PROMPT",
+    )
+    parser.add_argument(
+        "--platform", default="cli", choices=["cli", "tui"], help="界面平台（决定平台提示，默认 cli）"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -36,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
             resume=args.resume,
             quiet=args.quiet and bool(args.query),
             debug=args.debug or bool(os.environ.get("MINI_DEBUG")),
+            ephemeral_system_prompt=args.system,
+            platform=args.platform,
         )
     except RuntimeError as exc:
         print(f"[配置错误] {exc}", file=sys.stderr)

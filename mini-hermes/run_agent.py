@@ -33,9 +33,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
+from datetime import datetime
+
 import model_tools
 from agent.iteration_budget import IterationBudget
-from agent.prompt_builder import build_system_prompt
+from agent.system_prompt import build_system_prompt, invalidate_system_prompt
 from tools.todo import AGENT_LEVEL_TOOLS, MAX_TODO_RESULT_CHARS, TodoStore
 
 # 触发回退的 HTTP 状态码
@@ -155,7 +157,16 @@ class AIAgent:
         tool_progress_callback: Optional[Callable[[str, Dict[str, Any], str], None]] = None,
         step_callback: Optional[Callable[[int], None]] = None,
         approval_callback: Optional[Callable[[str], bool]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
         debug: bool = False,
+        # ---- 第 3 章：提示词装配的开关（对应 Hermes agent_init 里那批同名属性）----
+        session_id: Optional[str] = None,
+        platform: str = "cli",
+        ephemeral_system_prompt: Optional[str] = None,
+        context_cwd: Optional[str] = None,
+        skip_context_files: bool = False,
+        load_soul_identity: bool = True,
+        context_length: Optional[int] = None,
     ):
         spec = provider_spec or {}
         self.api_mode = api_mode or spec.get("api_mode", "chat_completions")
@@ -174,7 +185,39 @@ class AIAgent:
         self.tool_progress_callback = tool_progress_callback
         self.step_callback = step_callback
         self.approval_callback = approval_callback
+        # ★ 状态行回调（对应 Hermes 的 `_emit_status`）。
+        #   它和 text_callback 是**两个不同的面**：
+        #     text_callback  → "模型说的话"（进回答正文、会被存进历史）
+        #     status_callback → "系统要说的话"（不进历史、只是给用户看的提示）
+        #   为什么要分开：截断警告、预算耗尽的提示**都不是模型说的**，
+        #   混进正文会污染历史、还会让角色交替出问题。
+        self.status_callback = status_callback
         self.debug = debug               # 异常时是否直接把 traceback 打到 stderr
+
+        # ══════════════════════════════════════════════════════════════
+        # 第 3 章：系统提示词的状态
+        # ══════════════════════════════════════════════════════════════
+        # ★ session_start 只在**会话开始时取一次**。
+        #   时间戳行靠它保持"当天字节稳定"——如果每轮 now()，缓存每轮都断。
+        self.session_start = datetime.now()
+        self.session_id = session_id or uuid.uuid4().hex[:12]
+        self.platform = platform
+        # ★ ephemeral_system_prompt 只作用于**本次 API 调用**，不写进历史。
+        #   见 _inject_ephemeral_layers。
+        self.ephemeral_system_prompt = ephemeral_system_prompt
+        self.context_cwd = context_cwd
+        self.skip_context_files = skip_context_files
+        self.load_soul_identity = load_soul_identity
+        self.context_length = context_length
+
+        # ★ 系统提示词的缓存 —— **这一章的立章之本**。
+        #   不缓存 = 每轮重读文件 + 每轮结果可能不同 = "字节不稳定"，
+        #   而那个 bug 没有症状，只有账单。见 agent/system_prompt.py。
+        self._cached_system_prompt: Optional[str] = None
+        self._cached_system_prompt_key: Any = "__unset__"
+        self._cached_system_prompt_static: Optional[str] = None
+        # 工作区快照的 pin（按 cwd 作 key；"" 是真实值，见 _workspace_parts）
+        self._frozen_workspace_snapshot: Optional[tuple] = None
 
         # agent 私有状态（不落盘、不进 session）
         self.todo = TodoStore()
@@ -215,10 +258,16 @@ class AIAgent:
         messages: List[Dict[str, Any]] = list(conversation_history or [])
         messages.append({"role": "user", "content": user_message})
 
-        # 3. 拼/复用系统提示词（真实 Hermes 在这里做缓存，复用同一份字节）
-        if system_message is None:
-            system_message = build_system_prompt()
-        self._ensure_system_prompt(messages, system_message)
+        # 3. 拼/复用系统提示词
+        #    ★ build_system_prompt 内部**缓存**在 agent 上，同一会话只拼一次。
+        #      这里不是"每轮重拼一个字符串"——那是第 2 章的做法，
+        #      它的代价是每轮重读 SOUL.md / AGENTS.md / MEMORY.md，
+        #      而且每轮结果可能不同（记忆被改了 / cwd 变了 / 跨天了）。
+        #      **系统提示词必须字节级稳定，这是 prompt 缓存的前提。**
+        #    ★ system_message 参数现在的语义是"调用方给的 system_message"
+        #      —— 它进 **context 层**（对应 Hermes 的同名参数），不再覆盖整份提示词。
+        built = build_system_prompt(self, system_message=system_message)
+        self._ensure_system_prompt(messages, built)
 
         # 3.5 从历史重建 agent 私有状态
         #     ★ 为什么需要这一步：网关（Telegram/Discord）**每条消息都新建一个 AIAgent**，
@@ -315,8 +364,40 @@ class AIAgent:
     # 消息层
     # ------------------------------------------------------------------ #
 
+    def _emit_status(self, text: str) -> None:
+        """给用户看的"系统要说的话"（对应 Hermes 的 ``agent._emit_status``）。
+
+        ★ 它为什么不能走 text_callback：
+
+        | 面 | 是什么 | 进历史吗 |
+        |---|---|---|
+        | ``text_callback`` | **模型说的话**（回答正文） | 进 |
+        | ``status_callback`` | **系统要说的话**（截断警告、状态提示） | 不进 |
+
+        混在一起的后果：截断警告会变成"助手说的话"被存进历史，
+        下一轮模型还以为自己说过这句话 —— **污染历史 + 破坏角色交替**。
+        """
+        if self.status_callback is not None:
+            try:
+                self.status_callback(text)
+            except Exception:  # noqa: BLE001 —— 提示失败不该影响 turn
+                pass
+
     def _ensure_system_prompt(self, messages: List[Dict], system_message: str) -> None:
-        """系统消息永远在 index 0，且**只在这里建一次**。"""
+        """系统消息永远在 index 0，且**只在这里建一次**。
+
+        ★ 注意这里隐含了一个重要行为：**`--resume` 恢复的会话不会重建系统提示词。**
+          历史里 index 0 已经有一条 system 消息（上次会话存下来的），
+          所以这次构建出来的那份会被**丢掉**，继续用旧的。
+
+          这**是对的**——继续用旧的那份，缓存前缀才能跨进程复用。
+          代价是：如果 `SOUL.md` / `AGENTS.md` 在上次会话之后变了，
+          恢复的会话**看不到新版本**，除非开新会话。
+
+          Hermes 用 `_stored_prompt_matches_runtime()` 来判断"存的那份还对不对"
+          （靠运行时环境块的边界当锚点，见 prompt_builder 里那两个常量）。
+          mini 还没做这个校验——写进第 6 章的清单了。
+        """
         if messages and messages[0].get("role") == "system":
             return
         messages.insert(0, {"role": "system", "content": system_message})
@@ -362,7 +443,32 @@ class AIAgent:
 
         Hermes 用这一层塞"预算快用完了""上下文压力大"之类的一次性提示。
         关键：**不能写进 messages**，否则历史被污染、缓存失效、角色交替被打乱。
+
+        ★ 为什么"必须在副本上"（第 3 章才想明白的）：
+          `_build_api_messages` 返回的这份副本，**就是发给提供商的那份请求**。
+          而提供商侧的 prompt 缓存比对的就是这份请求的前缀。
+          **动它就是在动缓存**——所以临时层只能加在副本上，不能落回 messages。
         """
+        # 6a. ephemeral_system_prompt：拼到"有效系统消息"的末尾。
+        #     对应 Hermes `agent/turn_context.py:1152`：
+        #         if agent.ephemeral_system_prompt:
+        #             effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+        #
+        #     ★ messages 本身**不动**（历史里那条 system 消息保持原样）。
+        #       docstring 原话里就写着 "``messages`` stays untouched"。
+        #     ★ 代价要说清楚：如果这个值**每轮都不同**，它会打破提供商侧的缓存。
+        #       这是显式开关的代价，也是它名字里 "ephemeral" 的意思——
+        #       想用它就要接受"这几轮没缓存"，换来"能临时改变行为"。
+        if self.ephemeral_system_prompt and api_messages:
+            head = api_messages[0]
+            if head.get("role") == "system":
+                head = dict(head)  # _build_api_messages 已经拷过一层，这里再防一手
+                head["content"] = (
+                    str(head.get("content", "")) + "\n\n" + self.ephemeral_system_prompt
+                ).strip()
+                api_messages = [head, *api_messages[1:]]
+
+        # 6b. 预算告警（第 2 章就有的一次性提示）
         remaining = self.budget.remaining
         if self.max_turns and remaining <= max(3, self.max_turns // 20):
             api_messages = api_messages + [

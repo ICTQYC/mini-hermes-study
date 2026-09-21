@@ -1450,6 +1450,10 @@ mini 版已经有 `_inject_ephemeral_layers`（预算告警），
 
 ## 13. 【动手】mini 版第 3 章要做什么
 
+> ✅ **本章已完成**（实现结果见附录 A/B/C）。下面保留**当初的计划**，
+> 方便对照"计划的和实际做的差在哪"——实测多做了一件（读文件的守护线程超时），
+> 另外冒出两个计划外问题（启动器 cwd、截断警告没出口），都记在附录 B 里。
+
 现状：`agent/prompt_builder.py` **41 行**，只有一个硬编码身份 + cwd + 工具名列表。
 `run_agent.py` 里 `_build_system_prompt` / `_ensure_system_prompt` / `_inject_ephemeral_layers` 已存在。
 
@@ -1496,22 +1500,193 @@ mini 版已经有 `_inject_ephemeral_layers`（预算告警），
 
 | mini 版文件 | 状态 | 对应 Hermes |
 |---|---|---|
-| `agent/prompt_builder.py` | **41 行 → 待扩** | `agent/prompt_builder.py`（1745 行） |
-| `agent/system_prompt.py` | **待新建** | `agent/system_prompt.py`（817 行） |
-| `agent/subdirectory_hints.py` | 故意不做 | 同名（236 行） |
-| `run_agent.py` `_ensure_system_prompt` | 已有 | `conversation_loop.py` |
-| `run_agent.py` `_inject_ephemeral_layers` | 已有 | 调用时临时层 |
-| `~/.mini-hermes/SOUL.md` | 待支持 | `~/.hermes/SOUL.md` |
-| `~/.mini-hermes/MEMORY.md` / `USER.md` | 待支持 | 同名 |
+| `agent/prompt_builder.py` | ✅ **41 → 788 行**（内容层） | `agent/prompt_builder.py`（1745 行） |
+| `agent/system_prompt.py` | ✅ **已新建，345 行**（排序层/三层装配） | `agent/system_prompt.py`（817 行） |
+| `agent/subdirectory_hints.py` | ⬜ 故意不做 | 同名（236 行） |
+| `run_agent.py` `_ensure_system_prompt` | ✅ 已接三层构建 + 缓存 | `conversation_loop.py` |
+| `run_agent.py` `_inject_ephemeral_layers` | ✅ 已支持 `ephemeral_system_prompt` | `turn_context.py:1152` |
+| `run_agent.py` `_emit_status` | ✅ **本章新增**（截断警告的出口） | 同名 |
+| `cli.py` `/prompt` 命令 · `--system` · `--platform` | ✅ 新增 | `cli.py` 的 slash 命令 |
+| `~/.mini-hermes/SOUL.md` | ✅ 已支持（含信任分级） | `~/.hermes/SOUL.md` |
+| `~/.mini-hermes/MEMORY.md` / `USER.md` | ✅ 已支持 | 同名 |
+| `~/.mini-hermes/config.json` | ✅ 新增（对应 config.yaml 的两个键） | `~/.hermes/config.yaml` |
+| `tests/test_prompt_assembly.py` | ✅ **102 条** | — |
+
+规模变化：
+
+```text
+                    第 2 章末      第 3 章末
+run_agent.py          744     →     850 行
+agent/prompt_builder.py  41     →     788 行
+agent/system_prompt.py    0     →     345 行
+cli.py                196     →     234 行
+测试                   54     →     163 条（54 + 102 + 7）
+项目总行数            3174     →    3403 行（不含测试）；含测试与 demo 5184 行
+```
 
 ## 附录 B · 本章砍掉的东西（与何时补）
 
-见 §13 的"故意不做的"表。核心取舍一句话：
+| 不做 | 代价 | 何时补 |
+|---|---|---|
+| 子目录 `AGENTS.md` 逐步发现 | 大仓库里单文件会膨胀 | 第 6 章之后 |
+| 读文件的 5 秒守护线程超时 | **已做**（`read_text_with_timeout`，比计划多做了） | — |
+| 存盘提示词校验 | `--resume` 时无法判断存的那份还对不对 | 第 6 章 |
+| 插件段 / 外部记忆 provider | 没有插件系统 | 第 10 章之后 |
+| 技能索引 + "先占位后回填" | volatile 层少一块，那个技巧没演示到 | 第 10 章 |
+| worktree 前缀优化 | 多 worktree 场景下缓存命中率低 | 大概永远不需要 |
 
-> **这一章的价值 80% 在"三层 + 缓存稳定"，20% 在"SOUL.md / 上下文文件"。
-> 子目录发现、存储校验、插件段都是"等有真实需求再补"的东西。**
+> **核心取舍一句话**：这一章的价值 80% 在"三层 + 缓存稳定"，
+> 20% 在"`SOUL.md` / 上下文文件 / 安全扫描 / 截断"。
+> 子目录发现、存储校验、插件段都是"等有真实需求再补"的东西。
+
+### 实现过程中冒出来的两个计划外问题（值得单独记）
+
+**① 启动器 `cd` 导致"用户的项目目录"丢失**（对应 Hermes 的 launch artifact 问题）
+
+`mini` 启动脚本必须 `cd` 到项目根，否则 Python 的 `sys.path` 上加不到自己的模块。
+但那一步会把**用户的目录换掉**，后果是：
+
+```text
+AGENTS.md 的发现 → 去看 mini-hermes 自己的目录（而不是用户的项目）
+git 工作区快照   → 探到 mini-hermes 那个仓库
+```
+
+修法（抄 Hermes 的思路）：启动器在 `cd` **之前**把 `$PWD` 记进
+`MINI_LAUNCH_CWD`，Python 侧用 `resolve_context_cwd()` 按
+`MINI_CONTEXT_CWD` → `MINI_LAUNCH_CWD` → `os.getcwd()` 依次回退。
+
+> 📌 **通用教训**："进程从哪个目录启动"和"用户的项目在哪个目录"是**两件事**。
+> 只要你的启动脚本为了 import 而 `cd`，就必须显式把用户目录传下去。
+> Hermes 里对应的是 `_context_cwd_is_launch_artifact`，而且它还会因此
+> **拒绝加载自己安装树里的 `AGENTS.md`**——免得把自己的开发规则当成用户的项目规则。
+
+**② 截断警告"无处可去"**
+
+`build_system_prompt()` 会把截断警告取出来送进 `agent._emit_status()`——
+但 mini 的 AIAgent 当时**根本没有这个面**，警告就静默消失了。
+
+修法是补一个 `status_callback`（和 `text_callback` 分开）：
+
+| 面 | 是什么 | 进历史吗 |
+|---|---|---|
+| `text_callback` | **模型说的话**（回答正文） | 进 |
+| `status_callback` | **系统要说的话**（截断警告、状态提示） | 不进 |
+
+混在一起的后果：截断警告会变成"助手说的话"被存进历史，
+下一轮模型还以为自己说过这句话 —— **污染历史 + 破坏角色交替**。
+
+> 这个缺口是**测试逼出来的**：我第一版测试断言"build 完再 drain 应该能取到警告"，
+> 结果取到空——追下去才发现警告被 drain 走了却没人接收。
+> **一次断言错误换来一个真实缺口的修复。**
 
 ## 附录 C · 实测输出
 
-（mini 版实现完成后回填：三层内容、字节稳定性验证、截断与扫描的实测）
+### C.1 三层装配的实际长相（在本项目目录里跑，是 git 仓库）
+
+```text
+═══ stable 层（整个会话不变）─── 489 字符 ═══
+你是 mini-hermes，一个跑在用户电脑上的终端 AI agent。
+...（身份 + 工具使用指导）
+=== 注意：本层**没有**平台提示 —— 因为有工作区快照，它被挪去 context 层了 ===
+
+═══ context 层（换目录/换 worktree 就变）─── 109 字符 ═══
+# 工作区状态
+
+当前分支：master
+工作区改动：已修改 2、未跟踪 1
+                    ← ★ 共享文件（AGENTS.md）在前、工作区快照在后
+你在一个终端里和用户对话。用简单的纯文本，不要用 Markdown 语法…
+
+═══ volatile 层（重建时最可能变）─── 347 字符 ═══
+Conversation started: Monday, September 21, 2026 (CST, +0800)
+Session ID: f0a7f616d481
+Model: m
+Provider: deepseek
+Platform: cli
+
+# mini-hermes runtime environment
+
+主机操作系统：Darwin 25.2.0 (x86_64)
+用户 home 目录：$HOME
+主机名：qimourendeMacBook-Pro.local
+当前工作目录：$HOME/Desktop/study/hermes学习/mini-hermes
+
+<!-- End mini-hermes runtime environment -->     ← ★ 永远最后一个块（含 cwd，最易变）
+```
+
+### C.2 同一份代码的**条件式归属**（在非 git 目录里跑）
+
+在 `/tmp/mh_e2e_project`（不是 git 仓库 → 没有工作区快照）里跑同一份代码：
+
+```text
+═══ stable 层（整个会话不变）─── 373 字符 ═══
+你是一个说话极其简短的技术助手。
+★★★ 硬性要求：不管用户问什么，你的回答**必须以「遵命」两个字开头**。★★★
+                                        ← ★ SOUL.md 替换掉了硬编码身份，生效
+## 工具使用
+...
+你在一个终端里和用户对话。用简单的纯文本…   ← ★ 平台提示**留在 stable 层**
+                                            （没有快照，就没有"往后放能改善前缀"这回事）
+
+═══ context 层（换目录/换 worktree 就变）─── 125 字符 ═══
+# Project Context
+
+以下项目上下文文件已加载，应当遵守：
+
+## AGENTS.md
+# 项目规则
+
+★ 凡是与本项目有关的回答，**必须包含「项目规则已生效」这七个字**。
+这个项目用 pytest，提交前跑 make lint。
+
+═══ volatile 层（重建时最可能变）─── 321 字符 ═══
+Conversation started: Monday, September 21, 2026 (CST, +0800)
+...
+当前工作目录：/tmp/mh_e2e_project        ← ★ 启动器 cd 走了，这里仍然是**用户的项目**
+```
+
+**同一个块（平台提示）在两份输出里归属不同层——这就是 §3 那条"条件式"分支的实证。**
+
+### C.3 字节稳定性
+
+```console
+$ python3 -c "..."      # 同一个 agent 连续构建 3 次
+三次拿到的字节数： [823, 823, 823]
+三次完全相同： True
+第二次起是缓存命中（同一对象）： True
+```
+
+而且是**构建之后写 `MEMORY.md` 也不影响本会话**——测试里断言了
+"写入后同一会话内不立即出现，`invalidate` 之后才出现"。
+
+### C.4 真实跑通（DeepSeek，端到端证明两块内容都到达了模型）
+
+```console
+$ cd /tmp/mh_e2e_project            # 用户的项目（有 AGENTS.md）
+$ MINI_HOME=/tmp/mh_e2e mini --quiet -q "用一句话说明这个项目的测试框架是什么"
+provider=deepseek model=deepseek-chat api_mode=chat_completions
+遵命。项目规则已生效。这个项目用 pytest 做测试框架，提交前跑 make lint。
+ ↑         ↑                      ↑
+ │         │                      └─ AGENTS.md 里的正文（含具体规则）
+ │         └── AGENTS.md 要求的话术
+ └── SOUL.md 要求的话术
+```
+
+**三处都不是模型自己编的**——`遵命` 只在 `SOUL.md` 里，`项目规则已生效` 只在 `AGENTS.md` 里。
+所以这一条同时证明了：SOUL.md 生效、AGENTS.md 生效、而且**启动器 `cd` 走之后仍然找对了目录**。
+
+### C.5 测试
+
+```console
+$ python3 tests/test_prompt_assembly.py
+102 通过 / 0 失败
+$ python3 tests/test_loop_mechanisms.py
+54 通过 / 0 失败
+$ python3 tests/test_packaging.py
+7 通过 / 0 失败
+```
+
+`test_packaging.py` 还**抓到过一次真阳性**：我在 `build_environment_hints` 的
+docstring 里写了 `$HOME/project/x.py` 当例子，被"不许写死机器路径"那条拦下——
+改成 `/app/project/x.py` 之后反而更贴题（那一段本来就在讲容器场景）。
 
