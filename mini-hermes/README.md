@@ -72,14 +72,19 @@ cd ~/我的项目 && /path/to/mini-hermes/mini
 | `config.json` | `platform_hints`（平台提示的 append/replace）、`context_file_max_chars` | 坏配置一律当没配，不会让 agent 起不来 |
 | 项目里的 `AGENTS.md` 等 | **仓库规则**（见下表优先级） | 跟仓库克隆进来的 → 命中就阻断 |
 
-项目上下文文件的**优先级**（首个匹配者胜出，只加载一种）：
+项目上下文文件的**优先级**（**跨类型**首个匹配者胜出，只加载一种）：
 
 | 优先级 | 文件 | 搜索范围 |
 |---|---|---|
 | 1 | `.mini.md` / `MINI.md` | 从 cwd 一路向上到 git root |
-| 2 | `AGENTS.md` | 只看 cwd |
+| 2 | `AGENTS.md` | ★ **从 git root 到 cwd 链式合并**（每层目录各贡献一个文件，带来源标签） |
 | 3 | `CLAUDE.md` | 只看 cwd |
 | 4 | `.cursorrules` | 只看 cwd |
+
+`AGENTS.md` 那一档为什么是链式的：仓库根的放"到处都适用的规则 + 路由表"，
+各子目录的放"这一块的规则"——**链式合并让"走到哪加载到哪"自动发生**。
+只加载 cwd 那份的话，根的全局规则会在你进入子目录时**静默丢失**。
+（同一目录里 `AGENTS.override.md` > `AGENTS.md` > `agents.md`，首个非空者胜出。）
 
 命令行的临时提示（**只作用于本次请求，不写进历史**）：
 

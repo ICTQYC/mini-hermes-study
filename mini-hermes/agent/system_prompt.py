@@ -38,7 +38,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agent import prompt_builder as pb
@@ -71,13 +70,35 @@ def _identity_parts(agent: Any, ctx_len: Optional[int]) -> Tuple[List[Optional[s
 
     对应 Hermes 的 ``_identity_parts``。第二个返回值 ``soul_loaded`` 要往下传——
     用来防止 SOUL.md 出现两次（一次当身份、一次当上下文文件）。
+
+    ★ **这里那个 ``or`` 不能写成 ``and``**（我第一版写错了，代码检查时才发现）：
+
+      ```python
+      # Hermes 原样：
+      wants_soul = agent.load_soul_identity or not agent.skip_context_files
+      ```
+
+      配合默认值 ``load_soul_identity = False``，三种 agent 的行为是：
+
+      ====================================  ======  ====  ====  ============
+      场景                                  skip    load  结果
+      ====================================  ======  ====  ====  ============
+      普通 CLI 会话                          False   False  True  ← 还是要加载
+      **子 agent 委派**（不要用户配置）        True    False  **False**  ← 不加载
+      **cron 任务**（跳过 cwd，保留人格）      True    **True**   **True**  ← 加载
+      ====================================  ======  ====  ====  ============
+
+      看第三行：**``load_soul_identity`` 是一个独立的强行开关**——
+      cron 任务要"跳过项目上下文文件（没有 cwd 可言）但保留人格"，
+      这两件事本来就该能分开控制。
+
+      写成 ``and`` 就会：正常场景靠默认值碰巧对，而 **cron 人格直接丢掉**。
+      代码里没露出来，是因为 mini 现在还没有 cron / 子 agent。
     """
-    soul = (
-        pb.load_soul_md(ctx_len)
-        if getattr(agent, "load_soul_identity", True)
-        and not getattr(agent, "skip_context_files", False)
-        else None
+    wants_soul = getattr(agent, "load_soul_identity", False) or not getattr(
+        agent, "skip_context_files", False
     )
+    soul = pb.load_soul_md(ctx_len) if wants_soul else None
     return [soul or pb.DEFAULT_AGENT_IDENTITY], bool(soul)
 
 
@@ -150,9 +171,19 @@ def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -
     """
     if getattr(agent, "skip_context_files", False):
         return []
-    cwd = getattr(agent, "context_cwd", None) or pb.resolve_context_cwd()
+    # ★ cwd 的**来源**决定了要不要信任它加载项目规则（对应 Hermes 的
+    #   `allow_install_tree_fallback` + `_context_cwd_is_launch_artifact`）：
+    #     显式指定的 context_cwd / MINI_LAUNCH_CWD → 可信（那就是用户的项目）
+    #     os.getcwd() 兜底猜出来的              → 可能落在 mini-hermes 自己的安装树里，要防
+    if getattr(agent, "context_cwd", None):
+        cwd, cwd_source = agent.context_cwd, "explicit"
+    else:
+        cwd, cwd_source = pb.resolve_context_cwd_source()
     block = pb.build_context_files_prompt(
-        cwd=cwd, skip_soul=soul_loaded, context_length=ctx_len
+        cwd=cwd,
+        skip_soul=soul_loaded,
+        context_length=ctx_len,
+        allow_install_tree_fallback=(cwd_source != "getcwd"),
     )
     return [block] if block else []
 
@@ -330,16 +361,44 @@ def invalidate_system_prompt(agent: Any) -> None:
 
 
 def prompt_preview(agent: Any, system_message: Optional[str] = None) -> str:
-    """给 ``/prompt`` 命令用：把三层分开显示，方便肉眼验证归属和顺序。"""
+    """给 ``/prompt`` 命令用：把三层分开显示，并**说明和当前生效的那份是否一致**。
+
+    ★ 为什么必须报告"是否一致"（而不是只打印重建结果）：
+
+      ``/prompt`` 重建三层给用户看，而**真正在用的是 ``agent._cached_system_prompt``**。
+      两者可能不同——比如你刚改了 ``MEMORY.md``，重建结果里有新内容，
+      但本会话的缓存里没有（这正是"记忆延迟生效"那条设计）。
+
+      如果只打印重建结果，用户会以为"改动已经生效了"，**结论正好是反的**。
+      所以这里把两份都摊开对比：一致 / 不一致，并给出长度差。
+    """
     parts = build_system_prompt_parts(agent, system_message=system_message)
-    out: List[str] = []
+    rebuilt = "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
+    cached = getattr(agent, "_cached_system_prompt", None)
+
+    if cached is None:
+        verdict = "（当前还没有构建过 —— 也就是下一次请求才会用上这份）"
+    elif cached == rebuilt:
+        verdict = "✅ 与当前生效的一致（你看到的就是正在用的那份）"
+    else:
+        verdict = (
+            f"⚠️ **与当前生效的不一致**：生效的那份 {len(cached)} 字符，"
+            f"这份重建的是 {len(rebuilt)} 字符。\n"
+            f"   本会话仍在用缓存里那份（这是有意的：中途换掉会让 prompt 缓存全废）。\n"
+            f"   想让新内容生效：/new 开新会话，或者等一次压缩触发的重建。"
+        )
+
+    out: List[str] = [f"【系统提示词】{verdict}", ""]
     for tier, note in (
         ("stable", "整个会话不变"),
-        ("context", "换目录/换 worktree 就变"),
+        ("context", "换目录 / 换 worktree 就变"),
         ("volatile", "重建时最可能变"),
     ):
         body = parts[tier]
         out.append(f"═══ {tier} 层（{note}）─── {len(body)} 字符 ═══")
         out.append(body if body else "(空)")
         out.append("")
+    if getattr(agent, "ephemeral_system_prompt", None):
+        out.append("═══ 调用时临时层（不进历史）───")
+        out.append(agent.ephemeral_system_prompt)
     return "\n".join(out)

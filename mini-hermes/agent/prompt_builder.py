@@ -237,17 +237,29 @@ def read_text_with_timeout(
 
 
 def resolve_context_cwd() -> str:
-    """决定"哪个目录算当前项目目录"。
+    """决定"哪个目录算当前项目目录"（只要路径）。见 ``resolve_context_cwd_source``。"""
+    return resolve_context_cwd_source()[0]
+
+
+def resolve_context_cwd_source() -> Tuple[str, str]:
+    """返回 ``(目录, 来源)``。来源取值：``"context_env"`` / ``"launch_env"`` / ``"getcwd"``。
 
     优先级（对应 Hermes 的 ``resolve_context_cwd`` + ``TERMINAL_CWD``）：
 
-    =========================  ==================================================
-    来源                       什么时候
-    =========================  ==================================================
-    ``MINI_CONTEXT_CWD``       显式指定（网关场景：一个进程服务多个会话）
-    ``MINI_LAUNCH_CWD``        用户敲命令时所在的目录（启动器在 `cd` 之前记下）
-    ``os.getcwd()``            兜底
-    =========================  ==================================================
+    =========================  ==============  ====================================
+    来源                       返回值         什么时候
+    =========================  ==============  ====================================
+    ``MINI_CONTEXT_CWD``       context_env     显式指定（网关：一进程服务多会话）
+    ``MINI_LAUNCH_CWD``        launch_env      用户敲命令时所在的目录
+    ``os.getcwd()``            getcwd          兜底
+    =========================  ==============  ====================================
+
+    ★ **为什么要返回"来源"而不只是路径**：来源决定**可信度**。
+      ``getcwd`` 是系统**猜**出来的——它可能是 mini-hermes 自己的安装目录
+      （有人绕过 `mini` 启动脚本直接跑模块时就是这样）。
+      而"兜底猜出来的 cwd"不该获得"加载项目规则"的权力，
+      否则**仓库里的 `AGENTS.md` 会被当成用户的项目规则注入**。
+      见 ``project_context_suppressed``。
 
     ★ **为什么需要这一层**：``mini`` 启动脚本会 ``cd`` 到项目根——
       因为 Python 靠"脚本目录在 sys.path 上"才能 import 自己的模块。
@@ -257,16 +269,13 @@ def resolve_context_cwd() -> str:
       - git 工作区快照会探到 mini-hermes 那个仓库
 
       **"进程从哪个目录启动"和"用户的项目在哪个目录"是两件事。**
-      Hermes 管这个叫 launch artifact（启动残留物）——它的
-      ``_context_cwd_is_launch_artifact`` 就是干这个的，而且它还会因此
-      **拒绝加载 Hermes 安装树里自带的 AGENTS.md**，免得把自己的开发规则
-      当成用户的项目规则注入进去。
+      Hermes 管这个叫 launch artifact（启动残留物）。
     """
-    for env_key in ("MINI_CONTEXT_CWD", "MINI_LAUNCH_CWD"):
+    for env_key, source in (("MINI_CONTEXT_CWD", "context_env"), ("MINI_LAUNCH_CWD", "launch_env")):
         value = os.environ.get(env_key)
         if value and Path(value).is_dir():
-            return value
-    return os.getcwd()
+            return value, source
+    return os.getcwd(), "getcwd"
 
 
 def get_context_file_max_chars(context_length: Optional[int] = None) -> int:
@@ -374,14 +383,19 @@ def load_soul_md(
 # 项目上下文文件（4 级优先级）
 # --------------------------------------------------------------------------- #
 
-#: 优先级顺序：**首个匹配者胜出，只加载一种。**
+#: 优先级顺序（**跨类型**：首个匹配者胜出，只加载一种）。
 #: （True = 从 cwd 一路向上走到 git root；False = 只看 cwd）
 CONTEXT_FILE_CANDIDATES: Tuple[Tuple[Tuple[str, ...], bool], ...] = (
     ((".mini.md", "MINI.md"), True),  # 1. mini 原生项目配置（走到 git root）
-    (("AGENTS.md",), False),  # 2. 通用 agent 指令文件（只看 cwd）
-    (("CLAUDE.md",), False),  # 3. 兼容 Claude Code
-    ((".cursorrules",), False),  # 4. 兼容 Cursor
+    (("CLAUDE.md",), False),  # 3. 兼容 Claude Code（真的只看 cwd）
+    ((".cursorrules",), False),  # 4. 兼容 Cursor（真的只看 cwd）
 )
+
+#: ``AGENTS.md`` 那一档在同一目录里的候选文件名（**首个非空者胜出**）。
+#: 对应 Hermes 的 ``_agents_md_candidates``：``AGENTS.override.md`` 优先，
+#: 这样开发者可以把自己的个人规则（通常 gitignore 掉）盖在共享的 AGENTS.md 上，
+#: 而不用去改那个进版本库的文件。
+AGENTS_MD_NAMES: Tuple[str, ...] = ("AGENTS.override.md", "AGENTS.md", "agents.md")
 
 
 def _find_git_root(start: Path) -> Optional[Path]:
@@ -396,26 +410,83 @@ def _find_git_root(start: Path) -> Optional[Path]:
     return None
 
 
-def _find_context_file(
-    cwd: Path, names: Tuple[str, ...], walk_up: bool
-) -> Optional[Path]:
-    """在 cwd（可选一路向上到 git root）里找这些文件名，返回第一个存在的。"""
-    if not walk_up:
-        for name in names:
-            candidate = cwd / name
-            if candidate.is_file():
-                return candidate
-        return None
+def _agents_md_directory_chain(cwd: Path) -> List[Path]:
+    """**从 git root 到 cwd** 的目录链（含两端）。没有 git root 时就只有 cwd。
+
+    对应 Hermes 的 ``_agents_md_directory_chain``。
+    """
     root = _find_git_root(cwd) or cwd
+    chain: List[Path] = []
     current = cwd
     while True:
+        chain.append(current)
+        if current == root or current.parent == current:
+            break
+        current = current.parent
+    chain.reverse()  # git root → cwd
+    return chain
+
+
+def _walk_up_for_names(cwd: Path, names: Tuple[str, ...]) -> Optional[Path]:
+    """从 cwd 一路向上到 git root，找这些文件名里第一个存在的。"""
+    for directory in reversed(_agents_md_directory_chain(cwd)):
         for name in names:
-            candidate = current / name
+            candidate = directory / name
             if candidate.is_file():
                 return candidate
-        if current == root or current.parent == current:
-            return None
-        current = current.parent
+    return None
+
+
+def load_agents_md_chain(cwd: Path, max_chars: int) -> List[str]:
+    """``AGENTS.md`` **链式合并**：git root → cwd，每层目录各贡献一个文件。
+
+    对应 Hermes 的 ``_load_agents_md`` / ``_agents_md_candidates``。
+
+    ★ **这一条我第一版做错了**（照文档的 "AGENTS.md (CWD only)" 实现的）：
+
+      | 层次 | 规则 |
+      |---|---|
+      | **跨类型**（.mini.md / AGENTS.md / CLAUDE.md / .cursorrules） | 首个匹配者胜出，只加载一种 |
+      | **AGENTS.md 类型内部** | **从 git root 到 cwd 链式合并**，每层各给一个文件 |
+
+      为什么这样设计才有用：一个仓库的根 ``AGENTS.md`` 放"到处都适用的规则"
+      **+ 一张路由表**，各子目录的 ``AGENTS.md`` 放"这一块的规则"。
+      **链式合并让"走到哪加载到哪"变成自动的**——Hermes 自己的仓库就是这么用的：
+
+      ```text
+      ~/.hermes/hermes-agent/AGENTS.md          ← 全局 + 路由表（你走到哪都加载）
+      ~/.hermes/hermes-agent/agent/AGENTS.md    ← 在 agent/ 里干活时，这一份**同时**加载
+      ~/.hermes/hermes-agent/tools/AGENTS.md    ← 在 tools/ 里时加载这一份
+      ```
+
+      如果只加载 cwd 那一份，**根目录的全局规则就丢了**（除非每个子目录都重复一遍）。
+
+    ★ 每个目录里 ``AGENTS.override.md`` > ``AGENTS.md`` > ``agents.md``，
+      **首个非空者胜出**（空文件/读不到就往下试）。
+    ★ 非 cwd 的层带**来源标签**（相对路径），让模型知道这条规则是从哪来的。
+    """
+    sections: List[str] = []
+    for directory in _agents_md_directory_chain(cwd):
+        for name in AGENTS_MD_NAMES:
+            candidate = directory / name
+            if not candidate.is_file():
+                continue
+            raw = read_text_with_timeout(candidate)
+            if raw is None or not raw.strip():
+                continue  # 空文件 fall through 到下一个名字
+            body = _strip_yaml_frontmatter(raw)
+            body = scan_context_content(body, name, user_authored=False)
+            body = truncate_content(
+                body, name, max_chars=max_chars, read_path=str(candidate)
+            )
+            # 来源标签：cwd 那层用文件名，其他层用相对路径（"这条从哪来的"）
+            try:
+                label = name if directory == cwd else os.path.relpath(candidate, cwd)
+            except ValueError:  # 跨盘符（Windows）时 relpath 会抛
+                label = str(candidate)
+            sections.append(f"## {label}\n{body}")
+            break  # 每个目录只用第一个非空的名字
+    return sections
 
 
 def _strip_yaml_frontmatter(content: str) -> str:
@@ -433,47 +504,124 @@ def _strip_yaml_frontmatter(content: str) -> str:
     return content
 
 
+def _first_existing(cwd: Path, names: Tuple[str, ...]) -> Optional[Path]:
+    """只在 cwd 里找这些名字（不向上走）。"""
+    for name in names:
+        candidate = cwd / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_and_prepare(path: Path, max_chars: int, filename: str) -> str:
+    """读一个上下文文件 → 剥 frontmatter → 安全扫描 → 截断。空内容返回空串。"""
+    raw = read_text_with_timeout(path)
+    if raw is None or not raw.strip():
+        return ""
+    body = _strip_yaml_frontmatter(raw)
+    body = scan_context_content(body, filename, user_authored=False)
+    return truncate_content(body, filename, max_chars=max_chars, read_path=str(path))
+
+
+def _is_install_tree(path: Path) -> bool:
+    """这个目录是不是在 mini-hermes 自己的安装树里。
+
+    对应 Hermes 的 ``agent.runtime_cwd._is_install_tree``。
+    """
+    try:
+        install_root = Path(__file__).resolve().parent.parent
+        path.resolve().relative_to(install_root)
+        return True
+    except Exception:  # noqa: BLE001 —— 判断不出来就当"不是"
+        return False
+
+
+def project_context_suppressed(cwd_path: Path, allow_install_tree_fallback: bool) -> bool:
+    """落在**自己安装树**里的"兜底 cwd"不许获得系统提示词的话语权。
+
+    对应 Hermes 的 ``_project_context_suppressed``（issue #64590）。它的原话很值得抄：
+
+    > *A FALLBACK-picked cwd inside the Hermes install tree must not gain system-prompt
+    > authority (the desktop default would load this repo's contributor AGENTS.md).
+    > An explicitly configured cwd is honored verbatim — the Hermes tree is a legitimate
+    > workspace when the user deliberately points a session at it — and CLI-style surfaces
+    > pass ``allow_install_tree_fallback=True`` because their launch dir IS the user's shell
+    > cwd (developing Hermes in-tree).*
+
+    ★ **核心区分：「兜底值」和「显式值」的可信度不同。**
+
+      | cwd 怎么来的 | 要不要信任它加载项目规则 |
+      |---|---|
+      | 用户/调用方**显式指定** | **照用**——即使它就是安装树（用户在开发 mini-hermes 本身） |
+      | `MINI_LAUNCH_CWD`（用户敲命令的目录） | 照用——**那就是他的 shell cwd** |
+      | `os.getcwd()`（系统**猜**的） | 如果它落在安装树里 → **抑制**，别把开发规则当用户规则 |
+
+    **没有这一层会怎样**：有人绕过 `mini` 启动脚本直接
+    `python3 -m hermes_cli.main` 时，cwd 就是 mini-hermes 目录——
+    于是仓库里的 `AGENTS.md` 会被当成"用户的项目规则"注入进去。
+    """
+    return not allow_install_tree_fallback and _is_install_tree(cwd_path)
+
+
 def build_context_files_prompt(
     cwd: Optional[str] = None,
     skip_soul: bool = False,
     context_length: Optional[int] = None,
+    allow_install_tree_fallback: bool = False,
 ) -> str:
     """项目上下文文件 + （可选）SOUL.md，拼成 ``# Project Context`` 块。
 
-    对应 Hermes 的同名函数。
+    对应 Hermes 的同名函数（它还有 ``home_override`` 参数，mini 用不上）。
 
-    ★ **"只加载一种"是靠"找到就 break"实现的**（Hermes 用 ``or`` 链）。
-      语义上有个坑要注意：**一个空文件会被当成"没有"**，于是加载下一个。
-      这通常是你想要的（空文件没有信息量），但要知道有这个行为。
+    ## 两条**不同层次**的规则（别混在一起）
 
-    ★ **为什么不全部合并**：一个仓库里同时有 AGENTS.md / CLAUDE.md / .cursorrules
-      很常见。全塞进去 → ① 上下文被吃掉 ② 三份规则互相矛盾时没有优先级语义，
-      模型不知道该听谁的。**只取第一个，优先级语义清楚。**
+    **① 跨类型：首个匹配者胜出，只加载一种**
+
+      ```text
+      .mini.md / MINI.md（走到 git root）
+        ↓ 没有就试下一个
+      AGENTS.md（链式合并，见 ②）
+        ↓ 没有就试下一个
+      CLAUDE.md（只看 cwd）
+        ↓ 没有就试下一个
+      .cursorrules（只看 cwd）
+      ```
+
+      为什么不全部合并：一个仓库里同时有这几样很常见。全塞进去 →
+      ① 上下文被吃掉 ② 规则互相矛盾时没有优先级语义，**模型不知道该听谁的**。
+
+    **② AGENTS.md 类型内部：链式合并（git root → cwd）**
+
+      见 ``load_agents_md_chain`` —— 这个我第一版漏了、照文档写成"只看 cwd"。
+
+    ★ **"空文件当没有"这个行为要记住**：一个空的 ``AGENTS.md`` 会让位给
+      ``CLAUDE.md``。这通常是你想要的（空文件没有信息量），但它是个**隐式行为**。
     """
     cwd_path = Path(cwd).resolve() if cwd else Path.cwd().resolve()
     max_chars = get_context_file_max_chars(context_length)
 
-    project_context = ""
-    for names, walk_up in CONTEXT_FILE_CANDIDATES:
-        found = _find_context_file(cwd_path, names, walk_up)
-        if found is None:
-            continue
-        raw = read_text_with_timeout(found)
-        if raw is None or not raw.strip():
-            continue  # 空文件当作没有，继续试下一个
-        body = _strip_yaml_frontmatter(raw)
-        body = scan_context_content(body, found.name, user_authored=False)
-        body = truncate_content(
-            body, found.name, max_chars=max_chars, read_path=str(found)
-        )
-        project_context = f"## {found.name}\n{body}"
-        break
+    project_sections: List[str] = []
+    if not project_context_suppressed(cwd_path, allow_install_tree_fallback):
+        # ① .mini.md / MINI.md（一路向上到 git root）
+        found = _walk_up_for_names(cwd_path, (".mini.md", "MINI.md"))
+        mini_body = _read_and_prepare(found, max_chars, found.name) if found else ""
+        if mini_body and found is not None:
+            project_sections.append(f"## {found.name}\n{mini_body}")
+        else:
+            # ② AGENTS.md —— **链式合并**（可能返回多层，每层带来源标签）
+            project_sections = load_agents_md_chain(cwd_path, max_chars)
+            if not project_sections:
+                # ③④ CLAUDE.md / .cursorrules —— 真的只看 cwd
+                compat = _first_existing(cwd_path, ("CLAUDE.md", ".cursorrules"))
+                compat_body = (
+                    _read_and_prepare(compat, max_chars, compat.name) if compat else ""
+                )
+                if compat_body and compat is not None:
+                    project_sections.append(f"## {compat.name}\n{compat_body}")
 
-    sections: List[str] = []
-    if project_context:
-        sections.append(project_context)
+    sections: List[str] = list(project_sections)
 
-    # SOUL.md 独立于项目上下文（它在家目录，不在项目里）
+    # SOUL.md 独立于项目上下文（它在家目录，不在项目里），不受安装树守卫影响
     if not skip_soul:
         soul = load_soul_md(context_length)
         if soul:

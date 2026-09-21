@@ -1063,9 +1063,55 @@ def build_context_files_prompt(cwd=None, skip_soul=False):
 | 优先级 | 文件 | 搜索范围 | 备注 |
 |---|---|---|---|
 | 1 | `.hermes.md`, `HERMES.md` | CWD **向上到 git root** | Hermes 原生的项目配置 |
-| 2 | `AGENTS.md` | **只在 CWD** | 常见的 agent 指令文件 |
+| 2 | `AGENTS.md` | **⚠️ 从 git root 到 CWD 链式合并**（原文写"只在 CWD"，是错的，见下） | 常见的 agent 指令文件 |
 | 3 | `CLAUDE.md` | **只在 CWD** | 兼容 Claude Code |
 | 4 | `.cursorrules`, `.cursor/rules/*.mdc` | **只在 CWD** | 兼容 Cursor |
+
+> <details>
+> <summary>⚠️ 更正记录：原文第 2 行写的是「`AGENTS.md`（CWD only）」，实测是错的</summary>
+>
+> **原文说法**（这份表 + 正文的 "`AGENTS.md` (cwd only)"）：
+>
+> > `AGENTS.md` | CWD only | Common agent instruction file
+>
+> **源码实际说法**（`agent/prompt_builder.py:1652`，`_load_agents_md` 的 docstring）：
+>
+> > *AGENTS.md — **merged directory chain from git root down to cwd**.
+> > Each directory on the chain contributes its own ``AGENTS.override.md`` /
+> > ``AGENTS.md`` / ``agents.md`` (first name wins per directory) as its own
+> > provenance-labelled section.*
+>
+> `_agents_md_candidates()`（同文件 1575 行）的实现也确认了：它遍历
+> `_agents_md_directory_chain(cwd_resolved)`，也就是**整条目录链**。
+>
+> **准确的说法是两个层次**（原文把它们混成了一句）：
+>
+> | 层次 | 规则 |
+> |---|---|
+> | **跨类型**（`.hermes.md` / `AGENTS.md` / `CLAUDE.md` / `.cursorrules`） | 首个匹配者胜出，**只加载一种** ← 原文"only ONE project context loaded"对的是这一层 |
+> | **`AGENTS.md` 类型内部** | **从 git root 到 cwd 链式合并**，每层目录各贡献一个文件，各自带来源标签 ← 原文漏了这一层 |
+>
+> **为什么链式才是对的**：看 Hermes 自己的仓库——
+>
+> ```text
+> ~/.hermes/hermes-agent/AGENTS.md          ← 全局规则 + 一张"路由表"
+> ~/.hermes/hermes-agent/agent/AGENTS.md    ← 在 agent/ 里干活时，这一份**同时**加载
+> ~/.hermes/hermes-agent/tools/AGENTS.md    ← 在 tools/ 里时加载这一份
+> ```
+>
+> 根 `AGENTS.md` 里那张路由表写着 *working in `agent/` → read `agent/AGENTS.md`*，
+> **链式合并让"走到哪加载到哪"变成自动的**。
+>
+> 如果只加载 cwd 那一份，**根目录的全局规则（"Never give up on the right solution"、
+> 依赖版本策略、提交纪律…）在你进入任何子目录时会静默丢失**。
+>
+> **验证方式**（我实测过）：造一个仓库，根 `AGENTS.md` 和 `pkg/AGENTS.md` 各写一句独立规则，
+> 从 `pkg/sub` 跑，打印 context 层，两层都在、顺序从根到 cwd、各带来源标签
+> （`## ../../AGENTS.md` / `## ../AGENTS.md`）。
+>
+> ⚠️ **mini 版第一版就是照这份文档实现的，所以也错了**——
+> 修法见《源码讲解-03-PromptAssembly.md》§2。
+> </details>
 
 所有上下文文件都会：
 

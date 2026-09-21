@@ -20,7 +20,7 @@ import os
 import shutil
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -643,24 +643,84 @@ def test_remote_backend_hides_host_info() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_context_file_walks_to_git_root() -> None:
-    """① 优先级（.mini.md）才向上走到 git root；AGENTS.md 只看 cwd。"""
+def test_agents_md_chain_merge() -> None:
+    """★ AGENTS.md 是**链式合并**（git root → cwd），不是只看 cwd。
+
+    这条测试是**代码检查时发现文档写错了之后的产物**：
+
+    - 文档的表里写：`AGENTS.md`（**CWD only**）
+    - 源码 `_agents_md_candidates` 的 docstring：*chain from git root down to cwd*
+
+    mini 第一版照**文档**实现 → 错了。为什么链式才是对的：一个仓库的根
+    `AGENTS.md` 放"到处都适用的规则 + 一张路由表"，各子目录的放"这一块的规则"——
+    **链式合并让"走到哪加载到哪"自动发生**。只加载 cwd 那份的话，
+    根的全局规则就丢了（除非每个子目录重复一遍）。
+    """
     clear_home()
-    root = tmp_project({".mini.md": "标记_GITROOT"})
-    os.system(f"git -C {root} init -q >/dev/null 2>&1")  # 让 root 成为 git root
-    sub = Path(root) / "a" / "b"
-    sub.mkdir(parents=True)
+    root = tmp_project({"AGENTS.md": "标记_根目录全局规则"})
+    os.system(f"git -C {root} init -q >/dev/null 2>&1")
+    mid = Path(root) / "pkg"
+    mid.mkdir()
+    (mid / "AGENTS.md").write_text("标记_中间层规则", encoding="utf-8")
+    deep = mid / "sub"
+    deep.mkdir()
 
-    ag = make_agent(context_cwd=str(sub))
-    ctx = sp.build_system_prompt_parts(ag)["context"]
-    check(".mini.md 从子目录向上走到 git root 找到", "标记_GITROOT" in ctx)
+    ctx = sp.build_system_prompt_parts(make_agent(context_cwd=str(deep)))["context"]
+    check("根目录的 AGENTS.md 被加载（否则全局规则会丢）", "标记_根目录全局规则" in ctx)
+    check("中间层的 AGENTS.md 也被加载", "标记_中间层规则" in ctx)
 
-    # AGENTS.md 只认 cwd
-    root2 = tmp_project({"AGENTS.md": "标记_ROOT_AGENTS"})
-    sub2 = Path(root2) / "deep"
-    sub2.mkdir()
-    ctx2 = sp.build_system_prompt_parts(make_agent(context_cwd=str(sub2)))["context"]
-    check("AGENTS.md 只在 cwd 找（不在父目录找）", "标记_ROOT_AGENTS" not in ctx2)
+    i_root = ctx.find("标记_根目录全局规则")
+    i_mid = ctx.find("标记_中间层规则")
+    check(
+        "顺序从 git root 到 cwd（和 §2 的排序原则一致）",
+        0 <= i_root < i_mid,
+        f"{i_root=} {i_mid=}",
+    )
+    check("非 cwd 的层带来源标签（相对路径，看得出这条从哪来）", "../AGENTS.md" in ctx)
+
+
+def test_agents_override_wins_per_directory() -> None:
+    """同目录里 AGENTS.override.md > AGENTS.md > agents.md，首个非空者胜出。"""
+    clear_home()
+    proj = tmp_project(
+        {"AGENTS.override.md": "标记_override", "AGENTS.md": "标记_普通"}
+    )
+    ctx = sp.build_system_prompt_parts(make_agent(context_cwd=proj))["context"]
+    check("AGENTS.override.md 优先于 AGENTS.md", "标记_override" in ctx)
+    check("同目录里只取一个（不是两份都塞）", "标记_普通" not in ctx)
+    check(
+        "override 的用途：把个人规则盖在共享文件上而不改进版本库的那个",
+        ctx.count("标记_override") == 1,
+    )
+
+
+def test_install_tree_fallback_suppressed() -> None:
+    """★ 兜底猜出来的 cwd 落在**自己的安装树**里 → 不给系统提示词话语权。
+
+    对应 Hermes 的 `_project_context_suppressed`（#64590）：
+    *A FALLBACK-picked cwd inside the install tree must not gain system-prompt authority.*
+
+    核心区分：**「兜底值」和「显式值」的可信度不同**。
+    用户明确把会话指向 mini-hermes 目录（开发它本身）是合法场景，要照用。
+    """
+    clear_home()
+    install_root = Path(__file__).resolve().parent.parent  # mini-hermes/
+    outside = Path(tempfile.mkdtemp(prefix="mini_outside_"))
+
+    check("安装树路径被识别出来", pb._is_install_tree(install_root) is True)
+    check("安装树外的目录不被误判", pb._is_install_tree(outside) is False)
+    check(
+        "兜底 cwd 落在安装树里 → 抑制项目规则",
+        pb.project_context_suppressed(install_root, False) is True,
+    )
+    check(
+        "显式放行时不抑制（开发 mini 本身是合法场景）",
+        pb.project_context_suppressed(install_root, True) is False,
+    )
+    check(
+        "安装树外的目录不抑制",
+        pb.project_context_suppressed(outside, False) is False,
+    )
 
 
 def test_resolve_context_cwd() -> None:
@@ -713,6 +773,91 @@ def test_context_discovery_uses_launch_cwd() -> None:
             os.environ["MINI_LAUNCH_CWD"] = saved
 
 
+def test_identity_matrix_skip_vs_force() -> None:
+    """★ 契约测试：`skip_context_files` 和 `load_soul_identity` 是**两件事**。
+
+    这条测试是**代码检查时抓到真 bug 之后补的**——我第一版把 Hermes 的
+
+        wants_soul = load_soul_identity **or** not skip_context_files
+
+    写成了 `and`。后果：
+
+    ==========================  ======  ====  ==========  ==========
+    场景                        skip    load  应该        我第一版
+    ==========================  ======  ====  ==========  ==========
+    普通 CLI 会话                False   False  **加载**     加载（碰巧对）
+    子 agent 委派                True    False  **不加载**   不加载
+    cron（跳过 cwd 保留人格）      True    True   **加载**     ✗ 丢了人格
+    ==========================  ======  ====  ==========  ==========
+
+    第三行露不出来是因为 mini 还没有 cron / 子 agent —— **没有场景覆盖的代码
+    就是没被测过的代码**，所以这里用参数化把它钉死。
+    """
+    clear_home()
+    write_home("SOUL.md", "标记_人格")
+
+    cases = [
+        (False, False, True, "普通 CLI 会话：加载人格"),
+        (True, False, False, "子 agent 委派：不加载（也不加载 cwd 指令）"),
+        (True, True, True, "cron：跳过 cwd 指令但**保留人格**"),
+        (False, True, True, "显式强行加载：加载"),
+    ]
+    for skip, load, should_load, label in cases:
+        ag = make_agent(
+            context_cwd=tmp_project(), skip_context_files=skip, load_soul_identity=load
+        )
+        prompt = sp.build_system_prompt(ag)
+        got = "标记_人格" in prompt
+        check(f"{label}（skip={skip} load={load}）", got is should_load, f"期望加载={should_load}，实际={got}")
+
+
+def test_skip_context_files_also_skips_project_files() -> None:
+    """skip_context_files 顺便要关掉项目上下文文件（两件事同一个开关）。"""
+    clear_home()
+    write_home("SOUL.md", "标记_人格")
+    proj = tmp_project({"AGENTS.md": "标记_项目规则"})
+    ag = make_agent(context_cwd=proj, skip_context_files=True, load_soul_identity=True)
+    prompt = sp.build_system_prompt(ag)
+    check("人格仍在", "标记_人格" in prompt)
+    check("但项目上下文文件被跳过", "标记_项目规则" not in prompt)
+
+
+def test_prompt_preview_reports_match() -> None:
+    """`/prompt` 必须能回答"我看到的就是正在用的那份吗"。"""
+    clear_home()
+    ag = make_agent(context_cwd=tmp_project())
+    sp.build_system_prompt(ag)  # 先构建，让缓存里有一份
+
+    text = sp.prompt_preview(ag)
+    check("预览里三层齐全", all(t in text for t in ("stable 层", "context 层", "volatile 层")))
+    check("预览标出了与当前生效的一致", "与当前生效的一致" in text)
+
+    # ★ 关键场景：改了输入但**没重建** —— 生效的那份还是旧的，预览必须说出来。
+    #   如果不报，用户会以为"改动已经生效了"，结论正好是反的。
+    write_home("MEMORY.md", "标记_新记忆")
+    text2 = sp.prompt_preview(ag)
+    check("输入变了但没重建 → 预览报出不一致", "不一致" in text2, text2[:160])
+    check("并告诉用户怎么让改动生效", "/new" in text2)
+    check("重建结果里确实含新内容（说明差异是真的）", "标记_新记忆" in text2)
+
+
+def test_mini_md_walks_up_to_git_root() -> None:
+    """① 优先级（.mini.md）也向上走到 git root（跨类型优先级 = 首个匹配者胜出）。"""
+    clear_home()
+    root = tmp_project({".mini.md": "标记_GITROOT"})
+    os.system(f"git -C {root} init -q >/dev/null 2>&1")
+    sub = Path(root) / "a" / "b"
+    sub.mkdir(parents=True)
+
+    ctx = sp.build_system_prompt_parts(make_agent(context_cwd=str(sub)))["context"]
+    check(".mini.md 从子目录向上走到 git root 找到", "标记_GITROOT" in ctx)
+
+    # .mini.md 存在时，AGENTS.md 那一档整档让位（跨类型首个匹配者胜出）
+    with_both = tmp_project({".mini.md": "标记_MINI", "AGENTS.md": "标记_AGENTS"})
+    ctx2 = sp.build_system_prompt_parts(make_agent(context_cwd=with_both))["context"]
+    check("同时存在时 .mini.md 压过 AGENTS.md 整档", "标记_MINI" in ctx2 and "标记_AGENTS" not in ctx2)
+
+
 def main() -> None:
     print(f"MINI_HOME = {_TEST_HOME}\n")
     test_three_tiers()
@@ -749,7 +894,13 @@ def main() -> None:
     test_read_timeout_returns_none_for_missing()
     test_runtime_block_escapes_heading()
     test_remote_backend_hides_host_info()
-    test_context_file_walks_to_git_root()
+    test_agents_md_chain_merge()
+    test_agents_override_wins_per_directory()
+    test_install_tree_fallback_suppressed()
+    test_mini_md_walks_up_to_git_root()
+    test_identity_matrix_skip_vs_force()
+    test_skip_context_files_also_skips_project_files()
+    test_prompt_preview_reports_match()
     test_resolve_context_cwd()
     test_context_discovery_uses_launch_cwd()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")

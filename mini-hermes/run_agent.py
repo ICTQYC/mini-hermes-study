@@ -37,7 +37,7 @@ from datetime import datetime
 
 import model_tools
 from agent.iteration_budget import IterationBudget
-from agent.system_prompt import build_system_prompt, invalidate_system_prompt
+from agent.system_prompt import build_system_prompt
 from tools.todo import AGENT_LEVEL_TOOLS, MAX_TODO_RESULT_CHARS, TodoStore
 
 # 触发回退的 HTTP 状态码
@@ -165,7 +165,11 @@ class AIAgent:
         ephemeral_system_prompt: Optional[str] = None,
         context_cwd: Optional[str] = None,
         skip_context_files: bool = False,
-        load_soul_identity: bool = True,
+        # ★ 默认 False —— 和 Hermes 的 agent_init 对齐。
+        #   注意它**不是**"要不要加载 SOUL.md"的开关（那个由
+        #   `load_soul_identity or not skip_context_files` 决定），
+        #   而是"**强行加载**"的开关：cron 任务需要"跳过 cwd 指令但保留人格"。
+        load_soul_identity: bool = False,
         context_length: Optional[int] = None,
     ):
         spec = provider_spec or {}
