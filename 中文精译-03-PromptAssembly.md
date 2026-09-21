@@ -1719,8 +1719,8 @@ if (
 
 | mini 版文件 | 状态 | 对应 Hermes |
 |---|---|---|
-| `agent/prompt_builder.py` | ✅ **41 → 788 行**（内容层） | `agent/prompt_builder.py`（1745 行） |
-| `agent/system_prompt.py` | ✅ **已新建，345 行**（排序层/三层装配） | `agent/system_prompt.py`（817 行） |
+| `agent/prompt_builder.py` | ✅ **41 → 936 行**（内容层） | `agent/prompt_builder.py`（1745 行） |
+| `agent/system_prompt.py` | ✅ **已新建，404 行**（排序层/三层装配） | `agent/system_prompt.py`（817 行） |
 | `agent/subdirectory_hints.py` | ⬜ 故意不做 | 同名（236 行） |
 | `run_agent.py` `_ensure_system_prompt` | ✅ 已接三层构建 + 缓存 | `conversation_loop.py` |
 | `run_agent.py` `_inject_ephemeral_layers` | ✅ 已支持 `ephemeral_system_prompt` | `turn_context.py:1152` |
@@ -1729,19 +1729,31 @@ if (
 | `~/.mini-hermes/SOUL.md` | ✅ 已支持（含信任分级） | `~/.hermes/SOUL.md` |
 | `~/.mini-hermes/MEMORY.md` / `USER.md` | ✅ 已支持 | 同名 |
 | `~/.mini-hermes/config.json` | ✅ 新增（对应 config.yaml 的两个键） | `~/.hermes/config.yaml` |
-| `tests/test_prompt_assembly.py` | ✅ **102 条** | — |
+| `tests/test_prompt_assembly.py` | ✅ **147 条**（46 个函数 / 13 组） | — |
 
-规模变化：
+规模变化（**用同一条命令分别量第 2 章末与第 3 章末**）：
 
 ```text
-                    第 2 章末      第 3 章末
-run_agent.py          744     →     850 行
-agent/prompt_builder.py  41     →     788 行
-agent/system_prompt.py    0     →     345 行
-cli.py                196     →     234 行
-测试                   54     →     163 条（54 + 102 + 7）
-项目总行数            3174     →    3403 行（不含测试）；含测试与 demo 5184 行
+                          第 2 章末      第 3 章末
+run_agent.py                744     →     906 行
+agent/prompt_builder.py      41     →     936 行
+agent/system_prompt.py        0     →     404 行
+cli.py                      196     →     236 行
+测试断言                     54     →     208 条（147 + 54 + 7）
+测试代码行数                742     →    1980 行
+源码（不含测试与 demo）    2156     →    3668 行
+含测试与 demo 总行数       3174     →    5924 行
 ```
+
+> ⚠️ **踩坑记录：这张表原来的数字是错的**，而且是**两个不同的错**。
+> ① 行数是"代码检查修复**之前**"的（`prompt_builder.py` 788 → 实际 936 行：
+> 那次修复加了 AGENTS.md 链式合并 + 安装树守卫，是实打实的 +148 行）；
+> ② 更要紧的是**标签错了**——原来标着"3174（不含测试）"，但 3174 其实是
+> **含测试与 demo 的整棵树**（2156 源码 + 742 测试 + 276 demo = 3174，
+> 两个版本用同一条命令一量就露馅了）。标题里的"不含测试"和数字属于不同的统计口径。
+>
+> 教训：**数量声明必须连"统计口径"一起写清楚**（哪条命令、排除了什么），
+> 否则它既可能过期，也可能从一开始就在描述另一个东西。
 
 ## 附录 B · 本章砍掉的东西（与何时补）
 
@@ -1896,10 +1908,10 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 
 ### C.5 测试
 
-三个测试文件，**全量 199 条**（138 + 54 + 7）：
+三个测试文件，**全量 208 条**（147 + 54 + 7）：
 
 ```console
-$ python3 tests/test_prompt_assembly.py    # 138 条（45 个测试函数 / 13 组）
+$ python3 tests/test_prompt_assembly.py    # 147 条（46 个测试函数 / 13 组）
 $ python3 tests/test_loop_mechanisms.py    # 54 条（第 2 章的 agent loop）
 $ python3 tests/test_packaging.py          # 7 条（发布前自检）
 ```
@@ -1927,14 +1939,14 @@ $ python3 tests/test_packaging.py          # 7 条（发布前自检）
    → 4 通过
 ══ 10. 时间戳 ══ 当天字节稳定；跨天才出现第二行
    → 8 通过
-══ 11. 调用时临时层 ★ ══ 进请求、不进历史；只改尾巴不插行；最终请求要再校验一次
-   → 26 通过
+══ 11. 调用时临时层 ★ ══ 进请求、不进历史；只改尾巴不插行；最终请求要再校验一次；端到端抓真实请求
+   → 35 通过
 ══ 12. 读文件与运行时环境块 ══ 读不返回也要能继续；环境块内部的边界标记必须转义
    → 7 通过
 ══ 13. 诊断命令 ══ /prompt 要能回答「我看到的就是正在用的那份吗」
    → 5 通过
 
-138 通过 / 0 失败　（13 组）
+147 通过 / 0 失败　（13 组）
 ```
 
 **每组具体在守什么承诺**（代表性的断言）见《源码讲解-03-PromptAssembly.md》§12——

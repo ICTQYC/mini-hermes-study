@@ -11,7 +11,7 @@
 |---|---|---|---|
 | 1 | `architecture.md` | — （只是地图） | 《Hermes架构总览.md》 |
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
-| 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》 |
+| 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ⬜ 待做（当前只有 4 个工具 + 注册表） | — |
 | 5 | `context-compression-and-caching.md` | ⬜ 待做（`_preflight_compression` 是空函数） | — |
 | 6 | `session-storage.md` | ⬜ 待做（现在是 JSON，要换 SQLite） | — |
@@ -147,7 +147,7 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ```bash
 python3 tests/test_packaging.py        # 7 条：零依赖 / 无硬编码路径 / 密钥发现链
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
-python3 tests/test_prompt_assembly.py  # 138 条：提示词装配（45 个函数 / 13 组，含字节稳定性）
+python3 tests/test_prompt_assembly.py  # 147 条：提示词装配（46 个函数 / 13 组，含字节稳定性）
 ```
 
 > **测试跑起来是按组报告的**（第 3 章那个文件），一眼看得出失败的是哪一类保证。
@@ -201,7 +201,7 @@ hermes_cli/runtime_provider.py ← hermes_cli/runtime_provider.py
 依赖链：tools/registry.py ← tools/*.py ← model_tools.py ← run_agent.py ← cli.py
 
 tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响应驱动）
-tests/test_prompt_assembly.py   # 102 条提示词装配自测（不联网）
+tests/test_prompt_assembly.py   # 147 条提示词装配自测（不联网）
 tests/test_packaging.py         # 7 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链）
 demos/                          # 能跑出来的故障复现，比散文有说服力
   why_interactive_is_serial.py  # 为什么 interactive 工具必须打断并发（三个真实故障）

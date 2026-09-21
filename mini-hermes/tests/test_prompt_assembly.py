@@ -2,7 +2,7 @@
 
 跑法：python3 tests/test_prompt_assembly.py
 
-## 测的是什么（43 个测试函数 / 125 条断言 / 13 组）
+## 测的是什么（46 个测试函数 / 147 条断言 / 13 组）
 
 按运行时的分组顺序（跑一次就能看到同样的分组和条数）：
 
@@ -18,7 +18,7 @@
 | 8. 平台提示与配置 | append / replace / 裸字符串 / replace 优先 / **坏配置一律当没配、不抛** | 10 |
 | 9. 工作区快照的 pin | cwd 没变**不重探 git**；`""` 是真实值也要钉住 | 4 |
 | 10. 时间戳 | 当天只有一行、不含时刻、跨天才两行、当天内字节稳定 | 8 |
-| 11. 调用时临时层 ★ | ephemeral **进请求、不进历史**；**只改尾巴不插合成行**；最终请求要再校验一次 | 26 |
+| 11. 调用时临时层 ★ | ephemeral **进请求、不进历史**；**只改尾巴不插合成行**；最终请求要再校验一次；**端到端抓真实请求** | 35 |
 | 12. 读文件与运行时环境块 | 读不到返回 None 不抛；环境块内部边界标记必须转义；远端后端不给主机 cwd | 7 |
 | 13. 诊断命令 | `/prompt` 能回答"我看到的就是正在用的那份吗" | 5 |
 
@@ -38,6 +38,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -60,6 +61,7 @@ os.environ["MINI_HOME"] = _TEST_HOME
 
 from agent import prompt_builder as pb  # noqa: E402
 from agent import system_prompt as sp  # noqa: E402
+import model_tools  # noqa: E402
 from run_agent import AIAgent  # noqa: E402
 
 PASS, FAIL = [], []
@@ -963,6 +965,89 @@ def test_final_request_is_validated() -> None:
     )
 
 
+def test_budget_warning_end_to_end() -> None:
+    """★★ 真端到端：跑完整 loop，抓下**每一次实际发出的请求**逐条校验。
+
+    上面那条单元测试只看 `_inject_ephemeral_layers` 的返回值；
+    这条看的是"不管循环走到第几步，真正发出去的东西都是合法的"。
+
+    场景：`max_turns=4` → 告警阈值 = `max(3, 4//20)` = 3
+      · 第 1 轮末行是 `user`（还没调工具）→ **没有合法落点，应放弃**
+      · 第 2 轮末行是 `tool` → 追加进**那条工具结果的内容里**
+      · 第 3 轮起一次性标志已置位 → 不该再出现
+
+    拿修复前的代码跑**同一个场景**（实测）：4 条请求**每条都插了一条 user 行**
+    ——因为一次性标志不存在，历史又没被污染，所以每轮重插；
+    第 1 条更是 `['system','user','user']`，第 4 条的文案还写着"还剩 0 次迭代"。
+    """
+    model_tools.registry._REGISTRY["_test_e2e_echo"] = {
+        "name": "_test_e2e_echo",
+        "fn": lambda **kw: {"ok": True},
+        "toolset": "test",
+        "interactive": False,
+        "requires_approval": False,
+        "danger_check": None,
+        "schema": {"type": "function",
+                   "function": {"name": "_test_e2e_echo", "description": "x", "parameters": {}}},
+    }
+
+    requests: list = []
+    counter = {"n": 0}
+
+    def recorder(cand, api_messages):  # noqa: ANN202 — 形参名要跟 _http_post 的类型签名一致
+        requests.append(json.loads(json.dumps(api_messages)))  # 深拷，防被后续改动
+        counter["n"] += 1
+        if counter["n"] <= 3:
+            return {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": f"c{counter['n']}", "type": "function",
+                 "function": {"name": "_test_e2e_echo", "arguments": "{}"}}]}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+        return {"choices": [{"message": {"role": "assistant", "content": "完成"}}], "usage": {}}
+
+    try:
+        ag = AIAgent(
+            {"provider": "fake", "api_mode": "chat_completions", "base_url": "http://fake",
+             "api_key": "fake", "model": "fake-model"},
+            max_turns=4,
+        )
+        ag._http_post = recorder
+        res = ag.run_conversation("跑几个工具")
+    finally:
+        model_tools.registry._REGISTRY.pop("_test_e2e_echo", None)
+
+    check(f"端到端：录到 4 条真实请求（实际 {len(requests)}）", len(requests) == 4, str(len(requests)))
+
+    # ① 每条请求的角色交替都必须合法（用 agent 自己的校验器，不是复述实现）
+    problems = [_alternation_error(ag, r) for r in requests]
+    check("端到端：每条请求的角色交替都合法", not any(problems),
+          "; ".join(p for p in problems if p))
+
+    # ② 没有「插进去的」告警行（合成 user / assistant 行）
+    synthetic = [m["role"] for r in requests for m in r
+                 if m.get("role") in ("user", "assistant") and "还剩" in str(m.get("content", ""))]
+    check("端到端：没有任何一条请求含'插进去的'告警行", not synthetic, str(synthetic))
+
+    # ③ 只出现一次，且落在 tool 行的内容里
+    hits = [m["role"] for r in requests for m in r if "还剩" in str(m.get("content", ""))]
+    check(f"端到端：告警只出现一次（实际 {len(hits)} 次）", len(hits) == 1, str(len(hits)))
+    check(f"端到端：落点是 tool 行内容里（实际 {hits[0] if hits else '—'}）",
+          bool(hits) and hits[0] == "tool", str(hits))
+
+    # ④ 第 1 轮末行是 user → 该轮必须没有告警（放弃，不硬塞）
+    check("端到端：第 1 轮（末行是 user）放弃注入，没硬塞",
+          not any("还剩" in str(m.get("content", "")) for m in requests[0]))
+
+    # ⑤ 是追加不是覆盖
+    hit_content = next(str(m.get("content", "")) for r in requests for m in r
+                       if "还剩" in str(m.get("content", "")))
+    check("端到端：工具结果原有内容仍在（追加不是覆盖）", "ok" in hit_content, hit_content[:80])
+
+    # ⑥ 临时层没写回历史
+    check("端到端：历史里没有告警（临时层没写回 messages）",
+          not any("还剩" in str(m.get("content", "")) for m in res["messages"]))
+    check("端到端：循环正常收敛到最终答复", res.get("final_response") == "完成")
+
+
 def test_mini_md_walks_up_to_git_root() -> None:
     """① 优先级（.mini.md）也向上走到 git root（跨类型优先级 = 首个匹配者胜出）。"""
     clear_home()
@@ -1089,7 +1174,7 @@ GROUPS: List[tuple] = [
     ),
     (
         "11. 调用时临时层 ★",
-        "进请求、不进历史；只改尾巴不插行；最终请求要再校验一次",
+        "进请求、不进历史；只改尾巴不插行；最终请求要再校验一次；端到端抓真实请求",
         [
             test_ephemeral_not_in_history,
             test_ephemeral_absent_when_unset,
@@ -1097,6 +1182,7 @@ GROUPS: List[tuple] = [
             test_cache_key_separates_system_message,
             test_budget_warning_never_breaks_alternation,
             test_final_request_is_validated,
+            test_budget_warning_end_to_end,
         ],
     ),
     (
