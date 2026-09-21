@@ -147,8 +147,13 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ```bash
 python3 tests/test_packaging.py        # 7 条：零依赖 / 无硬编码路径 / 密钥发现链
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
-python3 tests/test_prompt_assembly.py  # 102 条：提示词装配（含字节稳定性）
+python3 tests/test_prompt_assembly.py  # 125 条：提示词装配（43 个函数 / 13 组，含字节稳定性）
 ```
+
+> **测试跑起来是按组报告的**（第 3 章那个文件），一眼看得出失败的是哪一类保证。
+> 每组守什么承诺、具体断言是什么，见《源码讲解-03-PromptAssembly.md》§12。
+> 它还配了一条**未注册自检**：定义了 `test_` 函数却没登记进 `GROUPS` 表 → 直接报错，
+> 防止"写了但从来没跑"这种静默失败。
 
 `test_packaging.py` 的用处：**一旦某个未来章节偷偷引入了第三方库，它会立刻红**——
 而 README 和 `requirements.txt` 还在说"零依赖"，那种不一致比一开始就有依赖糟糕得多。

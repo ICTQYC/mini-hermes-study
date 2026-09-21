@@ -2,20 +2,43 @@
 
 跑法：python3 tests/test_prompt_assembly.py
 
-验证的是那些"跑通了也看不出来"的东西：
-  1. **字节稳定性**：同一会话内反复构建，系统提示词必须完全相同（这一章的立章之本）
-  2. **排序**：共享文件在工作区快照之前、运行时环境块永远最后
-  3. **SOUL.md**：优先、缺省回退、不重复出现
-  4. **上下文文件**：4 级优先级、空文件跳过、frontmatter 剥离
-  5. **截断**：头 70 / 尾 20，标记里有补救指令，警告能浮现
-  6. **安全扫描**：项目文件阻断 vs 用户 SOUL.md 只警告（信任分级）
-  7. **临时层**：ephemeral 进请求、不进历史
-  8. **平台提示**：append / replace / 裸字符串 / 坏配置回退
-  9. **工作区快照的 pin**：cwd 不变就不重探 git
- 10. **时间戳**：当天只有一行、跨天才两行、不含时刻
+## 测的是什么（43 个测试函数 / 125 条断言 / 13 组）
+
+按运行时的分组顺序（跑一次就能看到同样的分组和条数）：
+
+| 组 | 守的承诺 | 条数 |
+|---|---|---|
+| 1. 装配与分层 | 三层都存在、顺序 stable→context→volatile、共享文件在工作区快照之前、**平台提示的条件式归属**、空块被丢掉 | 18 |
+| **2. 字节稳定性 ★** | **同一会话反复构建字节完全相同**、重建后仍相同、记忆写入**不**立即进提示词 | 6 |
+| 3. 身份 | SOUL.md 优先 / 缺省回退默认身份 / 不重复出现 / **skip 与"强行加载"的四种组合** | 11 |
+| 4. 项目上下文文件 | 4 级优先级 / **AGENTS.md 链式合并** / `AGENTS.override.md` 优先 / frontmatter 剥离 | 15 |
+| 5. cwd 的解析与可信度 | 进程 cwd ≠ 用户项目目录 / **兜底值与显式值待遇不同**（安装树守卫） | 11 |
+| **6. 安全扫描 ★** | 项目文件命中 → BLOCKED；**用户 SOUL.md 命中 → 只警告照常加载**；BOM 不算注入 | 6 |
+| 7. 截断 | 头 70 / 尾 20 / 标记带 `read_file` 补救指令 / 警告走 status 面**不**走 text 面 | 11 |
+| 8. 平台提示与配置 | append / replace / 裸字符串 / replace 优先 / **坏配置一律当没配、不抛** | 10 |
+| 9. 工作区快照的 pin | cwd 没变**不重探 git**；`""` 是真实值也要钉住 | 4 |
+| 10. 时间戳 | 当天只有一行、不含时刻、跨天才两行、当天内字节稳定 | 8 |
+| 11. 调用时临时层 ★ | ephemeral **进请求、不进历史**；调用方 system_message 进 context 层；缓存键区分 | 13 |
+| 12. 读文件与运行时环境块 | 读不到返回 None 不抛；环境块内部边界标记必须转义；远端后端不给主机 cwd | 7 |
+| 13. 诊断命令 | `/prompt` 能回答"我看到的就是正在用的那份吗" | 5 |
+
+★ = 这一章最核心的承诺，改代码时最容易破坏的那几条。
+
+## 组织方式
+
+测试函数在文件里的**位置**和它们所属的**组**是解耦的——分组写在 `GROUPS` 表里。
+配一条**未注册自检**：定义了 `test_` 函数却没登记进 `GROUPS` → 直接报错退出。
+（"写了但从来没跑"是测试里最经典的静默失败——测试数量看着在涨，覆盖的却是老东西。）
+
+## 隔离
+
+`MINI_HOME` 指向临时目录（文件顶部在 import 之前设好），
+所以测试**不会**去读用户真实的 `~/.mini-hermes/SOUL.md` / `MEMORY.md`——
+否则测试结果就依赖"跑测试的这个人家里有什么文件"了。
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sys
@@ -24,6 +47,10 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 测试期间静掉 WARNING 级别日志：截断等路径会打 warning，
+# 混在测试输出里会淹掉真正的 ✗ 行。
+logging.disable(logging.WARNING)
 
 # ★ 必须在 import 之前把 MINI_HOME 指到临时目录：
 #   否则测试会去读用户真实的 ~/.mini-hermes/SOUL.md / MEMORY.md，
@@ -858,52 +885,166 @@ def test_mini_md_walks_up_to_git_root() -> None:
     check("同时存在时 .mini.md 压过 AGENTS.md 整档", "标记_MINI" in ctx2 and "标记_AGENTS" not in ctx2)
 
 
+# --------------------------------------------------------------------------- #
+# 分组表 —— 每组的标题和"这组在守什么承诺"
+# --------------------------------------------------------------------------- #
+#
+# ★ 为什么要有这张表（而不是直接在 main 里顺序调用）：
+#   ① 测试的**顺序**和它们在**文件里的位置**可以解耦——新加的测试归哪一组
+#      写在表里就行，不用把函数搬到文件对应位置去。
+#   ② 跑起来会按组打印，一眼能看出"失败的是哪一类保证"。
+#   ③ 配上下面的**未注册自检**：写了 test_ 函数却忘了登记 = 直接报错，
+#      不会出现"测试看起来有 43 个，实际只跑了 40 个"。
+
+GROUPS: List[tuple] = [
+    (
+        "1. 装配与分层",
+        "三层的存在 / 顺序 / 每块归属哪一层",
+        [
+            test_three_tiers,
+            test_shared_file_before_workspace,
+            test_runtime_block_is_last,
+            test_platform_hint_is_conditional,
+            test_join_tier_drops_empties,
+        ],
+    ),
+    (
+        "2. 字节稳定性 ★",
+        "这一章的立章之本：改动之前的字节不能变",
+        [
+            test_byte_stability,
+            test_stability_across_invalidate,
+            test_memory_write_is_delayed,
+        ],
+    ),
+    (
+        "3. 身份（SOUL.md vs 默认身份）",
+        "谁能当身份、什么时候跳过、什么时候强行加载",
+        [
+            test_soul_md_identity,
+            test_soul_not_duplicated,
+            test_identity_matrix_skip_vs_force,
+            test_skip_context_files_also_skips_project_files,
+        ],
+    ),
+    (
+        "4. 项目上下文文件",
+        "4 级优先级 / 链式合并 / override 文件 / frontmatter",
+        [
+            test_context_file_priority,
+            test_frontmatter_stripped,
+            test_agents_md_chain_merge,
+            test_agents_override_wins_per_directory,
+            test_mini_md_walks_up_to_git_root,
+        ],
+    ),
+    (
+        "5. cwd 的解析与可信度",
+        "进程 cwd ≠ 用户项目目录；兜底值和显式值待遇不同",
+        [
+            test_resolve_context_cwd,
+            test_context_discovery_uses_launch_cwd,
+            test_install_tree_fallback_suppressed,
+        ],
+    ),
+    (
+        "6. 安全扫描（信任分级）★",
+        "按「谁写的」分级，不按「写了什么」分级",
+        [
+            test_scan_blocks_project_file,
+            test_scan_warns_but_loads_user_soul,
+            test_scan_invisible_unicode_and_bom,
+        ],
+    ),
+    (
+        "7. 截断",
+        "头 70 / 尾 20 / 标记带补救指令 / 警告能浮现",
+        [
+            test_truncation_head_tail,
+            test_truncation_no_marker_when_short,
+            test_truncation_warning_surfaces,
+        ],
+    ),
+    (
+        "8. 平台提示与配置健壮性",
+        "append / replace / 坏配置一律当没配",
+        [
+            test_platform_hint_resolution,
+            test_platform_hint_bad_config_falls_back,
+            test_platform_config_from_file,
+            test_bad_config_json_is_survivable,
+        ],
+    ),
+    (
+        "9. 工作区快照的 pin",
+        "别重探 git——重探就可能拿到不同的字节",
+        [
+            test_workspace_snapshot_and_pin,
+            test_non_git_dir_pins_empty_value,
+        ],
+    ),
+    (
+        "10. 时间戳",
+        "当天字节稳定；跨天才出现第二行",
+        [
+            test_timestamp_same_day_single_line,
+            test_timestamp_cross_day_two_lines,
+            test_timestamp_bytes_stable_within_day,
+        ],
+    ),
+    (
+        "11. 调用时临时层 ★",
+        "进请求、不进历史；缓存键要区分调用方传的 system_message",
+        [
+            test_ephemeral_not_in_history,
+            test_ephemeral_absent_when_unset,
+            test_caller_system_message_goes_to_context_tier,
+            test_cache_key_separates_system_message,
+        ],
+    ),
+    (
+        "12. 读文件与运行时环境块",
+        "读不返回也要能继续；环境块内部的边界标记必须转义",
+        [
+            test_read_timeout_returns_none_for_missing,
+            test_runtime_block_escapes_heading,
+            test_remote_backend_hides_host_info,
+        ],
+    ),
+    (
+        "13. 诊断命令",
+        "/prompt 要能回答「我看到的就是正在用的那份吗」",
+        [test_prompt_preview_reports_match],
+    ),
+]
+
+
 def main() -> None:
     print(f"MINI_HOME = {_TEST_HOME}\n")
-    test_three_tiers()
-    test_shared_file_before_workspace()
-    test_runtime_block_is_last()
-    test_platform_hint_is_conditional()
-    test_join_tier_drops_empties()
-    test_byte_stability()
-    test_stability_across_invalidate()
-    test_memory_write_is_delayed()
-    test_soul_md_identity()
-    test_soul_not_duplicated()
-    test_context_file_priority()
-    test_frontmatter_stripped()
-    test_truncation_head_tail()
-    test_truncation_no_marker_when_short()
-    test_truncation_warning_surfaces()
-    test_scan_blocks_project_file()
-    test_scan_warns_but_loads_user_soul()
-    test_scan_invisible_unicode_and_bom()
-    test_ephemeral_not_in_history()
-    test_ephemeral_absent_when_unset()
-    test_caller_system_message_goes_to_context_tier()
-    test_cache_key_separates_system_message()
-    test_platform_hint_resolution()
-    test_platform_hint_bad_config_falls_back()
-    test_platform_config_from_file()
-    test_bad_config_json_is_survivable()
-    test_workspace_snapshot_and_pin()
-    test_non_git_dir_pins_empty_value()
-    test_timestamp_same_day_single_line()
-    test_timestamp_cross_day_two_lines()
-    test_timestamp_bytes_stable_within_day()
-    test_read_timeout_returns_none_for_missing()
-    test_runtime_block_escapes_heading()
-    test_remote_backend_hides_host_info()
-    test_agents_md_chain_merge()
-    test_agents_override_wins_per_directory()
-    test_install_tree_fallback_suppressed()
-    test_mini_md_walks_up_to_git_root()
-    test_identity_matrix_skip_vs_force()
-    test_skip_context_files_also_skips_project_files()
-    test_prompt_preview_reports_match()
-    test_resolve_context_cwd()
-    test_context_discovery_uses_launch_cwd()
-    print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
+
+    # ★ 自检：有没有 test_ 函数**定义了却没被登记进 GROUPS**。
+    #   "写了但从来没跑"是测试里最经典的静默失败——测试数量看着在涨，
+    #   覆盖的却是老东西。宁可直接报错退出。
+    registered = {t.__name__ for _, _, tests in GROUPS for t in tests}
+    defined = {
+        name for name, obj in globals().items()
+        if name.startswith("test_") and callable(obj)
+    }
+    missing = sorted(defined - registered)
+    if missing:
+        print(f"⚠️  有测试函数没登记进 GROUPS（写了但不会跑）：{missing}")
+        raise SystemExit(2)
+
+    for title, note, tests in GROUPS:
+        print(f"\n══ {title} ══ {note}")
+        before_pass, before_fail = len(PASS), len(FAIL)
+        for t in tests:
+            t()
+        print(
+            f"   → {len(PASS) - before_pass} 通过"
+            + (f" / {len(FAIL) - before_fail} 失败" if len(FAIL) > before_fail else "")
+        )
+    print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败　（{len(GROUPS)} 组）")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))
     shutil.rmtree(_TEST_HOME, ignore_errors=True)
