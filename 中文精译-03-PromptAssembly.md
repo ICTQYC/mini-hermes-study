@@ -1952,7 +1952,7 @@ if (
 | `~/.mini-hermes/SOUL.md` | ✅ 已支持（含信任分级） | `~/.hermes/SOUL.md` |
 | `~/.mini-hermes/MEMORY.md` / `USER.md` | ✅ 已支持 | 同名 |
 | `~/.mini-hermes/config.json` | ✅ 新增（对应 config.yaml 的两个键） | `~/.hermes/config.yaml` |
-| `tests/test_prompt_assembly.py` | ✅ **147 条**（46 个函数 / 13 组） | — |
+| `tests/test_prompt_assembly.py` | ✅ **154 条**（47 个函数 / 13 组） | — |
 
 规模变化（**用同一条命令分别量第 2 章末与第 3 章末**）：
 
@@ -1962,7 +1962,7 @@ run_agent.py                744     →     906 行
 agent/prompt_builder.py      41     →     936 行
 agent/system_prompt.py        0     →     404 行
 cli.py                      196     →     236 行
-测试断言                     54     →     213 条（147 + 54 + 12）
+测试断言                     54     →     221 条（154 + 54 + 13）
 测试代码行数                742     →    1980 行
 源码（不含测试与 demo）    2156     →    3668 行
 含测试与 demo 总行数       3174     →    5924 行
@@ -2186,12 +2186,12 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 
 ### C.5 测试
 
-三个测试文件，**全量 213 条**（147 + 54 + 12）：
+三个测试文件，**全量 221 条**（154 + 54 + 13）：
 
 ```console
-$ python3 tests/test_prompt_assembly.py    # 147 条（46 个测试函数 / 13 组）
+$ python3 tests/test_prompt_assembly.py    # 154 条（47 个测试函数 / 13 组）
 $ python3 tests/test_loop_mechanisms.py    # 54 条（第 2 章的 agent loop）
-$ python3 tests/test_packaging.py          # 12 条（发布前自检，含符号链接调用）
+$ python3 tests/test_packaging.py          # 13 条（发布前自检，含符号链接调用与写死路径扫描）
 ```
 
 第 3 章那个文件跑起来**按组打印**，一眼看得出"失败的是哪一类保证"：
@@ -2221,10 +2221,10 @@ $ python3 tests/test_packaging.py          # 12 条（发布前自检，含符�
    → 35 通过
 ══ 12. 读文件与运行时环境块 ══ 读不返回也要能继续；环境块内部的边界标记必须转义
    → 7 通过
-══ 13. 诊断命令 ══ /prompt 要能回答「我看到的就是正在用的那份吗」
-   → 5 通过
+══ 13. 诊断命令与「输出即事实」 ══ 「我看到的就是正在用的那份吗」+「告诉你的路径真的存在吗」
+   → 12 通过
 
-147 通过 / 0 失败　（13 组）
+154 通过 / 0 失败　（13 组）
 ```
 
 **每组具体在守什么承诺**（代表性的断言）见《源码讲解-03-PromptAssembly.md》§12——

@@ -28,11 +28,13 @@ import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List
 
 import hermes_state
 from agent.system_prompt import invalidate_system_prompt, prompt_preview
 from hermes_cli.runtime_provider import resolve_provider
+from hermes_constants import display_path
 from run_agent import AIAgent
 
 DIM = "\033[2m"
@@ -47,6 +49,30 @@ BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（第 
 """
 
 
+def session_saved_message(saved: Path | None) -> str:
+    """退出时那句"会话已存"。**根据事实说话**，不宣布没发生过的事。
+
+    ★ 这一句原来有两个毛病，根因是同一个：**把打印当成了断言。**
+
+    ① **路径写死**成 `~/.mini-hermes/sessions/{id}.json`。
+       `MINI_HOME` 是可以被重定向的（测试 / E2E / CI 都这么干），
+       重定向之后这句提示会把用户**指到一个不存在的文件上**——比不打印还坏。
+       修法：用 `save_session()` **实际返回的路径**（而不是自己再猜一遍），
+       显示时走 `display_path()`（在 home 底下缩成 `~/...`）。
+
+    ② **无条件说"已存"**。用户开起来直接 `/exit`（一轮都没跑）时，
+       连 `sessions/` 目录都不存在，它照样说"会话已存：xxx.json"。
+       修法：先看路径在不在（`exists()`），没有就说没有。
+
+    📌 **通用教训：日志/提示里的每句话都应该是"观察到的事实"，不是"预期的结论"。**
+    预期和事实一旦分叉，提示就从"帮助"变成"误导"，而且**没有任何症状**——
+    程序一切正常，只是用户按你给的路径去找文件却找不到。
+    """
+    if saved is not None and saved.exists():
+        return f"{DIM}会话已存：{display_path(saved)}{RESET}"
+    return f"{DIM}本次没有对话内容，未存盘{RESET}"
+
+
 class MiniCLI:
     def __init__(self, provider: str = "deepseek", model: str | None = None,
                  max_turns: int = 500, resume: bool = False, quiet: bool = False,
@@ -56,6 +82,8 @@ class MiniCLI:
         self.quiet = quiet
         self.session_id = hermes_state.new_session_id()
         self.history: List[Dict[str, Any]] = []
+        # 上一次真正落盘的路径（由 save_session 返回）。退出时据此"观察"而不是"断言"。
+        self.last_save_path: Path | None = None
         self._turn_started = 0.0
 
         if resume:
@@ -167,7 +195,10 @@ class MiniCLI:
         """
         result = self.agent.run_conversation(prompt, conversation_history=self.history)
         self.history = result["messages"]
-        hermes_state.save_session(
+        # ★ 记下保存器**实际返回的路径**，而不是让退出提示自己再猜一遍。
+        #   原来那句提示写死了 "~/.mini-hermes/sessions/{id}.json"，
+        #   于是 MINI_HOME 重定向时它会把用户指到一个不存在的文件上。
+        self.last_save_path = hermes_state.save_session(
             self.session_id, self.history, {"usage": result["usage"], "iterations": result["iterations_used"]}
         )
         return result
@@ -188,6 +219,7 @@ class MiniCLI:
             if user == "/new":
                 self.session_id = hermes_state.new_session_id()
                 self.history = []
+                self.last_save_path = None      # 新会话，旧路径作废
                 self.agent.budget = self.agent.budget.__class__(self.agent.max_turns)
                 # ★ 新会话 = 提示词重建的时机之一（对应 Hermes 的 invalidate_system_prompt）。
                 #   如果忘了这一步会怎样：新会话还在用旧会话的系统提示词，
@@ -233,4 +265,5 @@ class MiniCLI:
                 print(f"\n{YELLOW}(已中断){RESET}")
             print()
 
-        print(f"{DIM}会话已存：~/.mini-hermes/sessions/{self.session_id}.json{RESET}")
+        p = self.last_save_path
+        print(session_saved_message(p))

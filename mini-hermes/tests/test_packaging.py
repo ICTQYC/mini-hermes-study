@@ -238,6 +238,65 @@ def test_launcher_via_symlink() -> None:
               (r4.stderr or r4.stdout)[-200:])
 
 
+# 默认值只许在这一个地方定义（`Path.home() / ".mini-hermes"`）。
+# 其余任何地方要用路径都得走 get_mini_home() / display_mini_home() / display_path()。
+ALLOWED_HOME_LITERALS = {"hermes_constants.py"}
+
+
+def message_source_files() -> list[Path]:
+    """会**对用户说话**的源文件：排除 tests/（那里的字符串是在断言这个模式，不是显示它）
+    和 hermes_constants.py（它是默认值的唯一定义处）。"""
+    out: list[Path] = []
+    for p in project_files():
+        rel = p.relative_to(PROJECT_ROOT)
+        if "tests" in rel.parts or rel.as_posix() in ALLOWED_HOME_LITERALS:
+            continue
+        out.append(p)
+    return out
+
+
+def test_no_hardcoded_home_in_messages() -> None:
+    """不许在**用户可见的字符串**里写死 `~/.mini-hermes`。
+
+    踩过的坑：退出提示写着 `会话已存：~/.mini-hermes/sessions/{id}.json`，
+    但 `MINI_HOME` 是可以被重定向的（测试 / E2E / CI）——
+    于是这句提示把用户**指到一个不存在的文件上**，比不打印还坏。
+
+    **颗粒度是这条检查的全部难点**（第一版就扫到了自己的脚手架）：
+      · docstring 里写 `~/.mini-hermes` **合法** —— 那是在描述默认位置 → 排除 docstring
+      · `hermes_constants.py` 里的默认值 **合法** —— 那是唯一定义处 → 排除该文件
+      · `tests/` 里的字符串 **合法** —— 那是断言这个模式，不是显示它 → 排除 tests/
+    剩下要抓的就是：**会打印/会传输的字符串字面量**。
+    """
+    offenders: list[str] = []
+    for path in message_source_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        # 标出 docstring 常量的 id（模块/类/函数体的第一条语句）
+        docstrings: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                body = getattr(node, "body", [])
+                if (body and isinstance(body[0], ast.Expr)
+                        and isinstance(body[0].value, ast.Constant)
+                        and isinstance(body[0].value.value, str)):
+                    docstrings.add(id(body[0].value))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) in docstrings:
+                continue
+            if ".mini-hermes" in node.value:
+                offenders.append(
+                    f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}  {node.value[:50]!r}"
+                )
+    check(
+        f"用户可见的字符串里没有写死 ~/.mini-hermes"
+        f"（扫了 {len(message_source_files())} 个非测试源文件；该用 display_mini_home/display_path）",
+        not offenders,
+        "; ".join(offenders),
+    )
+
+
 if __name__ == "__main__":
     print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}")
     print(f"项目根：{PROJECT_ROOT}\n")
@@ -245,6 +304,7 @@ if __name__ == "__main__":
     test_no_hardcoded_paths()
     test_env_discovery()
     test_launcher_via_symlink()
+    test_no_hardcoded_home_in_messages()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))

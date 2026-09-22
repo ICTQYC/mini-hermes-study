@@ -2,7 +2,7 @@
 
 跑法：python3 tests/test_prompt_assembly.py
 
-## 测的是什么（46 个测试函数 / 147 条断言 / 13 组）
+## 测的是什么（47 个测试函数 / 154 条断言 / 13 组）
 
 按运行时的分组顺序（跑一次就能看到同样的分组和条数）：
 
@@ -20,7 +20,7 @@
 | 10. 时间戳 | 当天只有一行、不含时刻、跨天才两行、当天内字节稳定 | 8 |
 | 11. 调用时临时层 ★ | ephemeral **进请求、不进历史**；**只改尾巴不插合成行**；最终请求要再校验一次；**端到端抓真实请求** | 35 |
 | 12. 读文件与运行时环境块 | 读不到返回 None 不抛；环境块内部边界标记必须转义；远端后端不给主机 cwd | 7 |
-| 13. 诊断命令 | `/prompt` 能回答"我看到的就是正在用的那份吗" | 5 |
+| 13. 诊断命令与「输出即事实」 | `/prompt` 能回答"我看到的就是正在用的那份吗"；**退出提示必须指向真实存在的文件** | 12 |
 
 ★ = 这一章最核心的承诺，改代码时最容易破坏的那几条。
 
@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -1048,6 +1049,54 @@ def test_budget_warning_end_to_end() -> None:
     check("端到端：循环正常收敛到最终答复", res.get("final_response") == "完成")
 
 
+def test_exit_message_reports_real_path() -> None:
+    """退出时那句"会话已存"必须指向**真实存在**的文件，且路径不能写死。
+
+    一次修掉两个 bug，根因是同一个——**把打印当成了断言**：
+
+      ① 路径**写死**成 `~/.mini-hermes/sessions/{id}.json`。
+         `MINI_HOME` 是可以被重定向的（测试 / E2E / CI 都这么干），
+         重定向之后这句提示会把用户**指到一个不存在的文件上**。
+      ② **无条件说"已存"**。开了就 `/exit`（一轮都没跑）时，
+         连 `sessions/` 目录都不存在，它照样报一个文件名。
+
+    📌 这类 bug 的共同特征：**没有任何症状**。程序一切正常，
+    只是用户按你给的路径去找文件却找不到。
+    """
+    from cli import session_saved_message
+
+    # ① 纯函数层：没存就必须说实话
+    check("没有保存路径 → 说「未存盘」", "未存盘" in session_saved_message(None))
+    check(
+        "路径不存在 → 也说「未存盘」（不能光看有没有赋值）",
+        "未存盘" in session_saved_message(Path("/tmp/mini_真的不存在_xyz/s.json")),
+    )
+
+    # ② 真存了 → 报出来的路径必须能直接拿去打开
+    d = Path(tempfile.mkdtemp(prefix="mini_exit_"))
+    f = d / "s.json"
+    f.write_text("{}", encoding="utf-8")
+    msg = session_saved_message(f)
+    check("真存了 → 报「会话已存」", "会话已存" in msg, msg)
+    shown = msg.replace("\x1b[2m", "").replace("\x1b[0m", "").split("：", 1)[1].strip()
+    check("去掉 ANSI 后就是真实路径", shown == str(f), f"{shown!r} != {str(f)!r}")
+    check("而且那个文件真的在", Path(shown).exists())
+
+    # ③ 端到端：真起一次 CLI，只喂 /exit —— 零成本，不调 API
+    home = tempfile.mkdtemp(prefix="mini_exit_home_")
+    launcher = Path(__file__).resolve().parent.parent / "mini"
+    r = subprocess.run(
+        [str(launcher)], input="/exit\n", capture_output=True, text=True, timeout=180,
+        env=dict(os.environ, MINI_HOME=home, PYTHONPATH=""),
+    )
+    check("端到端：开了就退出 → 说「未存盘」", "未存盘" in r.stdout, r.stdout[-200:])
+    check(
+        "端到端：没有编造一个 sessions 路径",
+        ".mini-hermes/sessions/" not in r.stdout,
+        r.stdout[-200:],
+    )
+
+
 def test_mini_md_walks_up_to_git_root() -> None:
     """① 优先级（.mini.md）也向上走到 git root（跨类型优先级 = 首个匹配者胜出）。"""
     clear_home()
@@ -1195,9 +1244,9 @@ GROUPS: List[tuple] = [
         ],
     ),
     (
-        "13. 诊断命令",
-        "/prompt 要能回答「我看到的就是正在用的那份吗」",
-        [test_prompt_preview_reports_match],
+        "13. 诊断命令与「输出即事实」",
+        "「我看到的就是正在用的那份吗」+「告诉你的路径真的存在吗」",
+        [test_prompt_preview_reports_match, test_exit_message_reports_real_path],
     ),
 ]
 
