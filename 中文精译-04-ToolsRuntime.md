@@ -83,6 +83,312 @@ registry.register(
 
 ### 【源码】真身
 
+#### 先把整条链走一遍（拿真工具 `read_terminal` 当例子）
+
+细节之前先看全景。这个工具够小（89 行）、够典型，而且它**恰好会撞上本章最重要的那个坑**（注册≠暴露）。
+
+它的全部注册代码就这一句（`tools/read_terminal_tool.py:67`）：
+
+```python
+registry.register(
+    name="read_terminal",
+    toolset="desktop_ui",
+    schema=READ_TERMINAL_SCHEMA,
+    handler=lambda args, **kw: read_terminal_tool(
+        start_line=args.get("start_line"), count=args.get("count"), callback=kw.get("callback")
+    ),
+    emoji="🖥️",
+)
+```
+
+**先记住三件事**，后面每一站都要用到：
+
+1. `handler` 是个 **lambda**，**不是**工具本体——工具本体是上面的 `read_terminal_tool()`
+2. **没有 `check_fn`**——它的可用性不靠探测
+3. `toolset="desktop_ui"`——**这个字符串决定它能不能被模型看见**
+
+下面从头走到尾，一共**六站**。
+
+---
+
+**第 1 站：文件里有一句 `registry.register(...)`（写在模块体里，不是函数里）**
+
+位置很关键。它必须在**模块级**——因为"发现"是靠 AST 找**模块体**里的这句调用（§2 详述）。
+写在函数里的话，AST 扫不到，这个文件就**永远不会被 import**。
+
+---
+
+**第 2 站：AST 扫到它 → import → 注册真的发生**
+
+```
+discover_builtin_tools()
+   │  遍历 tools/*.py + tools/<pkg>/tool.py
+   │  对每个文件问：模块体里有 registry.register(...) 吗？
+   ↓ 有
+importlib.import_module("tools.read_terminal_tool")
+   ↓ import 的副作用
+registry.register(...) 真的执行了
+   ↓
+ToolEntry 落进「全局槽」self._tools["read_terminal"]
+```
+
+> 📌 **"发现"和"注册"是两件事，别混。**
+> - **发现**只决定"**import 谁**"——它自己不注册任何东西
+> - **注册**是模块被 import 时**自己做的**副作用
+>
+> 所以"自注册"这个说法的准确含义是：
+> **模块负责在自己被 import 时把工具登记好；发现机制只负责把这批模块找出来。**
+
+落进哪个槽？这次注册**没传 scope**（它不是插件），所以进**全局槽 `self._tools`**。
+
+---
+
+**第 3 站：⚠️ 注册完了，但模型**还看不到它**——toolset 闸门**
+
+**这一站是原文完全没写的，也是 9 处不一致里最严重的一处。**
+
+```
+注册表里有 read_terminal                 ✓
+registry.get_entry("read_terminal") 拿得到  ✓
+日志里没有任何异常                        ✓
+模型能看到它吗？                          ✗ ← 还不一定
+```
+
+因为 `get_tool_definitions()` 还要问第二个问题：
+
+> `desktop_ui` 这个 toolset，**在这一轮里被启用了吗？**
+
+而 `desktop_ui` 是**具名 toolset**，只在**桌面来源的会话**里被折进来
+（`tui_gateway/server.py::_load_enabled_toolsets`——`toolsets.py:174` 的注释：
+*`desktop_ui` is folded in separately by the GUI gateway for desktop sessions.*）。所以：
+
+| 你在哪用它 | `read_terminal` 在 schema 里吗 |
+|---|---|
+| 终端里 `hermes -q "..."` | **不在** |
+| 桌面 app 里聊 | 在 |
+
+> 📌 **"注册"和"暴露"之间隔着一个 toolset。**
+> 这就是那条硬规矩的具体样子（`tools/AGENTS.md` 原文）：
+> *discovery registers the schema, but a tool is **only exposed if a toolset names it***.
+>
+> **只写 `tools/your_tool.py` 不改 `toolsets.py` 的后果**：
+> 工具存在、无报错、任何 `get_entry()` 都拿得到——**但模型永远不知道它存在**。
+> 这是本章第三次"静默失败"，也是最反直觉的一次（你以为写完注册就完了）。
+
+---
+
+**第 4 站：toolset → 名字集合 → `check_fn` 过滤 → 动态改写**
+
+```
+enabled / disabled toolsets
+   ↓ _select_tool_names() 解析成一组工具名（复合 toolset 在这里展开）
+{read_file, write_file, terminal, ..., read_terminal}
+   ↓ registry.get_definitions(这组名字)
+for name in sorted(tool_names):
+    entry = entries_by_name.get(name)
+    if not entry: continue                              # 名字没注册过 → 跳过
+    if entry.check_fn and not _memo_check(entry.check_fn, memo):
+        continue                                        # ★ 可用性闸门
+    schema = {**entry.schema, "name": entry.name}
+    if entry.dynamic_schema_overrides:
+        schema.update(entry.dynamic_schema_overrides())  # 运行时覆盖
+    result.append({"type": "function", "function": schema})
+   ↓ _apply_dynamic_schemas()   ← 10 个 rewriter，把"运行时才知道的事实"写回 schema
+最终发给模型的 tools 字段
+```
+
+`read_terminal` **没有 `check_fn`**，所以在第 4 站是"无条件通过"。
+
+**对照一个有 `check_fn` 的**（`tools/feishu_doc_tool.py:69`）：
+
+```python
+registry.register(
+    name="feishu_doc_read", ...,
+    check_fn=_check_feishu, requires_env=[], ...)
+```
+
+没配飞书凭据 → `_memo_check` 返回 False → **这一行 `continue`** →
+**它的 schema 根本不出现在这次请求里**。模型连"有这么个工具"都不知道。
+
+> 📌 对比一下就清楚了**两道闸门的分工**：
+>
+> | 闸门 | 在第几站 | 回答的问题 | 典型依据 |
+> |---|---|---|---|
+> | **toolset** | 第 3 站 | "**这一类能力**在这个界面上存在吗" | 平台 / 界面（桌面、Telegram…） |
+> | **`check_fn`** | 第 4 站 | "**这个环境里**它现在能用吗" | 凭据 / 服务 / 二进制 |
+>
+> 一个是**界面的属性**，一个是**环境的属性**。两个都过，才轮到模型看见。
+
+---
+
+**第 5 站：模型返回 tool_call → 分发**
+
+```
+模型: tool_call(name="read_terminal", arguments={"count": 40})
+   ↓
+handle_function_call("read_terminal", {"count": 40}, ...)
+   ├─ 参数归一 coerce_tool_args()
+   ├─ 旧工具名映射（read_terminal 不在里面）
+   ├─ tool_search 桥？（不是）
+   ├─ connectors？（不是）
+   ├─ 请求中间件
+   ├─ ★ _AGENT_LOOP_TOOLS 守卫？  read_terminal 不在那 4 个里 → 通过
+   ├─ pre-dispatch 守卫（审批等）
+   └─ _execute_tool() → registry.dispatch("read_terminal", args, callback=...)
+```
+
+`registry.dispatch()` 干的事很小：
+
+```python
+entry = self.get_entry(name, scope=scope)
+if not entry:
+    return tool_error(f"Unknown tool: {name}")            # ← 名字不存在
+try:
+    if entry.is_async:
+        result = _run_async(entry.handler(args, **kwargs))  # ← async 桥接
+    else:
+        result = entry.handler(args, **kwargs)              # ← 就是那句 lambda
+    return self._normalize_handler_result(name, result)
+except Exception as e:
+    ...  # 包成 JSON 错误（§5 详述）
+```
+
+**注意那个 `**kwargs`**：`callback=...` 是从调用方**一路传下来的**，
+而它来自 `agent`（拦截点在 `agent/tool_executor.py:1550`）。
+
+> 📌 这就是为什么 `read_terminal` 会出现在那 **14 个 inline 工具**里（§9 ①）：
+> 它的执行**需要 agent 提供的 callback**，而 callback 不在注册表里、也不在参数里。
+> **所以"注册表 + handler(args)"这条路走不通它**——必须由 agent loop 先把 callback 准备好再调。
+
+---
+
+**第 6 站：结果变成 JSON 字符串 → 进历史**
+
+工具本体（`tools/read_terminal_tool.py:36`）：
+
+```python
+def read_terminal_tool(start_line=None, count=None, callback=None) -> str:
+    """Return the in-app terminal's contents (+ line metadata) as a JSON string."""
+    return read_pane(callback, (("start", start_line, 0), ("count", count, 1)), (
+        "read_terminal is only available in the Hermes desktop app.",   # ← ① callback 是 None
+        "start_line and count must be integers.",                       # ← ② 参数不是整数
+        "Failed to read terminal: ",                                    # ← ③ 回调抛异常
+        "No in-app terminal is open, or the read timed out.",           # ← ④ 读到空
+    ))
+```
+
+**四种错误文案在调用时就准备好、按位置传进去**，`read_pane` 按情况挑一个：
+
+```python
+def read_pane(callback, window, errors) -> str:
+    if callback is None:
+        return tool_error(errors[0])                        # ← 不在桌面环境
+    try:
+        kwargs = {key: max(floor, int(val)) for key, val, floor in window if val is not None}
+    except (TypeError, ValueError):
+        return tool_error(errors[1])                        # ← 参数类型不对
+    try:
+        raw = callback(**kwargs)
+    except Exception as exc:
+        return tool_error(f"{errors[2]}{exc}")              # ← 回调炸了
+    if not raw:
+        return tool_error(errors[3])                        # ← 读到空
+    return passthrough_json(raw)
+```
+
+`tool_error(...)` 返回的是 **JSON 字符串** `'{"error": "..."}'`——这就是本章 §1 那条硬规矩的具体样子。
+
+而成功路径最后那句 `passthrough_json(raw)`（`tools/desktop_ui.py:65`）也值得看一眼：
+
+```python
+def passthrough_json(raw) -> str:
+    """Desktop answers with a JSON object; pass it through, else wrap the raw text."""
+    try:
+        return json.dumps(json.loads(raw), ensure_ascii=False)   # 已经是 JSON → 原样透传
+    except (TypeError, ValueError):
+        return json.dumps({"text": str(raw)}, ensure_ascii=False)  # 不是 → 包一层
+```
+
+> 📌 **两条路都返回 JSON**，而且第二条是"**包一层**"而不是"报错"。
+> 这就是"契约"的完整含义：**不是"正常情况下返回 JSON"，
+> 而是"无论拿到什么，出口都是 JSON"**。
+> 上游（桌面渲染进程）回什么不受这边控制，所以这里必须兜住。
+
+> 📌 那个"错误文案表"值得多看一眼：**它把"可能怎么失败"做成了参数。**
+>
+> 为什么？因为 `read_pane` 这个函数体被**三个工具共用**
+> （`read_terminal` / `read_preview` / `read_window`——docstring 里点明了），
+> 而每个工具的错误文案不一样。
+>
+> **共用逻辑 + 各自文案 = 把文案做成参数。**
+> 这比"在共用函数里判断是谁在调我"好得多——后者正是漂移的来源
+> （`agent/inline_tool_executors.py` 的 docstring 说过它取代了
+> 两条**已经漂移分家**的 if/elif 链）。
+>
+> **判据：共用的部分做成函数，不同的部分做成参数——不要做成 if。**
+
+---
+
+**整条链一张图**
+
+```
+┌─ 进程启动 ────────────────────────────────────────────────┐
+│ tools/read_terminal_tool.py                                │
+│   模块体里：registry.register(name="read_terminal", ...)    │
+│        │                                                   │
+│        │ ①AST 扫到「模块体里有这句调用」                     │
+│        ↓                                                   │
+│   discover_builtin_tools()  ──②import──→  ③注册动作执行     │
+│        │                                        │          │
+│        │                                        ↓          │
+│        │                             ToolEntry 落进全局槽    │
+└────────┼───────────────────────────────────────────────────┘
+         │
+┌─ 每一轮请求 ──────────────────────────────────────────────┐
+│ ④ toolset 解析：desktop_ui 在这轮启用了吗？                │
+│     没启用 ──→ 到此为止（模型看不到它）                     │
+│     启用了 ↓                                               │
+│ ⑤ 名字集合 → registry.get_definitions()                   │
+│     check_fn 过滤（它没有 check_fn → 无条件过）             │
+│ ⑥ 10 个动态 rewriter 改写 schema                           │
+│ ⑦ → 写进 API 请求的 tools 字段                             │
+└────────┬──────────────────────────────────────────────────┘
+         │ 模型返回 tool_call(name="read_terminal", ...)
+┌────────┴──────────────────────────────────────────────────┐
+│ ⑧ handle_function_call()：参数归一 → 各种守卫 → _execute_tool│
+│ ⑨ registry.dispatch()：查 ToolEntry → 调 handler(args,      │
+│    callback=...)  ← 那个 lambda 转发到工具本体               │
+│ ⑩ read_terminal_tool() → read_pane() → callback() → JSON    │
+│ ⑪ '{"total_lines": 200, ...}' 变成一条 tool 消息，进历史     │
+└───────────────────────────────────────────────────────────┘
+```
+
+**每一步谁负责 / 漏了会怎样：**
+
+| 步 | 谁负责 | 漏掉的后果 |
+|---|---|---|
+| ① AST 发现 | `tools/registry.py` | 文件不被 import → 工具**不存在**（无报错） |
+| ② import | `model_tools.py`（import 时触发） | 同上 |
+| ③ 注册进槽 | 工具文件自己（模块级调用） | 同上 |
+| ④ **toolset 闸门** | `toolsets.py` + 平台解析 | 工具存在但**模型看不见**（无报错）★ |
+| ⑤ `check_fn` 过滤 | `tools/registry.py` | 没配好的工具也发出去 → 模型**浪费预算试错** |
+| ⑥ 动态改写 | `model_tools.py` 的 10 个 rewriter | schema 里点名了不可用的工具 → 模型**幻觉调用** |
+| ⑦ 进请求 | provider 层 | —— |
+| ⑧ 守卫 | `model_tools.py` | agent 级工具被独立调用 → 状态错乱 |
+| ⑨ 分发 | `tools/registry.py` | 名字不存在 → `Unknown tool` |
+| ⑩ 执行 | **工具自己的 handler** | —— |
+| ⑪ JSON 字符串 | 工具自己的 handler | 返回非 JSON → **别处解析不了**（如 todo 状态重建） |
+
+> 📌 看这张表最右边一列：**11 步里有 5 步漏掉之后是"静默"的**
+> （① ② ③ 是同一个后果，④ 单独一个，⑥ 是幻觉）。
+>
+> **这就是这一章真正想让你记住的东西**：
+> 工具注册这条链**每一站都在新加一道"能不能看见"的闸门**，
+> 而每一道闸门拦住东西的时候**都不报错**。
+>
+> 所以调试"为什么模型不用我那个工具"时，要**按站排查**，不要从代码里找 bug——
+> 代码没 bug，是某一道闸门关着。
+
 #### 真实签名（比原文多 4 个参数）
 
 ```python
@@ -185,9 +491,7 @@ def _merged_tools(self, scope: Optional[str] = None) -> Dict[str, ToolEntry]:
 
 `{**全局, **某插件的}` —— **后者盖前者**。
 所以一个插件工具叫 `terminal`，就会在**它自己所在的 scope 里**把内置的 `terminal` 顶掉。
-
-> ⚠️ **所以"影子"不是"重复注册被拒绝"这个意思**（那是后话）。
-> 它的意思是：**这个注册如果放行，取值时它会盖住一个已经存在的东西。**
+它的意思是：**这个注册如果放行，取值时它会盖住一个已经存在的东西。**
 
 #### 覆盖语义其实是四条路径（原文压成了一句话）
 
