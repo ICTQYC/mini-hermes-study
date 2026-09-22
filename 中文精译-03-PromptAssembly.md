@@ -2090,7 +2090,11 @@ MINI_DIR="$(cd "$(dirname "$_src")" && pwd)"
 
 ## 附录 C · 实测输出
 
+(这里如果要测试 我先加了个符号连接ln -s "$HOME/Desktop/study/hermes学习/mini-hermes/mini" /usr/local/bin/mini)
+
 ### C.1 三层装配的实际长相（在本项目目录里跑，是 git 仓库）
+
+启动在原目录下./mini之后/promopt
 
 ```text
 ═══ stable 层（整个会话不变）─── 489 字符 ═══
@@ -2126,6 +2130,8 @@ Platform: cli
 ### C.2 同一份代码的**条件式归属**（在非 git 目录里跑）
 
 在 `/tmp/mh_e2e_project`（不是 git 仓库 → 没有工作区快照）里跑同一份代码：
+
+在该目录下直接mini进入然后/promopt
 
 ```text
 ═══ stable 层（整个会话不变）─── 373 字符 ═══
