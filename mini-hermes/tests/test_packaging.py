@@ -2,10 +2,12 @@
 
 跑法：python3 tests/test_packaging.py
 
-检查三件事：
+检查四件事：
   1. 真的零第三方依赖（不是嘴上说说 —— 逐文件 AST 扫 import，再查模块来源）
   2. 没有写死某台机器的绝对路径（/Users/某人、/home/某人）
   3. 启动脚本不硬编码解释器路径（别人机器上 /usr/local/bin/python3 不存在）
+  4. 启动脚本被**符号链接**调用时也能跑（`ln -s .../mini /usr/local/bin/mini`，
+     这是"想让它像普通命令一样用"的最自然做法）
 
 第 1 条尤其重要：一旦某个未来章节偷偷引入了第三方库，
 这个测试会立刻红 —— 而 README 和 requirements.txt 还在说"零依赖"，
@@ -15,9 +17,12 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
+import subprocess
 import sys
 import sysconfig
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -159,8 +164,6 @@ def test_env_discovery() -> None:
 
 
 def _resolve_error_text() -> str:
-    import os
-
     from hermes_cli import runtime_provider as rp
 
     saved = os.environ.pop("DEEPSEEK_API_KEY", None)
@@ -177,12 +180,71 @@ def _resolve_error_text() -> str:
             os.environ["DEEPSEEK_API_KEY"] = saved
 
 
+# ---------------------------------------------------------------- 4 启动器能被符号链接调用
+def test_launcher_via_symlink() -> None:
+    """`ln -s .../mini ~/bin/mini` 是最自然的省事做法，必须真的能用。
+
+    踩过的坑：原来启动器写的是 `dirname "$0"`。当 mini 被**符号链接**调用时，
+    `$0` 是**链接名**，dirname 拿到的是链接所在的目录（例如 /usr/local/bin），
+    于是 `cd` 过去 → `python3 -m hermes_cli.main` 找不到模块 →
+    报 "No module named 'hermes_cli'"，**看起来像装了坏包**，而问题在启动器。
+    （macOS 自带的 readlink 不支持 -f，所以启动器里是自己循环解析的。）
+    """
+    launcher = PROJECT_ROOT / "mini"
+
+    def run(path: Path) -> subprocess.CompletedProcess:
+        # -h 只让 argparse 打一份 usage 就退出，不联网、不花钱
+        try:
+            return subprocess.run([str(path), "-h"], capture_output=True, text=True, timeout=120)
+        except OSError as exc:
+            # 链接没解析成功会在这里以 OSError 冒出来；包装成失败结果，
+            # 让它是"✗ 一条"而不是"整个文件崩掉、后面的测试都不跑"。
+            return subprocess.CompletedProcess([str(path)], 127, "", f"{type(exc).__name__}: {exc}")
+
+    with tempfile.TemporaryDirectory() as td:
+        # ★ 必须 .resolve()：macOS 上 /var 是 /private/var 的符号链接，
+        #   用没解析的路径算 relpath 会少数一层目录，`..` 就多退一级 → 链接指向不存在的地方。
+        #   （这个坑我自己先踩了一次：测试崩在 FileNotFoundError。）
+        tmp = Path(td).resolve()
+
+        abs_link = tmp / "mini_abs"
+        abs_link.symlink_to(launcher)
+        r = run(abs_link)
+        check("符号链接（绝对）调用能跑起来", r.returncode == 0, (r.stderr or r.stdout)[-200:])
+        check("没有 ModuleNotFoundError", "ModuleNotFoundError" not in r.stderr, r.stderr[-200:])
+
+        # 相对链接要相对"链接所在目录"解析，不是相对 cwd
+        sub = tmp / "sub"
+        sub.mkdir()
+        rel_link = sub / "mini_rel"
+        rel_link.symlink_to(os.path.relpath(launcher, sub))
+        r2 = run(rel_link)
+        check("符号链接（相对）也能跑起来", r2.returncode == 0, (r2.stderr or r2.stdout)[-200:])
+
+        # 链到链接（两层）
+        two = tmp / "mini_two"
+        two.symlink_to(abs_link)
+        r3 = run(two)
+        check("两层符号链接（链到链接）也能跑起来", r3.returncode == 0,
+              (r3.stderr or r3.stdout)[-200:])
+
+        # 真正要支持的用法：链接放进一个"假 bin 目录"，然后靠 PATH 调用
+        fakebin = tmp / "fakebin"
+        fakebin.mkdir()
+        (fakebin / "mini").symlink_to(launcher)
+        env = dict(os.environ, PATH=f"{fakebin}{os.pathsep}{os.environ.get('PATH', '')}")
+        r4 = subprocess.run(["mini", "-h"], capture_output=True, text=True, timeout=120, env=env)
+        check("靠 PATH 调用（symlink 进假 bin 目录）能跑起来", r4.returncode == 0,
+              (r4.stderr or r4.stdout)[-200:])
+
+
 if __name__ == "__main__":
     print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}")
     print(f"项目根：{PROJECT_ROOT}\n")
     test_no_third_party_deps()
     test_no_hardcoded_paths()
     test_env_discovery()
+    test_launcher_via_symlink()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))

@@ -14,10 +14,27 @@ set -euo pipefail
 #   （对应 Hermes 的 launch artifact 问题，见 prompt_builder.resolve_context_cwd）
 export MINI_LAUNCH_CWD="${MINI_LAUNCH_CWD:-$PWD}"
 
-# ---- ② cd 到项目根目录 —— Python 靠"脚本目录在 sys.path 上"才 import 得到自己的模块 ----
-# ★ 这里取绝对路径：如果用户是 `bash mini` 且 $0 是相对路径，
-#   先 cd 再算 dirname 就会算到错的地方去。
-MINI_DIR="$(cd "$(dirname "$0")" && pwd)"
+# ---- ② 解析符号链接，再 cd 到项目根目录 ----
+# Python 靠"脚本目录在 sys.path 上"才 import 得到自己的模块。
+#
+# ★ 两个坑都要处理：
+#   a) 用户可能是 `bash mini`，$0 是相对路径 —— 先 cd 再算 dirname 会算到错的地方。
+#      所以这里是"先算出绝对路径、再 cd"。
+#   b) 用户可能把 mini **符号链接**到 PATH 上（`ln -s .../mini /usr/local/bin/mini`）
+#      —— 这是最自然的省事做法。这时 $0 是**链接名**，dirname 拿到的是链接所在的目录
+#      （例如 /usr/local/bin），cd 过去以后 `python3 -m hermes_cli.main` 找不到模块，
+#      报出来的却是 "No module named 'hermes_cli'" —— 看起来像装了坏包。
+#   macOS 自带的 readlink **不支持 -f**，所以自己循环解析。
+_src="$0"
+while [ -L "$_src" ]; do
+    _dir="$(cd "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    case "$_src" in
+        /*) ;;                          # 绝对链接，直接用
+        *) _src="$_dir/$_src" ;;        # 相对链接：相对"链接所在目录"，不是 cwd
+    esac
+done
+MINI_DIR="$(cd "$(dirname "$_src")" && pwd)"
 cd "$MINI_DIR"
 
 # ---- 挑解释器：显式指定 > 项目 venv > PATH 上的 python3 ----

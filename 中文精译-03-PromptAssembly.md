@@ -1962,7 +1962,7 @@ run_agent.py                744     →     906 行
 agent/prompt_builder.py      41     →     936 行
 agent/system_prompt.py        0     →     404 行
 cli.py                      196     →     236 行
-测试断言                     54     →     208 条（147 + 54 + 7）
+测试断言                     54     →     213 条（147 + 54 + 12）
 测试代码行数                742     →    1980 行
 源码（不含测试与 demo）    2156     →    3668 行
 含测试与 demo 总行数       3174     →    5924 行
@@ -1993,7 +1993,7 @@ cli.py                      196     →     236 行
 > 20% 在"`SOUL.md` / 上下文文件 / 安全扫描 / 截断"。
 > 子目录发现、存储校验、插件段都是"等有真实需求再补"的东西。
 
-### 实现过程中冒出来的两个计划外问题（值得单独记）
+### 实现过程中冒出来的三个计划外问题（值得单独记）
 
 **① 启动器 `cd` 导致"用户的项目目录"丢失**（对应 Hermes 的 launch artifact 问题）
 
@@ -2032,6 +2032,61 @@ git 工作区快照   → 探到 mini-hermes 那个仓库
 > 这个缺口是**测试逼出来的**：我第一版测试断言"build 完再 drain 应该能取到警告"，
 > 结果取到空——追下去才发现警告被 drain 走了却没人接收。
 > **一次断言错误换来一个真实缺口的修复。**
+
+**③ 同一个启动器：被符号链接调用时会找错项目根**（用户提问时顺手挖出来的）
+
+用户想从自己的项目目录里跑，很自然地建了个符号链接：
+
+```console
+$ cd /tmp/我的项目
+$ MINI_HOME=/tmp/mh mini --quiet -q "……"
+zsh: command not found: mini
+```
+
+`command not found` 本身只是**路径问题**（`mini` 是源码树里的脚本，不在 PATH 上，
+README 已写明要写绝对路径或链一个过去）。但顺着这个去试"链到 PATH 上"，
+发现**链完还是坏的**：
+
+```console
+$ ln -s .../mini-hermes/mini /tmp/fakebin/mini
+$ PATH=/tmp/fakebin:$PATH mini -h
+/opt/anaconda3/bin/python3: Error while finding module specification for 'hermes_cli.main'
+(ModuleNotFoundError: No module named 'hermes_cli')
+```
+
+**根因**：启动器算项目根用的是 `dirname "$0"`。被符号链接调用时 `$0` 是**链接名**，
+`dirname` 拿到的是链接所在的目录（`/tmp/fakebin`），于是 `cd` 到那里，模块自然找不到。
+
+**报错还特别误导**——它说 `No module named 'hermes_cli'`，看起来像"包装坏了/漏了文件"，
+而问题在启动器的**路径解析**上。
+
+修法（macOS 自带的 `readlink` **不支持 `-f`**，所以自己循环解析）：
+
+```bash
+_src="$0"
+while [ -L "$_src" ]; do
+    _dir="$(cd "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    case "$_src" in
+        /*) ;;                       # 绝对链接，直接用
+        *) _src="$_dir/$_src" ;;     # 相对链接：相对"链接所在目录"，不是 cwd
+    esac
+done
+MINI_DIR="$(cd "$(dirname "$_src")" && pwd)"
+```
+
+> 📌 **通用教训：一个脚本要用 `$0` 定位自己的"家"时，必须解析符号链接。**
+> 而"把脚本链到 PATH 上"恰恰是最自然的用法——**不解析就等于把这个用法直接堵死**，
+> 而且失败信息会指向一个错误的方向（"模块找不到"而不是"你链过去了"）。
+>
+> ⚠️ 附带踩到的坑：写测试时我拿 `tempfile` 的路径去算 `relpath` 建相对链接，
+> 结果**测试自己崩了**——macOS 上 `/var` 是 `/private/var` 的符号链接，
+> 没 `.resolve()` 的路径少一层，`..` 多退一级，链接就指向了不存在的地方。
+> 规律：**在 macOS 上做路径运算之前先 `resolve()`**。
+
+这条已进 `tests/test_packaging.py`（`test_launcher_via_symlink`，5 条断言：
+绝对链接 / 相对链接 / 两层链接 / 靠 PATH 调用 / 不出现 `ModuleNotFoundError`），
+并且做了反向验证——把启动器换回旧写法，5 条全红。
 
 ## 附录 C · 实测输出
 
@@ -2131,12 +2186,12 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 
 ### C.5 测试
 
-三个测试文件，**全量 208 条**（147 + 54 + 7）：
+三个测试文件，**全量 213 条**（147 + 54 + 12）：
 
 ```console
 $ python3 tests/test_prompt_assembly.py    # 147 条（46 个测试函数 / 13 组）
 $ python3 tests/test_loop_mechanisms.py    # 54 条（第 2 章的 agent loop）
-$ python3 tests/test_packaging.py          # 7 条（发布前自检）
+$ python3 tests/test_packaging.py          # 12 条（发布前自检，含符号链接调用）
 ```
 
 第 3 章那个文件跑起来**按组打印**，一眼看得出"失败的是哪一类保证"：

@@ -48,7 +48,18 @@ echo 'DEEPSEEK_API_KEY=sk-你的key' >> ~/.mini-hermes/.env
 
 # 在你自己的项目目录里跑 —— AGENTS.md 会被自动加载
 cd ~/我的项目 && /path/to/mini-hermes/mini
+
+# 嫌路径太长？链到 PATH 上。启动器会自己解析符号链接，
+# 所以"用户的项目目录在哪"照样认得（靠 MINI_LAUNCH_CWD）。
+ln -s /path/to/mini-hermes/mini /usr/local/bin/mini
+cd ~/我的项目 && mini
 ```
+
+> ⚠️ **`mini` 不会自己被装到 PATH 上**——它是源码树里的一个脚本（本项目的形态就是
+> "源码 + 启动脚本 + README"，不做 `pip install`）。所以从别的目录调用时：
+> 要么写绝对路径，要么按上面那样链一个过去。
+>
+> 📌 直接敲 `mini` 而报 `command not found`，是**路径问题**，不是没装好。
 
 密钥查找顺序（先找到的赢，真实环境变量永远优先于文件）：
 
@@ -145,7 +156,7 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ## 发布前自检
 
 ```bash
-python3 tests/test_packaging.py        # 7 条：零依赖 / 无硬编码路径 / 密钥发现链
+python3 tests/test_packaging.py        # 12 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
 python3 tests/test_prompt_assembly.py  # 147 条：提示词装配（46 个函数 / 13 组，含字节稳定性）
 ```
@@ -202,7 +213,7 @@ hermes_cli/runtime_provider.py ← hermes_cli/runtime_provider.py
 
 tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响应驱动）
 tests/test_prompt_assembly.py   # 147 条提示词装配自测（不联网）
-tests/test_packaging.py         # 7 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链）
+tests/test_packaging.py         # 12 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用）
 demos/                          # 能跑出来的故障复现，比散文有说服力
   why_interactive_is_serial.py  # 为什么 interactive 工具必须打断并发（三个真实故障）
   why_slow_connect_matters.py   # 连接超时 ≠ 读取超时（75s vs 2s，要等约 80 秒）
