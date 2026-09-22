@@ -153,20 +153,60 @@ self_name = f"Tool {name!r}: schema['parameters'] must be an object (JSON Schema
 对照一下这个仓库里反复出现的模式：**"检查要对着能指出问题的那个位置"**。
 第 3 章那次是校验跑错时机（注入前 vs 注入后），这次是校验跑错位置（请求时 vs 注册时）。
 
+#### 先说清两个词：**"全局槽"和"影子"**
+
+这两个词前面用到了但没定义。它们是理解覆盖语义的前提。
+
+**注册不是往一个 dict 里放东西，是往两个"槽"之一放：**
+
+```python
+# tools/registry.py
+def _slot(self, scope: Optional[str], *, create: bool = False) -> Dict[str, ToolEntry]:
+    """The registration map for *scope*: global when None, else that profile's overlay."""
+    if scope is None:
+        return self._tools                                  # ← 全局槽：内置工具
+    if create:
+        return self._scoped_tools.setdefault(scope, {})     # ← 覆盖槽：每个插件一份
+```
+
+| 词 | 准确含义 |
+|---|---|
+| **全局槽**（`self._tools`） | `scope=None` 时注册进去的东西——**所有内置工具**（`tools/*.py` 里调 `register()`） |
+| **覆盖槽**（`self._scoped_tools[scope]`） | 插件注册时**带 scope** 落进去的地方，**每个插件（每个 profile）一份** |
+| **影子（shadow）** | 一个插件工具的名字**和全局槽里已有的工具重名**——于是它在取值时会**盖住那一个** |
+
+**"盖住"是字面意义上的覆盖**，看取值逻辑：
+
+```python
+def _merged_tools(self, scope: Optional[str] = None) -> Dict[str, ToolEntry]:
+    """Return global tools overlaid with one profile's plugin tools."""
+    return {**self._tools, **self._scoped_tools.get(scope or self.current_scope_key(), {})}
+```
+
+`{**全局, **某插件的}` —— **后者盖前者**。
+所以一个插件工具叫 `terminal`，就会在**它自己所在的 scope 里**把内置的 `terminal` 顶掉。
+
+> ⚠️ **所以"影子"不是"重复注册被拒绝"这个意思**（那是后话）。
+> 它的意思是：**这个注册如果放行，取值时它会盖住一个已经存在的东西。**
+
 #### 覆盖语义其实是四条路径（原文压成了一句话）
 
 ```python
 # tools/registry.py:647-682（化简）
 plugin_override_denied = (owner is not None and not self._plugin_override_allowed(scope, owner))
-shadows_global = (owner is not None and scope is not None
-                  and name not in target and name in self._tools)
+# 「它想盖掉的是一个全局工具」的四条判据，缺一不可：
+shadows_global = (
+    owner is not None and        # ① 注册方是插件（不是内置代码）
+    scope is not None and        # ② 它注册进了自己的覆盖槽
+    name not in target and       # ③ 它自己槽里还没有这个名（排除重连/刷新）
+    name in self._tools)         # ④ 但全局槽里有这个名字
 if shadows_global:
     if not override:
         logger.error("Tool registration REJECTED: plugin %r attempted to shadow global tool %r "
                      "without override=True", owner, name)
-        return                                    # ← ① 插件影子全局且没 override：拒绝 + 日志
+        return                                    # ← ① 想盖全局工具、但没声明 override：拒绝 + 日志
     if plugin_override_denied:
-        raise PermissionError(...)                # ← ② 插件覆盖但运维没开开关：抛异常
+        raise PermissionError(...)                # ← ② 声明了 override、但使用者没授权：抛异常
 
 if existing and existing.toolset != toolset:
     if override:
@@ -179,21 +219,75 @@ if existing and existing.toolset != toolset:
         return                                    # ← ④ 跨 toolset 影子没 override：拒绝 + 日志
 ```
 
-**注意三个不同的失败形态**，它们分别对应不同的严重级别：
+#### 关键：替换内置工具要**两个人分别点头**
 
-| 情况 | 形态 | 为什么 |
+这是这段代码最重要的设计，说的是**两个不同的人**：
+
+| 闸门 | 谁决定 | 怎么表态 |
 |---|---|---|
-| 插件影子全局工具、没 `override` | **`logger.error` + `return`**（静默不注册） | 插件自己的错误，不该拖垮进程 |
-| 插件的 `override` 没被运维授权 | **`raise PermissionError`** | **安全边界**，必须炸出来 |
-| 跨 toolset 影子全局工具、没 `override` | **`logger.error` + `return`** | 可能是名字撞了，记下来但继续 |
+| `override=True` | **插件作者** | 在 `register()` 调用里写（声明"我是**故意**替换它的"） |
+| `allow_tool_override: true` | **使用者 / 运维** | 在 `config.yaml` 里写 `plugins.entries.<plugin_id>.allow_tool_override: true`（授权"我允许**这个**插件替换内置工具"） |
 
-> 📌 **同一段代码里混用"记日志"和"抛异常"，不是不统一，是按后果分级。**
-> 判据：**这个错误会不会让用户以为自己得到了某个能力，实际上得到的是另一个东西？**
-> 会 → 抛异常（插件覆盖被拒）；不会 → 记日志（名字撞了，跳过就好）。
+拒绝时的报错原文（`_OVERRIDE_DENIED_MSG`）：
+
+> Plugin module {owner!r} **cannot override built-in tool** {name!r}
+> **without operator opt-in** (allow_tool_override).
 >
+> （插件模块 {owner!r} 在**没有使用者显式同意**的情况下，**不能覆盖内置工具** {name!r}。）
+
+> 📌 **为什么必须是两个人？** 因为这是两个不同的问题：
+>
+> - **作者**知道的是"**我的意图**"——比如"我这个 headed-Chrome 后端就是要替换默认的
+>   `browser_navigate`"，那是合情合理的替换
+> - **使用者**决定的是"**我信不信任它**"
+>
+> **只有第一道闸门**：任何粗心或恶意的插件都能悄悄把 `terminal` 换掉，
+> 用户完全看不出来（工具名没变、schema 可能也没变）。
+> **只有第二道**：那是一个全局开关，等于"以后谁都能替换我的核心工具"。
+> 两道都要 = **声明意图 + 授予权限**，而且**都是逐个插件**的。
+
+#### 两个失败形态为什么一个记日志、一个抛异常
+
+| 情况 | 形态 | 怎么理解 |
+|---|---|---|
+| 想盖全局工具、**没声明 `override`** | `logger.error` + **不注册**，进程继续 | **疏忽**：没说要覆盖。善意假设 → 当没发生过 |
+| 声明了 `override`、**但使用者没授权** | **`raise PermissionError`** | **越权尝试**：它**确实想**换掉你的核心工具，只是没被允许 |
+
+> 📌 判据不是"后果严不严重"，而是**"这是疏忽还是越权"**：
+> - **没声明意图** → 按疏忽处理（日志里留下线索，但不中断）→ 插件那个工具不生效，**内置的照常**
+> - **声明了但没被授权** → 按越权处理（抛出）→ 因为**它本会真的改掉一个核心工具的行为**
+>
+> 两次的差别还有一层：**①的结果是"少了个插件功能"，用户是"少了东西"；
+> ②的结果是"核心工具被静默换掉"，用户是"用着以为对的东西"**——后者才是信任边界。
+
 > **同 toolset 重新注册是允许的**——注释专门写了理由：
 > *same-toolset re-registration (MCP reconnect/refresh) stays allowed.*
 > （MCP 服务器重连/刷新时会重新注册同名工具，那是正常行为。）
+> 这也解释了判据 ③ `name not in target` 为什么必要：**重连时"我自己槽里已经有这个名了"，
+> 那不是影子，那是刷新。**
+
+#### 附带一个防"洗白"的设计
+
+"这是谁注册的"（`owner`）不是看**谁在调用**，而是看**函数定义在哪个模块**：
+
+```python
+def _plugin_owner_of(self, handler: Callable) -> Optional[str]:
+    """Plugin namespace that DEFINED *handler* (None for built-in/MCP handlers). Bound to
+    ``handler.__globals__["__name__"]``, fixed at definition time so it cannot drift with
+    call site/thread/timing; lambdas and nested functions inherit it, so a plugin cannot
+    launder an override via a callback."""
+```
+
+> 📌 注释最后一句是重点：*so a plugin **cannot launder an override via a
+> callback***（**插件不能通过回调把一次覆盖"洗白"**）。
+>
+> 也就是说：插件**不能**把内置工具的函数包一层 lambda 就冒充成自己的实现——
+> 因为 lambda 继承的是**定义处**的模块名（`__globals__["__name__"]`），不是调用处的。
+>
+> 规律：**判定身份要选"不会被伪装/漂移的信号"。**
+> "调用位置"是可以伪装的，"定义位置"是固定的。
+> 这和第 3 章"schema 在导入时构建、所以不能写运行时事实"同源：
+> **先想清楚哪个信号是可信的，再拿它做判据。**
 
 #### 结果必须是 JSON 字符串
 
