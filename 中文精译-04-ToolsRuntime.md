@@ -712,8 +712,10 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 | ❌ | 107 条危险模式 | 把检测挪到一处就够，**抄数量没有教学价值** | — | 只留 10 条 |
 | ❌ | process_registry 那一整套 | 需要"多父 + 持久化 + 重启"的真实场景 | — | 不做 |
 
-> 📌 **计划外发现的两个 bug + 一处测试设计错误，已移到 《源码讲解-04-ToolsRuntime.md》**§十****。
+> 📌 **计划外发现的两个 bug + 一处测试设计错误，已移到《源码讲解-04-ToolsRuntime.md》§十。**
 > 那三节是**实现日志**（做完之后才知道的），不属于"翻译"。
+>
+> 📌 **以后要自己加一个新工具**（比如 `web_search`）：完整流程 —— 只碰两个文件、8 步清单、真跑记录、以及那个必踩的 `check_fn` 30 秒缓存坑 —— 在《源码讲解-04》**§十二**。
 
 ## 附录 A · mini 版代码结构对照（本章相关）
 
@@ -728,6 +730,7 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 | `tools/terminal.py` | ✅ 115 行（只有 local；后端表的位置留着） | `tools/terminal_tool.py` + `terminal_tool_backends.py` |
 | `tools/file_tools.py` | ✅ 147 行（结果改 JSON） | `tools/file_tools*.py` |
 | `tools/search_files.py` | ✅ **新建** 130 行（★ 计划外，详见《源码讲解-04》§十） | `search_files`（走 ripgrep） |
+| `tools/web_search.py` | ✅ **新建** 102 行（凭据型 `check_fn` 的活例子） | `web_search`（需 key；未配则**不发**） |
 | `tools/todo.py` | ✅ 267 行（**未动**，含 `AGENT_LEVEL_TOOLS`） | `tools/todo_tool.py` + `agent/inline_tool_executors.py` |
 | `tests/test_tools_runtime.py` | ✅ 74 条 / 8 组 | — |
 | `tools/web_search.py` | ✅ **新建**（§0.5 之后的验收题：加工具只碰两个文件） | — |
