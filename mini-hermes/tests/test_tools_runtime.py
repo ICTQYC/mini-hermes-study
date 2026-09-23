@@ -26,6 +26,7 @@ import os
 import shutil
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,6 +44,15 @@ PASS, FAIL = [], []
 def check(name: str, cond: bool, detail: str = "") -> None:
     (PASS if cond else FAIL).append(name)
     print(f"{'✓' if cond else '✗'} {name}" + (f"  → {detail}" if detail and not cond else ""))
+
+
+def _defnames(**kwargs) -> list:
+    """**模型实际能看到**的工具名列表。
+
+    写成辅助函数是因为这一组要反复问同一个问题（"那包 JSON 里有没有它"），
+    而且必须每次都**重新构建** —— 不能缓存结果，否则测不出 check_fn 的变化。
+    """
+    return [d["function"]["name"] for d in model_tools.get_tool_definitions(**kwargs)]
 
 
 def _write(tmp: Path, name: str, source: str) -> Path:
@@ -130,7 +140,9 @@ def test_ast_detection_survives_broken_file() -> None:
 def test_discovery_found_the_real_tools() -> None:
     """真实目录的发现结果（这是"手写名单"被替掉后的**新契约**）。"""
     imported = model_tools.discover_builtin_tools()
-    check("发现了 3 个工具模块", len(imported) == 3, str(imported))
+    # ★ 这里原来是**数量断言**（"发现了 3 个工具模块"）——加一个工具它就得改。
+    #   改成契约断言：**该被发现的都被发现了**，而且**基础设施没被误当工具**。
+    #   （实测：加了 tools/web_search.py 之后，这条契约自动通过，数量断言则报红。）
     check("文件工具被发现了", "tools.file_tools" in imported, str(imported))
     check("终端被发现了", "tools.terminal" in imported, str(imported))
     check("搜索被发现了（第 4 章新增，修掉提示词宣传不存在的工具）",
@@ -140,6 +152,8 @@ def test_discovery_found_the_real_tools() -> None:
           str(imported))
     check("没把 todo.py 当工具（它不用 register_tool，走 AGENT_LEVEL_TOOLS）",
           "tools.todo" not in imported, str(imported))
+    check("web_search 被发现了（第 4 章之后新加的工具，**没改任何名单**）",
+          "tools.web_search" in imported, str(imported))
 
 
 # ══════════════════════════════════════════════ 2. toolset：注册 ≠ 暴露
@@ -574,6 +588,103 @@ def test_every_tool_handler_is_its_own_function() -> None:
     check("每个工具的 handler 都是「和它同名」的那个函数", not bad, f"绑错的：{bad}")
 
 
+# ══════════════════════════════════════════════ 8. 凭据型 check_fn 与 toolset 闸门（web_search 为例）
+def test_credential_gate_hides_tool_without_a_key() -> None:
+    """★ 凭据型 `check_fn`：没配 key → 工具**不进**发给模型的 schema。
+
+    这是"注册 ≠ 暴露"的第二种形态（§三）。两条断言要**同时**成立才说明问题：
+      · 台账里**有**它（注册成功了）
+      · 那包 JSON 里**没有**它（被 check_fn 挡住）
+    只断言后者的话，工具没注册也会"通过"——**那就测不出东西。**
+    """
+    saved = os.environ.pop("MINI_SEARCH_API_KEY", None)
+    try:
+        registry.invalidate_check_fn_cache()
+        check("web_search **注册**了（台账里查得到）", registry.get("web_search") is not None)
+        check("但没配 key 时**不在**发给模型的 schema 里",
+              "web_search" not in _defnames())
+
+        os.environ["MINI_SEARCH_API_KEY"] = "test-key-not-real"
+        registry.invalidate_check_fn_cache()
+        check("配上 key 后它出现了（同一个工具，只差一个环境变量）",
+              "web_search" in _defnames())
+    finally:
+        if saved is None:
+            os.environ.pop("MINI_SEARCH_API_KEY", None)
+        else:
+            os.environ["MINI_SEARCH_API_KEY"] = saved
+        registry.invalidate_check_fn_cache()
+
+
+def test_credential_probe_has_no_side_effects() -> None:
+    """★ `check_fn` 的契约：**不联网、无副作用、便宜**。
+
+    它是"探测"不是"试探性调用"。把网络层换成"一被调用就断言失败"的替身，
+    探测必须照样返回 —— 证明它只读配置、不出网。
+    """
+    import tools.web_search as ws
+
+    real = urllib.request.urlopen
+    def _boom(*a, **k):
+        raise AssertionError("check_fn 里不该发网络请求")
+    urllib.request.urlopen = _boom
+    try:
+        got = ws.check_web_search_requirements()
+        check("探测不碰网络也能给出答案", isinstance(got, bool), repr(got))
+    finally:
+        urllib.request.urlopen = real
+
+
+def test_search_result_and_error_are_json() -> None:
+    """handler 的出口契约：成功是 JSON、没配 key 也是 JSON（不抛异常）。"""
+    import tools.web_search as ws
+
+    os.environ.pop("MINI_SEARCH_API_KEY", None)
+    r = json.loads(ws.web_search_tool(query="x"))
+    check("没配 key 时返回 JSON 错误（而不是抛异常）", "error" in r, str(r)[:80])
+
+    os.environ["MINI_SEARCH_API_KEY"] = "test-key-not-real"
+    real = urllib.request.urlopen
+
+    class _Fake:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"organic": [{"title": "T", "link": "https://u", "snippet": "S"}]}).encode()
+
+    urllib.request.urlopen = lambda *a, **k: _Fake()
+    try:
+        ok = json.loads(ws.web_search_tool(query="hermes", max_results=3))
+        check("成功路径返回 JSON", ok.get("results", [{}])[0].get("url") == "https://u", str(ok)[:100])
+        check("query 原样回显（便于模型核对）", ok.get("query") == "hermes", str(ok)[:100])
+
+        err = json.loads(model_tools.handle_function_call("web_search", {"query": ""}))
+        check("空 query → JSON 错误", "error" in err, str(err)[:80])
+    finally:
+        urllib.request.urlopen = real
+        os.environ.pop("MINI_SEARCH_API_KEY", None)
+        registry.invalidate_check_fn_cache()
+
+
+def test_two_gates_are_independent() -> None:
+    """★ 两道闸门**彼此独立** —— 这道题把第 4 章最容易混的一件事钉死。
+
+    `check_fn` 管"这个环境里能不能用"，toolset 管"这一轮该不该给"。
+    配了 key 但禁掉 search 组 → 照样不给；这就是为什么它们是两道闸门而不是一道。
+    """
+    os.environ["MINI_SEARCH_API_KEY"] = "test-key-not-real"
+    try:
+        registry.invalidate_check_fn_cache()
+        check("key 配了 → check_fn 放行", "web_search" in _defnames())
+        check("但禁掉 search toolset → 照样不给（两闸门独立）",
+              "web_search" not in _defnames(disabled_toolsets=["search"]))
+        check("…而且同组的 search_files 也一起消失（toolset 是整组开关）",
+              "search_files" not in _defnames(disabled_toolsets=["search"]))
+    finally:
+        os.environ.pop("MINI_SEARCH_API_KEY", None)
+        registry.invalidate_check_fn_cache()
+
+
 GROUPS = [
     ("1. AST 自动发现",
      "按语法形状判断（不按文本）/ 只看模块体 / 坏文件不炸 / 发现真实工具",
@@ -604,6 +715,12 @@ GROUPS = [
     ("6. 端到端",
      "模型实际看到的 tools 字段 / toolset 能收窄 / 工具结果是 JSON",
      [test_end_to_end_model_sees_what_it_should]),
+    ("8. 凭据型 check_fn 与 toolset 闸门（web_search 为例）",
+     "没 key 就**不发给模型** / 探测不联网 / 出口是 JSON / **两道闸门彼此独立**",
+     [test_credential_gate_hides_tool_without_a_key,
+      test_credential_probe_has_no_side_effects,
+      test_search_result_and_error_are_json,
+      test_two_gates_are_independent]),
     ("7. 工作目录与注册完整性（复检新增）",
      "「我在哪」单源 / **工具跑在提示词报的那个目录** / handler 没绑错函数",
      [test_context_cwd_is_single_sourced,

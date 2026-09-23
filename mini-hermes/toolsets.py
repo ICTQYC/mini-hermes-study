@@ -50,7 +50,7 @@ TOOLSETS: Dict[str, Dict[str, Any]] = {
     },
     "search": {
         "description": "搜索文件内容",
-        "tools": ["search_files"],
+        "tools": ["search_files", "web_search"],
     },
     "terminal": {
         "description": "在本机 shell 里执行命令（风险最高，需要审批）",
@@ -74,7 +74,8 @@ TOOLSETS: Dict[str, Dict[str, Any]] = {
 # 它们的 **schema 走正常注册**，只有**执行**被 agent loop 接管。
 # 所以"暴露给谁"这件事只有一个答案来源：**这张表**。
 MINI_CORE_TOOLS: List[str] = [
-    "read_file", "write_file", "list_dir", "search_files", "terminal", "todo_list",
+    "read_file", "write_file", "list_dir", "search_files", "web_search",
+    "terminal", "todo_list",
 ]
 
 

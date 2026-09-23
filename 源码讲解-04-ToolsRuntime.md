@@ -1291,7 +1291,7 @@ for name in registry.tool_names():
 
 ---
 
-## 十一、测试覆盖：63 条在守什么
+## 十一、测试覆盖：74 条在守什么
 
 | 组 | 守的承诺 | 条数 |
 |---|---|---|
@@ -1302,6 +1302,7 @@ for name in registry.tool_names():
 | 5. agent 级工具守卫 | 绕过 agent loop 直接分发 → 错误要指出**调用方不对** | 4 |
 | 6. 端到端 | 模型实际看到的 tools 字段 / toolset 能收窄 / 工具结果是 JSON | 6 |
 | 7. **工作目录与注册完整性**（复检新增） | 「我在哪」**单源** / **工具跑在提示词报的那个目录** / handler 没绑错函数 | 9 |
+| 8. **凭据型 `check_fn` 与 toolset 闸门**（以 `web_search` 为例） | 没 key 就**不发** / 探测不联网 / 出口是 JSON / **两道闸门彼此独立** | 11 |
 
 **为什么这样分组**：每一组对应一个**闸门**。这一章讲的所有机制最终都体现在
 "那一个 `tools` 字段里有什么"——所以第 6 组是端到端（抓真实请求），
@@ -1359,11 +1360,11 @@ tools/terminal.py       78  →  115 行
 tools/file_tools.py     92  →  147 行
 tools/search_files.py  （无） →  130 行
 tools/todo.py          267  →  267 行（未动）
-tests/test_tools_runtime.py（无）→ 635 行 / 63 条 / 7 组
+tests/test_tools_runtime.py（无）→ 74 条 / 8 组
 
-注册 5 个工具 / 暴露 6 个（+todo_list）
-源码 4710 行 · 测试 2771 行 · demo 276 行
-测试合计 284 条（154 + 54 + 13 + 63），Python 3.13.14 与 3.9.6 都过
+注册 6 个工具；默认暴露 6 个（5 个 + todo_list，web_search 因未配 key 被挡住）
+源码 4813 行 · 测试 2888 行 · demo 276 行
+测试合计 295 条（154 + 54 + 13 + 74），Python 3.13.14 与 3.9.6 都过
 ```
 
 
