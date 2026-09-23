@@ -13,7 +13,7 @@
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
-| 5 | `context-compression-and-caching.md` | 🔄 **进行中**：1~5 件已完成（四个新模块 · 114 条测试 · 接线 · 真跑验证）；⬜ 下一步 = 源码讲解-05 + README + 标签 | 《中文精译-05-ContextCompressionAndCaching.md》 |
+| 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · 114 条测试 · 接线 · 真跑验证） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ⬜ 待做（现在是 JSON，要换 SQLite） | — |
 | 7 | `gateway-internals.md` | ⬜ 待做 | — |
 
@@ -159,6 +159,8 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 python3 tests/test_packaging.py        # 13 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
 python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
+python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
+python3 tests/test_compression.py      # 114 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
 #      find . -name __pycache__ -type d -exec rm -rf {} +
@@ -214,6 +216,10 @@ tools/*.py                ←  tools/*.py（一个工具一个文件，**import 
 agent/iteration_budget.py ←  agent/iteration_budget.py
 agent/prompt_builder.py   ←  agent/prompt_builder.py（★ 第 3 章：内容层）
 agent/system_prompt.py    ←  agent/system_prompt.py（★ 第 3 章：排序层 —— 三层装配）
+agent/context_engine.py   ←  agent/context_engine.py（★ 第 5 章：上下文引擎 ABC —— 可替换的压缩策略）
+agent/usage_anchor.py     ←  agent/usage_anchor.py（★ 第 5 章：真实用量锚点 + 只估算增量）
+agent/context_compressor.py ← agent/context_compressor.py（★ 第 5 章：四阶段压缩 + 无进展守卫）
+agent/prompt_caching.py   ←  agent/prompt_caching.py（★ 第 5 章：cache_control 断点 + "为什么不动请求"）
 hermes_cli/main.py        ←  hermes_cli/main.py（命令行入口）
 hermes_cli/runtime_provider.py ← hermes_cli/runtime_provider.py
 doctor.py                 ←  （mini 特有）分层体检：环境→DNS→逐地址连通性→计时→真实调用
@@ -224,6 +230,8 @@ tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响�
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
 tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
+tests/test_compression.py       # 114 条压缩与缓存自测（★ 第 5 章：token 记账 / 边界 /
+                                #   四阶段 / 无进展守卫 / 契约 / 缓存标记 / 模型窗口表）
 tests/test_packaging.py         # 13 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描）
 demos/                          # 能跑出来的故障复现，比散文有说服力
   why_interactive_is_serial.py  # 为什么 interactive 工具必须打断并发（三个真实故障）
@@ -255,8 +263,7 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 
 ## 故意没做的（等对应章节）
 
-流式输出 · prompt 缓存标记（Anthropic 的 `cache_control`） · 上下文压缩 ·
-**子目录 AGENTS.md 的逐步发现** · **存盘提示词的校验** · 插件段 · 外部记忆 provider ·
+流式输出 · **子目录 AGENTS.md 的逐步发现** · **存盘提示词的校验** · 插件段 · 外部记忆 provider ·
 **技能系统与技能索引** · Anthropic/Codex 的 API 模式 · SQLite 会话存储 ·
 网关多平台 · 子 agent
 
@@ -293,6 +300,32 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 >   —— 正是这一章讲的"**在描述里点名不可用的工具**"。现在它真的存在了。
 > - 工具结果从 `"[error] xxx"` 纯文本改成 **JSON 字符串**（Hermes 的契约：
 >   *All handlers return a JSON string*），因为结果要**从历史里被重新解析**。
+
+> 📌 **第 5 章故意没做的，分三类**：
+>
+> **规模型**（抄了没意义）：
+> - 引擎解析链是**三跳**（`plugins/context_engine/<名字>/` → 通用插件系统 → 内置），
+>   还有深拷贝保护和"找不到就警告回退"。mini 没有插件系统 → 等第 10 章。
+> - 窗口的**九级降级链**（config → 缓存 → 端点探测 → models.dev → 硬编码表 → 256K 兜底）。
+>   mini 只留"查证过的表 + 环境变量覆盖"，**宁可压早不可压晚**（理由：mini 没有反应式恢复）。
+> - 提示词缓存"**不插标记**"的判据有 **10 类**（传输方式、自定义 provider 能力声明、
+>   LiteLLM 路由、非缓存路由主动剥离…），mini 只有 3 类。
+>
+> **归属别章**：
+> - **网关会话卫生（85%）**：另一套压缩系统，服务于"两轮之间长起来"的会话 → 第 7 章。
+> - **摘要失败冷却阶梯**（60→300→900s，持久化在 `state.db`）：mini 单进程、无网关、
+>   无 `state.db` → 它的消费者还不存在。
+> - **微压缩 / 原生 Responses 压缩 / Codex 三条支线**：都不是本章主线。
+>
+> **mini 与真实版"语义不同"的两处**（不是做得少，是做的不一样，详见《源码讲解-05》§五、§九）：
+> - **尾部条数地板**：mini 用 `protect_last_n=20` 直接取"更宽松的" → 20 条以内的历史**什么都压不动**；
+>   真实版把它封顶到 ≤8（`_MAX_TAIL_MESSAGE_FLOOR`），注释里写的正是这个症状。
+> - **配对清理**：mini 给"缺结果"的调用**注入占位结果**；真实版**剥掉调用**
+>   （注释：占位会被下游 `repair_message_sequence` 当孤儿丢掉）。
+>
+> 另外，读源码时**核出上游文档 6 处不一致**（最重的是"默认 50% 触发"——
+> 源码对 <512K 窗口的模型抬到 75%，还要过 64K 地板与 85% 上限），
+> 清单在《源码讲解-05》附录 C。
 
 > 📌 **流式输出排在哪**：官方文档里**没有**聊天文本流式的专章
 > （`streaming-tts.md` 讲的是流式语音合成，不是这个）。
