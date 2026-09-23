@@ -86,7 +86,16 @@ def load_env_file(path: Optional[Path] = None) -> List[Path]:
                 continue
             key, _, val = line.partition("=")
             key, val = key.strip(), val.strip().strip('"').strip("'")
-            if key and key not in os.environ:
+            # ★ 只认**非空**值：先出现的文件里的空行**不算数**，继续往下找。
+            #
+            # 不这样做的后果（实测过）：在 `$MINI_HOME/.env` 里留一行
+            # `DEEPSEEK_API_KEY=`（准备以后填），因为跳过判据是"**键名**是否已存在"，
+            # 它会先把键设成空字符串，于是后面 `~/.hermes/.env` 里那个**真值**
+            # 被当成"已存在"跳过 —— 报错只说"密钥为空"，绝口不提是哪个文件干的。
+            #
+            # 语义代价：**不能靠写空值来"主动屏蔽"某个键**（本来也做不到，
+            # 屏蔽该用环境变量覆盖或注释掉那一行）。
+            if key and val and key not in os.environ:
                 os.environ[key] = val
     return used
 

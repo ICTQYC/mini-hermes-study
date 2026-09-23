@@ -732,7 +732,7 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 | `tools/search_files.py` | ✅ **新建** 130 行（★ 计划外，详见《源码讲解-04》§十） | `search_files`（走 ripgrep） |
 | `tools/web_search.py` | ✅ **新建** 102 行（凭据型 `check_fn` 的活例子） | `web_search`（需 key；未配则**不发**） |
 | `tools/todo.py` | ✅ 267 行（**未动**，含 `AGENT_LEVEL_TOOLS`） | `tools/todo_tool.py` + `agent/inline_tool_executors.py` |
-| `tests/test_tools_runtime.py` | ✅ 74 条 / 8 组 | — |
+| `tests/test_tools_runtime.py` | ✅ 79 条 / 9 组 | — |
 | `tools/web_search.py` | ✅ **新建**（§0.5 之后的验收题：加工具只碰两个文件） | — |
 | `run_agent.py` 的 `INLINE_TOOL_EXECUTORS` | ✅ 第 2 章就有（1 个 key） | `agent/inline_tool_executors.py`（14 个 key） |
 
@@ -748,7 +748,7 @@ tools/terminal.py             78    →      115 行
 tools/file_tools.py           92    →      147 行
 tools/search_files.py       （无）   →      130 行
 tools/todo.py                267    →      267 行（未动）
-测试断言                     221    →      295 条（154 + 54 + 13 + 74）
+测试断言                     221    →      300 条（154 + 54 + 13 + 79）
 测试代码行数                1980    →     2888 行
 源码（不含测试与 demo）     3668    →     4813 行
 含测试与 demo 总行数        5924    →     7636 行

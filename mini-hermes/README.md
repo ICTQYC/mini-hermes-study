@@ -216,7 +216,7 @@ doctor.py                 ←  （mini 特有）分层体检：环境→DNS→�
 
 tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响应驱动）
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
-tests/test_tools_runtime.py     # 74 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
+tests/test_tools_runtime.py     # 79 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
 tests/test_packaging.py         # 13 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描）
 demos/                          # 能跑出来的故障复现，比散文有说服力

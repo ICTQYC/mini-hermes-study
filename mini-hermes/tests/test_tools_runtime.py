@@ -685,6 +685,52 @@ def test_two_gates_are_independent() -> None:
         registry.invalidate_check_fn_cache()
 
 
+# ══════════════════════════════════════════════ 9. 密钥链（$MINI_HOME/.env → ~/.hermes/.env）
+def test_env_file_chain_ignores_empty_values() -> None:
+    """★ 密钥链只认**非空**值 —— 留空 = 没写 = 继续往下找。
+
+    不这样做的后果（真踩过、也实证过）：在高优先级文件里留一行
+    `DEEPSEEK_API_KEY=`（等着以后填），因为跳过判据原本是"**键名**是否已存在"，
+    它会把键设成空字符串，于是低优先级文件里的**真值**被当成"已存在"跳过 ——
+    报错只说"密钥为空"，绝口不提是哪个文件干的。
+
+    **反向验证**：把 `load_env_file` 里的 `and val` 删掉 → 第 1 条立刻变红。
+    """
+    from hermes_cli import runtime_provider as rp
+
+    keys = ("MINI_T_EMPTY", "MINI_T_FULL", "MINI_T_NOEQ")
+    for k in keys:
+        os.environ.pop(k, None)
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / ".env"
+        f.write_text(
+            "# 注释行\n"
+            "MINI_T_EMPTY=\n"          # ← 留空：不算数
+            "MINI_T_EMPTY2=   \n"       # ← 只有空格：也不算数
+            "MINI_T_FULL=real-value\n"
+            "MINI_T_NOEQ\n"             # ← 没有等号：跳过
+            "MINI_T_QUOTED=\"quoted\"\n",
+            encoding="utf-8",
+        )
+        try:
+            rp.load_env_file(f)
+            check("空值不生效（留空 = 没写，继续往下找）",
+                  "MINI_T_EMPTY" not in os.environ and "MINI_T_EMPTY2" not in os.environ,
+                  f"{os.environ.get('MINI_T_EMPTY')!r} / {os.environ.get('MINI_T_EMPTY2')!r}")
+            check("非空值生效", os.environ.get("MINI_T_FULL") == "real-value")
+            check("没有等号的行被跳过", "MINI_T_NOEQ" not in os.environ)
+            check("值的引号被剥掉", os.environ.get("MINI_T_QUOTED") == "quoted",
+                  repr(os.environ.get("MINI_T_QUOTED")))
+
+            os.environ["MINI_T_FULL"] = "from-real-env"
+            rp.load_env_file(f)
+            check("★ 真环境变量永远赢过文件（CI/容器里能直接覆盖）",
+                  os.environ.get("MINI_T_FULL") == "from-real-env")
+        finally:
+            for k in keys + ("MINI_T_EMPTY2", "MINI_T_QUOTED"):
+                os.environ.pop(k, None)
+
+
 GROUPS = [
     ("1. AST 自动发现",
      "按语法形状判断（不按文本）/ 只看模块体 / 坏文件不炸 / 发现真实工具",
@@ -715,6 +761,9 @@ GROUPS = [
     ("6. 端到端",
      "模型实际看到的 tools 字段 / toolset 能收窄 / 工具结果是 JSON",
      [test_end_to_end_model_sees_what_it_should]),
+    ("9. 密钥链（$MINI_HOME/.env → ~/.hermes/.env）",
+     "**留空 = 没写**（不挡后面的真值）/ 引号剥离 / 真环境变量优先",
+     [test_env_file_chain_ignores_empty_values]),
     ("8. 凭据型 check_fn 与 toolset 闸门（web_search 为例）",
      "没 key 就**不发给模型** / 探测不联网 / 出口是 JSON / **两道闸门彼此独立**",
      [test_credential_gate_hides_tool_without_a_key,
