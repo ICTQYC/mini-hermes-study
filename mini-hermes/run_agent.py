@@ -336,12 +336,15 @@ class AIAgent:
 
             # 5. 内部消息格式 → 该 api_mode 的线上格式
             api_messages = self._build_api_messages(messages)
+            # ★ 锚点记的是**历史**（不是 api_messages）：临时层每轮都变，
+            #   拿它做指纹会让锚点永远失效。存一份引用，响应回来后用它记账。
+            _history_at_request = messages
 
             # 6. 注入临时提示层（预算告警 / ephemeral_system_prompt）—— 只改请求副本，不进历史
             api_messages = self._inject_ephemeral_layers(api_messages)
 
-            # 7. 打 prompt 缓存标记（只有 Anthropic 需要；这里留空位）
-            self._apply_prompt_caching(api_messages)
+            # 7. 打 prompt 缓存标记（只有 Anthropic 需要；DeepSeek 是自动前缀缓存）
+            api_messages = self._apply_prompt_caching(api_messages)
 
             # 7.5 ★ 校验**最终要发出去的那份**。
             #
@@ -360,6 +363,12 @@ class AIAgent:
                 self.thinking_callback(True)
             try:
                 response = self._interruptible_api_call(api_messages, task_id)
+                # ★ 把 provider 报出的**真实用量**记进锚点（第 5 章 §2.2.1）。
+                #   指纹盖的是历史，而 prompt_tokens 是整个请求 —— 差额是系统提示词
+                #   和工具 schema，它们在一段对话里稳定，所以这个近似是有意的。
+                _usage = (response or {}).get("usage") or {}
+                if _usage:
+                    self._compressor().update_usage(_usage, _history_at_request)
             finally:
                 if self.thinking_callback:
                     self.thinking_callback(False)
@@ -535,15 +544,21 @@ class AIAgent:
             self._budget_warning_injected = True
         return api_messages
 
-    def _apply_prompt_caching(self, api_messages: List[Dict]) -> None:
+    def _apply_prompt_caching(self, api_messages: List[Dict]) -> List[Dict]:
         """7. 只有 Anthropic 需要在历史末尾打 cache_control 断点。
 
         Hermes 整个工程最硬的一条规矩就是"不许破坏 prompt 缓存"：
         一次长对话每轮复用同一段缓存前缀，任何改动过去的消息、
         换工具集、重建系统提示词的行为都会让缓存失效、成本翻倍。
         """
-        if self.api_mode == "anthropic_messages":
-            raise NotImplementedError("prompt 缓存标记在 context-compression-and-caching 章节实现")
+        from agent import prompt_caching
+        out, note = prompt_caching.plan(
+            api_messages,
+            model=getattr(self, "model", "") or "",
+            provider=getattr(self, "provider", "") or "",
+        )
+        self._emit_status(note)
+        return out
 
     def _parse_response(self, response: Dict[str, Any]) -> tuple[Dict[str, Any], List[Dict]]:
         if not response:
@@ -894,6 +909,27 @@ class AIAgent:
         else:
             print(f"（完整 traceback 已写入 {where}；加 --debug 可直接看到）", file=sys.stderr)
 
+    def _compressor(self):
+        """惰性建一个 ContextCompressor（第一次用到才建）。"""
+        c = getattr(self, "_compressor_obj", None)
+        if c is None:
+            from agent.context_compressor import DEFAULT_CONTEXT_LENGTH, ContextCompressor
+            c = ContextCompressor(
+                context_length=int(getattr(self, "context_length", 0) or DEFAULT_CONTEXT_LENGTH),
+                status_callback=self._emit_status,
+            )
+            self._compressor_obj = c
+        return c
+
+    def _summary_llm(self, system: str, user: str) -> Optional[str]:
+        """给压缩器用的辅助 LLM 调用 —— 复用同一条 HTTP 路径，不新开通道。"""
+        resp = self._post_chat_completions(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "compression",
+        )
+        text, _ = self._parse_response(resp)
+        return (text.get("content") or "").strip() or None
+
     def _preflight_compression(self, messages: List[Dict]) -> None:
         """4. 预检压缩。
 
@@ -903,4 +939,14 @@ class AIAgent:
 
         本章先留空：压缩算法在 context-compression-and-caching 章节实现。
         """
-        return None
+        c = self._compressor()
+        if not c.should_compress(messages):
+            used, src = c.current_tokens(messages)
+            self._emit_status(f"上下文 {used} token（{src}），未到阈值 {c.threshold_tokens}，不压缩")
+            return
+        before_len = len(messages)
+        # ★ **原地**替换（对应原文 §3.2 的 in-place compaction）：
+        #   压缩不换会话 id、不改"这段对话的身份"，只把实时消息列表重写一遍。
+        messages[:] = c.compress(messages, call_llm=self._summary_llm)
+        if len(messages) == before_len:
+            self._emit_status("压缩未改变消息条数（只剪了内容）")
