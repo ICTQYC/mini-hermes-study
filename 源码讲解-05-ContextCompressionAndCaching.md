@@ -54,7 +54,7 @@ mini 版（本仓库，第 5 章末）
 | 4 | **锚点指纹粒度** | 整段 `messages[:count]` 的 sha256[:16] | **最后一条已计价消息**的单个指纹 | 实现差异 | ⬜ 性能（O(n) → O(1)） |
 | 5 | **锚点持久化** | `to_dict/from_dict`（留给 `--resume`） | 会话行的 `model_config._usage_anchor` | 位置不同 | ❌（mini 无 state.db） |
 | 6 | **触发阈值** ★ | `0.5 × 窗口`，平坦 | `75%` 起步（<512K 窗口 raise-only 抬升）+ **64K 地板** + **85% 上限** + 输出预留 | **实质差异** | ✅ 值得抄（算法 30 行） |
-| 7 | **窗口来源** ★ | 一张三行表 + 环境变量覆盖，没查证 → 64,000 | **九级降级链**（config → 缓存 → 探测 → models.dev → 硬编码表 → 256K 兜底 + 警告） | 规模 | ⬜ 抄结构不抄数据源 |
+| 7 | **窗口来源** ★ | 一张三行表 + 环境变量覆盖，没查证 → 64,000 | **九级降级链**（docstring 编号 0~9，实际返回点十余个：config → 缓存 → 探测 → models.dev → 硬编码表 → 256K 兜底 + 警告） | 规模 | ⬜ 抄结构不抄数据源 |
 | 8 | **阶段一（剪工具输出）** | 1 趟：长于 200 字符的旧 tool 结果换标记 | **5 趟**：去重(md5) / 降级 / 截 tool_call 参数(>500 字符) / 退役图片 / 压力降级 | 简化 | ✅ 第 2 趟（去重）代价极小 |
 | 9 | **头部保护** | `protect_first_n=3` **永远不减** | 首次压缩后**衰减到 0**（#11996，早期用户轮次不该化石） | **语义差异** | ✅ 三行 |
 | 10 | **尾部保护** ★ | `min(预算位置, 条数位置)` = 取更宽松的 | 1.5× 软上限 + **条数地板被压到 ≤8**（`_MAX_TAIL_MESSAGE_FLOOR`） | **实质差异** | ✅（这条正是 mini 真跑压不动的根因） |
@@ -404,7 +404,17 @@ MODEL_CONTEXT_DEFAULT = 64_000   # 表里没有的模型用这个（保守值：
 ```
 
 常量（`agent/context_compressor.py:991-992`）：`_SMALL_CTX_WINDOW_LIMIT = 512_000`、
-`_SMALL_CTX_THRESHOLD_PERCENT = 0.75`。
+`_SMALL_CTX_THRESHOLD_PERCENT = 0.75`。**为什么抬到 75%，上面两行的注释说得最清楚**
+（`:989-990`，逐字）：
+
+```python
+# Below this window the threshold is floored (raise-only): at 50% the incompressible
+# floor eats the reclaimed headroom and compaction re-fires every 1-2 turns.
+```
+
+读法：小窗口上"**压不掉的那部分**"（系统提示词 + 头部 + 尾部 + 摘要自身）已经占掉了回收出来的
+空间，于是 50% 阈值会让压缩**每 1~2 轮重新触发一次**（抖动，而每次触发都断一次缓存）。
+抬到 75% 是"**让出足够的空间，让这次压缩能撑住几轮**"。
 
 **第 ② 步：把百分比换成 token，并过地板与上限**（`agent/context_compressor.py:2372-2406`，
 docstring 逐字）：
@@ -448,8 +458,44 @@ docstring 逐字）：
 `_MIN_CTX_TRIGGER_RATIO = 0.85`（`agent/context_compressor.py:2332`）。
 
 **第 ③ 步：按模型覆盖 / Codex 抬升**（`agent/agent_init.py:185-208` 的
-`_resolve_compression_threshold`）：只有**更高**的模型专属值才会生效 ——
-Codex autoraise 的注释逐字写着 *"it never lowers a higher user value"*。
+`_resolve_compression_threshold`）：
+
+```python
+    # agent/agent_init.py:185-193（逐字）
+    """Global compaction threshold merged with a per-model override.
+
+    Returns ``(threshold, autoraise_notice)``; the notice is set only when a Codex autoraise
+    actually RAISES the threshold — it never lowers a higher user value (the user deliberately
+    keeps more raw context). Other overrides (Arcee Trinity) stay unconditional.
+    """
+```
+
+模型专属值的查表规则（`agent/context_compressor.py:1674-1686`）：**最长的匹配键胜出**，
+键可以写成 `"<provider>:<子串>"` 做作用域限定（同子串时作用域键胜过裸键）。
+`_model_threshold_key_rank`（`:1662-…`）的 docstring 给了一条很值的教训：
+
+> *The same slug means different windows on different routes (Codex caps Astra at 272K; OpenRouter
+> serves the full window), so a bare `astra: 0.85` written for Codex **silently leaks everywhere**.*
+
+具体值（`agent/auxiliary_client.py:576-580`、`:624-639`）：
+
+```python
+# Codex OAuth hard-caps gpt-5.4/5.5/5.6 and gpt-6 Astra at 272K (raw API/OpenRouter expose 1.05M);
+# the default 50% trigger would compact at ~136K, so raise to 85% (~231K).
+_CODEX_GPT54_GPT55_COMPACTION_THRESHOLD = 0.85
+# gpt-5.3-codex-spark: Codex-OAuth-only, native 128K; 70% (~90K) leaves summary headroom.
+_CODEX_SPARK_COMPACTION_THRESHOLD = 0.70
+```
+
+| 模型/路由 | 专属阈值 | 门控 |
+|---|---|---|
+| Arcee Trinity Large Thinking | **0.75** | 无条件 |
+| Codex 路由的 gpt-5.4 / 5.5 / 5.6 / Astra | **0.85** | `compression.codex_gpt55_autoraise`（默认 True） |
+| Codex 路由的 gpt-5.3-codex-spark | **0.70** | **不**受门控 |
+
+📌 这三行的存在理由都是**同一条**：Codex OAuth 把窗口硬砍到 272K（裸 API 是 1.05M），
+50% 会在 ~136K 就压 —— 而那个窗口上"**136K 还是够用的**"。所以不是"越早压越安全"，
+而是"**按这个路由真实能装多少来定**"。
 
 ### 三组数字摆一起看
 
@@ -1178,6 +1224,17 @@ mini 的做法在**教学上更好**（它把"为什么不动请求"说出来了
 
 ### 「压力告警被移除」的真相
 
+**先看触发链**（`gateway/run_turn.py`）：`_hmwa_hygiene_settings`（:595，解析配置与窗口）
+→ `_hmwa_hygiene_plan`（:657）里判（:692，逐字）：
+
+```python
+        _needs_compress = _approx_tokens >= _compress_token_threshold or _msg_count >= hs.hard_msg_limit
+```
+
+即**两个判据取或**：token 到 85% **或**消息条数到 `hygiene_hard_message_limit`（默认 5,000）。
+之后是 `_hmwa_hygiene_adopt_transcript`（:999）→ `_hmwa_hygiene_apply_result`（:1083），
+冷却落 `state.db`。
+
 上游 commit `fe12042e50`（2026-04-16，`fix: remove context pressure warnings entirely (#11039)`）
 的 message 逐字：
 
@@ -1373,7 +1430,7 @@ tests/test_compression.py   748 行 / 114 条 / 9 组
 | 事实 | 证据 |
 |---|---|
 | `CHARS_PER_TOKEN = 4`，CJK 走正则一次扫过 | `agent/model_metadata.py:2081`、`:2083`、`:2090-2107` |
-| 窗口解析是九级链，最后一级兜底 **256K** 并**去重警告** | `agent/model_metadata.py:1963-1972`、`:2059-2065`、`:300` |
+| 窗口解析：docstring 编号 **0~9 级**（每级内部还有子分支 `0b/0c/0d/0e/0f/0g`、`1b/1c`…，**实际返回点十余个**），最后一级兜底 **256K** 并**去重警告**（建议显式设 `model.context_length`） | `agent/model_metadata.py:1963-1972`（docstring）、`:2059-2065`、`:299-300`、`:304-314` |
 | 抠窗口时 `key in model` 只做**单向**匹配（防 `claude-sonnet-4` 命中 `claude-sonnet-4-6` → 1M） | `agent/model_metadata.py:2059-2060` |
 | 默认压缩配置全清单（`threshold 0.50` / `protect_last_n 20` / `tail_mode lean` / `max_attempts 3` / `context_timeout_seconds 120` …） | `hermes_cli/config_defaults.py:527-642` |
 | 摘要辅助模型走 `auxiliary.compression.*`（旧键 `compression.summary_model` 已迁移） | `hermes_cli/config_defaults.py:706`、`hermes_cli/doctor_config.py:25` |
@@ -1383,7 +1440,7 @@ tests/test_compression.py   748 行 / 114 条 / 9 组
 | `recent-summary defrag` 阈值 2000 token（微压缩的 rolling summary 再摘） | `agent/micro_compaction.py:158-171`、`agent/context_compressor.py:2462` |
 | 手动 `/compress` 在所有界面走同一条路（`compress_now`，一个解析器） | `agent/AGENTS.md` §Compression、`agent/conversation_compression_manual.py` |
 | 压缩是"被批准的唯一缓存破坏点"（**the sanctioned cache break**） | `agent/AGENTS.md` §Compression、顶层 `AGENTS.md` |
-| 原生 Responses 压缩：**只有 gpt-5.6 在直连 OpenAI 路由上**可用 | `agent/native_compaction.py:1-6`（*"Deliberately narrow (live-verified): gpt-5.6 only (5.1/5.2 fail server-side with no struc…"*） |
+| 原生 Responses 压缩：**只有 gpt-5.6 家族**在 **api.openai.com 或 ChatGPT Codex 后端**上可用；**本地压缩仍保持武装**（原生阈值被夹在本地触发点之下）；`checkpoint_required` 开启时**直接禁用**原生压缩 | `agent/native_compaction.py:1-9`（逐字：*"Deliberately narrow (live-verified): gpt-5.6 only (5.1/5.2 fail server-side with no structured rejection)… The local compressor stays armed as fallback (native threshold clamped below the local trigger)"*）、`:30-32`（`_ELIGIBLE_MODEL_MARKER = "gpt-5.6"`）、`:45-52`、`:88-97` |
 
 ---
 
