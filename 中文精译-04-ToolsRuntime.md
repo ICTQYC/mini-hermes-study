@@ -92,7 +92,7 @@ registry.register(
 ```python
 registry.register(
     name="read_terminal",
-    toolset="desktop_ui",
+    toolset="desktop_ui", # 所属工具集
     schema=READ_TERMINAL_SCHEMA,
     handler=lambda args, **kw: read_terminal_tool(
         start_line=args.get("start_line"), count=args.get("count"), callback=kw.get("callback")
@@ -271,11 +271,35 @@ def read_terminal_tool(start_line=None, count=None, callback=None) -> str:
     """Return the in-app terminal's contents (+ line metadata) as a JSON string."""
     return read_pane(callback, (("start", start_line, 0), ("count", count, 1)), (
         "read_terminal is only available in the Hermes desktop app.",   # ← ① callback 是 None
-        "start_line and count must be integers.",                       # ← ② 参数不是整数
-        "Failed to read terminal: ",                                    # ← ③ 回调抛异常
+        "start_line and count must be integers.",                       # ← ② int(val) 抛异常了
+        "Failed to read terminal: ",                                    # ← ③ 回调炸了
         "No in-app terminal is open, or the read timed out.",           # ← ④ 读到空
     ))
 ```
+
+> ⚠️ **更正记录（措辞）**：这条错误文案（②）说的是"**must be integers**"，
+> 但触发它的条件其实是 **`int(val)` 抛异常**——而 `int()` 接受的东西**比整数多**。
+> 实测（`read_pane(cb, (("start", val, 0), ("count", val, 1)), ERRORS)`）：
+>
+> | 输入 | 结果 |
+> |---|---|
+> | `40` | ✓ 接受 → `40` |
+> | **`3.7`** | **✓ 接受 → `3`（静默截断！）** |
+> | **`"40"`** | **✓ 接受 → `40`** |
+> | `" 40 "`（带空格） | ✓ 接受 → `40` |
+> | `True` | ✓ 接受 → `1`（bool 是 int 的子类） |
+> | `None`（不传） | ✓ 接受（该参数被整条丢掉） |
+> | `"40.5"` | ✗ 拒绝 |
+> | `"abc"` / `[1,2]` | ✗ 拒绝 |
+>
+> 准确的说法是 **"参数无法被 `int()` 转换"**，而不是"不是整数"。
+> 我在 §1 的例子里一开始照抄了这句文案（写成"参数不是整数"），已改。
+>
+> 📌 顺带一个观察：`3.7` 会被**静默截断成 3**。
+> 对一个"行号"参数来说，这个宽松度是否合意取决于取舍——
+> schema 里写的是 `"type": "integer"`（模型**应该**送整数），
+> 而这里的宽松是给"模型不听话时"的兜底：**能救就救，救不了才报错。**
+> 这句文案的不精确属于**提示措辞**层面的小瑕疵，不影响行为。
 
 **四种错误文案在调用时就准备好、按位置传进去**，`read_pane` 按情况挑一个：
 
@@ -1203,6 +1227,188 @@ def _memo_check(fn: Callable, memo: Dict[Callable, bool]) -> bool:
 > 📌 **同一个异常，在"启动探测"和"正常调用"里的严重级别不同。**
 > 启动时没有 secret scope 是**正常的**（还没有会话）；
 > 运行中读到未绑定的 secret 才是 bug。**这不是"放宽检查"，是"知道自己在什么阶段"。**
+
+#### 真实实现的五种形态（47 处注册带 `check_fn`）
+
+机制讲完了，看看**真实的人在里面写什么**。从最简到最重：
+
+**形态 1 · 恒真型（也要显式写出来）**
+
+```python
+# tools/delegate_tool.py:80
+def check_delegate_requirements() -> bool:
+    """Delegation has no external requirements -- always available."""
+    return True
+```
+
+> 📌 为什么"没有依赖"也要写一个函数？因为**显式比省略更强**：
+> 它说的是"**我想过了，它没有前置条件**"，而不是"某人忘了写"。
+> 语义上的差别是：前者是一个**承诺**，后者是一个**缺口**。
+
+**形态 2 · 转发型（两个工具共用前置条件）**
+
+```python
+# tools/__init__.py:6
+def check_file_requirements():
+    """File tools only require terminal backend availability."""
+    from .terminal_tool import check_terminal_requirements
+    return check_terminal_requirements()
+```
+
+> 文件工具和终端工具**共用同一个前置条件**（file tools 依赖 terminal backend）。
+> 转发而不是复制——一处改动两处生效。这和"表 vs if/elif"是同一个方向：
+> **同一个事实只能有一个来源。**
+
+**形态 3 · 凭据 / 可导入型（★ 这条最能说明机制为什么存在）**
+
+```python
+# tools/feishu_lark.py:26
+def _check_feishu():
+    # find_spec checks importability without executing lark_oapi's __init__, which
+    # eagerly loads websockets/dispatcher/every api model (~5s). This probe fires at
+    # every ``hermes`` startup; the handlers still do the real import when invoked.
+    import importlib.util
+    try:
+        return importlib.util.find_spec("lark_oapi") is not None
+    except (ImportError, ValueError):
+        return False
+```
+
+三个点，逐句对应注释：
+
+| 代码 | 注释说的理由 |
+|---|---|
+| 用 `find_spec` 而不是 `import` | 真 import 会**立刻加载 websockets / dispatcher / 每个 API model ≈ 5 秒** |
+| 为什么这 5 秒不能忍 | **这个探测在每次 `hermes` 启动时都会跑** |
+| handler 里仍然真 import | *the handlers still do the real import when invoked* —— 干活时才付这笔钱 |
+
+> 📌 **"探测要便宜，干活时才付钱"** —— 这是 `check_fn` 机制的第一性理由。
+> 它不是一个"顺便查一下"的地方，它在**启动路径 / 每轮 schema 构建路径**上。
+
+**形态 4 · 配置型 + 顺手存状态**
+
+```python
+# tools/memory_tool.py:227
+@no_cache_check_fn
+def check_memory_requirements() -> bool:
+    """Snapshot store flags and report whether the built-in tool is available."""
+    _memory_surface_flags.set(None)
+    flags = get_builtin_memory_store_flags()
+    _memory_surface_flags.set(flags)          # ← 顺手把结果塞进 contextvar
+    return flags[0] or flags[1]
+```
+
+两个点：
+
+1. **它标了 `@no_cache_check_fn`** —— 因为它只是**读本地配置**（便宜），
+   而且**必须立刻反映**（用户改了 config 要马上生效，不能等 30 秒 TTL）
+2. **它在探测的同时把状态存进了 contextvar** —— 于是后面的人不用再读一遍配置
+
+> 📌 **一次探测可以同时回答两个问题**："能不能用" + "用的是哪份配置"。
+> 这个"顺手"不是偷懒：如果两处分别读配置，就可能**读到两份不同的**（配置在两次读之间变了）。
+> 同一份快照分发给两个人 = 两个人看到的一定一致。
+
+**形态 5 · 多后端分支型（最重的一个）**
+
+```python
+# tools/browser_tool_install.py:294
+def check_browser_requirements() -> bool:
+    """Whether the browser tools should be advertised.
+
+    Local mode needs the ``agent-browser`` CLI plus a Chromium build (except Lightpanda-only
+    text workflows); cloud mode needs the CLI plus provider credentials (the provider hosts
+    its own Chromium)."""
+    _bt = _origin()
+    # Browser Use CLI backend: browser_exec replaces the whole browser_* surface
+    if _bt._is_browser_use_cli_mode():
+        return False
+    # Camofox only needs the server URL, no agent-browser CLI.
+    if _bt._is_camofox_mode():
+        return True
+    # CDP override needs no local binary. Raw (no-I/O) check: this runs during schema build,
+    # where a stale endpoint must not cost a blocking probe.
+    if _cdp._get_cdp_override_raw():
+        return True
+    # Do not exec ``agent-browser --version`` here: Windows .cmd shims flash a console during
+    # Desktop startup. Execution paths still validate.
+    try:
+        browser_cmd = _find_agent_browser(validate=False)
+    except FileNotFoundError:
+        return False
+    # Termux: the bare npx fallback is too fragile to advertise as a satisfied local dependency.
+    if _requires_real_termux_browser_install(browser_cmd):
+        return False
+    # Cloud mode also requires provider credentials; no local Chromium needed.
+    provider = _cloud._get_cloud_provider()
+    if provider is not None:
+        return provider.is_available()
+    # Lightpanda provides text/navigation tools without Chromium; screenshots/vision still
+    # return install errors.
+    if _lp._using_lightpanda_engine():
+        return True
+    # Local Chrome mode needs Chromium on disk or the CLI hangs until the command timeout.
+    return _chromium_installed()
+```
+
+**这段里有两句注释值得单独读，它们都在讲"探测本身有副作用"：**
+
+**(a) `# Do not exec agent-browser --version here: Windows .cmd shims flash a console during
+Desktop startup.`**
+
+> 在 Windows 上执行一个 `.cmd` **会闪一个黑框**。而这段代码在**桌面 app 启动时**跑。
+> 所以这里用 `validate=False`（**不真跑**），真验证留给执行路径。
+>
+> 📌 **探测不能有用户可见的副作用。** 一个"只是想查一下"的函数，
+> 在启动路径上跑一次就会有**看得见的后果**——这才是它被明确禁止的原因。
+
+**(b) `# Raw (no-I/O) check: this runs during schema build, where a stale endpoint must not
+cost a blocking probe.`**
+
+> 这一句更直接：**它跑在 schema 构建路径上，一个过期的 endpoint 不能让每一轮都卡住。**
+> 所以用 `_get_cdp_override_raw()`（**不联网**的版本）。
+>
+> 📌 同一个信息有两个版本：**raw（不 I/O）** 和 **真探测**。
+> 在"每轮都跑"的地方用前者，在"用户主动操作"的地方用后者。
+> **这是一个通用手法：给同一件事提供"昂贵但准"和"便宜但粗"两个接口，按调用位置选。**
+
+#### `check_fn` 的契约（名字看不出来的那部分）
+
+`check_fn` 这个名字只说了一半——"一个检查函数"。真正约束你**能在里面写什么**的是它下面这七条契约：
+
+| 契约 | 为什么 | 从哪看出来 |
+|---|---|---|
+| 返回 `bool`，**抛异常当 `False`** | 调用方不 try/except（fail-safe） | `_run_check_fn_uncached` 里的 `except: return False` |
+| **必须便宜** | 每 30 秒就可能跑一次，且在启动路径上 | `_CHECK_FN_TTL_SECONDS = 30` + feishu 的 ~5s 注释 |
+| **不能有可见副作用** | 它会在桌面 app 启动时跑 | browser 那句 "Windows .cmd shims flash a console" |
+| **不能阻塞 / 做 I/O** | 在 schema 构建路径上 | browser 那句 "must not cost a blocking probe" |
+| **凭据要走 `get_secret`，不能 `os.getenv`** | 一个进程服务多个 profile | `UnscopedSecretError` 的处理分支 |
+| 结果被**进程级缓存** | 所以它**不能**回答"这次会话专属"的问题 | `_check_fn_cache` + `_load_enabled_toolsets` 的分工 |
+| 想不缓存：`@no_cache_check_fn` | 本地配置读，必须立刻生效 | `memory_tool` / `kanban_tools` / `browser_vault` 三处 |
+
+> 📌 **最后那两条是同一条边界的两个方向**，值得说清楚：
+>
+> - **`check_fn` 回答"这个环境里它现在能用吗"** → 环境是**进程级**的，所以可以缓存
+> - **`toolset` 回答"这次会话该不该给它"** → 会话是**每次不同**的，所以不能进 `check_fn`
+>
+> `AGENTS.md` 把这条反例写得很具体（而且给了它一个名字）：
+>
+> > `check_fn` answers reachability or opt-in, not surface. "Is the bridge wired?" — fine.
+> > **"Was I spawned by Electron?"** — not. `check_fn` results are TTL-cached process-wide
+> > (`tools/registry.py`); **a per-session answer does not belong there.**
+>
+> （"这座桥接好了吗" —— 可以。"我是不是被 Electron 拉起来的？" —— **不行**，
+> `check_fn` 的结果是进程级缓存的，**会话级的答案不该放在那儿**。）
+>
+> 而且这个反例**有真实后果**：桌面 app 可能驱动
+> 本地后端子进程、SSH 上的后端、URL+token 的后端、或 Hermes Cloud，
+> 而 `HERMES_DESKTOP=1` 只在**前两种**上存在。用环境变量当闸门 →
+> 在其他拓扑下**静默失效**：工具被从 schema 里剔掉，
+> 而平台提示还在告诉模型"你在 Hermes 桌面 app 里"。
+>
+> 正确做法是 `AGENTS.md` 给的：**闸门放 toolset**（`desktop_ui` / `project`），
+> 由 `_load_enabled_toolsets(platform)` 在**会话来源**那一层折进来。
+> 一句话判据（原文）：*if the capability still makes sense with the client on another
+> machine, it is session-scoped.*
 
 ### 【动手】mini 版现状
 
