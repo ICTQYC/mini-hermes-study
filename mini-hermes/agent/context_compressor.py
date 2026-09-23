@@ -193,6 +193,10 @@ def align_boundary_backward(messages: Sequence[Dict[str, Any]], idx: int) -> int
     Hermes 的 `_align_boundary_backward()` 就是走这个函数：越过连续的工具结果，
     找到它们的父 assistant 消息，把切点放在**它前面**。
     """
+    # ★ `idx == len(messages)` 是合法输入，意思是「尾部为空」（什么都不保护）。
+    #   没这一句会 IndexError —— 测试抓到的（公开辅助函数不能假设调用方一定传有效下标）。
+    if idx >= len(messages):
+        return len(messages)
     i = max(0, idx)
     while i > 0 and _is_tool_result(messages[i]):
         i -= 1
@@ -423,6 +427,9 @@ class ContextCompressor(ContextEngine):
         )
         middle = pruned[head_end:tail_start]
         if not middle:
+            if pruned_count:
+                status(f"压缩跳过摘要：没有中间段可摘；阶段一剪掉 {pruned_count} 条旧工具输出仍生效")
+                return pruned
             status("压缩跳过：可摘要的中间段是空的")
             return list(messages)
 
@@ -435,6 +442,17 @@ class ContextCompressor(ContextEngine):
         middle_tokens = estimate_messages_tokens_rough(middle)
         floor = self.summary_min_middle_tokens()
         if middle_tokens < floor:
+            # ★ 跳过的是「摘要」，**不是阶段一**。阶段一是免费的（不调 LLM），
+            #   丢了它会导致：下一轮重做一遍、守卫又跳过 —— 于是永远压不动。
+            #   （这个坑是测试逼出来的：跳过时 `return list(messages)` 把剪掉的成果扔了。）
+            if pruned_count:
+                status(
+                    f"压缩跳过摘要：剪完旧工具输出后中间段只剩 {middle_tokens} token"
+                    f"（< {floor}），摘要它省不下东西、只会多一次调用（无进展守卫）。"
+                    f"**但阶段一的成果已生效**：{pruned_count} 条旧工具输出被剪掉，"
+                    f"约省 {before - estimate_messages_tokens_rough(pruned)} token。"
+                )
+                return pruned
             status(
                 f"压缩跳过：中间段只有 {middle_tokens} token（< {floor}），"
                 f"摘要它省不下东西、只会多一次调用（无进展守卫）"
