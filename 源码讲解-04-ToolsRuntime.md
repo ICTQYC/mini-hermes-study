@@ -1291,7 +1291,7 @@ for name in registry.tool_names():
 
 ---
 
-## 十一、测试覆盖：79 条在守什么
+## 十一、测试覆盖：87 条在守什么
 
 | 组 | 守的承诺 | 条数 |
 |---|---|---|
@@ -1304,6 +1304,7 @@ for name in registry.tool_names():
 | 7. **工作目录与注册完整性**（复检新增） | 「我在哪」**单源** / **工具跑在提示词报的那个目录** / handler 没绑错函数 | 9 |
 | 8. **凭据型 `check_fn` 与 toolset 闸门**（以 `web_search` 为例） | 没 key 就**不发** / 探测不联网 / 出口是 JSON / **两道闸门彼此独立** | 11 |
 | 9. **密钥链** | **留空 = 没写**（不挡后面的真值）/ 引号剥离 / 真环境变量优先 | 5 |
+| 10. **双供应商**（Tavily / Serper 按 key 自动选） | 只配 Tavily 也走得通 / **厂商字段名不外泄** / 优先级是表里写的 | 8 |
 
 **为什么这样分组**：每一组对应一个**闸门**。这一章讲的所有机制最终都体现在
 "那一个 `tools` 字段里有什么"——所以第 6 组是端到端（抓真实请求），
@@ -1406,6 +1407,24 @@ registry.invalidate_check_fn_cache()        # ← Hermes 里 `hermes tools enabl
 **反向验证**：把 `web_search` 从 `toolsets.py` 拿掉 → 2 条立刻变红
 （"配上 key 后它出现了" / "key 配了 → check_fn 放行"）。**能变红，测试才算数。**
 
+### 加第二个供应商：只加一行表项
+
+`web_search` 现在支持两个供应商（Tavily / Serper），**按"哪个 key 在"自动选**：
+
+```python
+PROVIDERS = (
+    {"name": "tavily", "key_env": "TAVILY_API_KEY",      "build": _tavily_build, "parse": _tavily_parse},
+    {"name": "serper", "key_env": "MINI_SEARCH_API_KEY", "build": _serper_build, "parse": _serper_parse},
+)
+```
+
+`check_fn`、handler、schema **都读这张表**，所以加一家只加一行 —— 不用碰别的。
+`TAVILY_API_KEY` 这个名字是**故意**选的：它和 Hermes 自己的 `web_search`
+（`tools/web_tools.py` 的自动探测）同名，**一个 key 两份工具用**。
+
+⚠️ 测试要**自己隔离这两个 key**（`_isolate_search_keys`）：机器上真配了
+`TAVILY_API_KEY` 时，Serper 那几条会被悄悄切走 —— 假红，看起来像代码坏了。
+
 ### 想换一个搜索服务，改哪里
 
 代码里只有三处和厂商有关（都留了名字，不散落）：
@@ -1463,7 +1482,7 @@ tests/test_tools_runtime.py（无）→ 74 条 / 8 组
 
 注册 6 个工具；默认暴露 6 个（5 个 + todo_list，web_search 因未配 key 被挡住）
 源码 4813 行 · 测试 2888 行 · demo 276 行
-测试合计 300 条（154 + 54 + 13 + 79），Python 3.13.14 与 3.9.6 都过
+测试合计 308 条（154 + 54 + 13 + 87），Python 3.13.14 与 3.9.6 都过
 ```
 
 

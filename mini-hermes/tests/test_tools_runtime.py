@@ -46,6 +46,30 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     print(f"{'✓' if cond else '✗'} {name}" + (f"  → {detail}" if detail and not cond else ""))
 
 
+_SEARCH_KEYS = ("TAVILY_API_KEY", "MINI_SEARCH_API_KEY")
+
+
+def _isolate_search_keys() -> dict:
+    """★ 把两个搜索 key 都摘掉。
+
+    必须做：`web_search` 现在**按哪个 key 在**自动选供应商。测试跑的机器上真配了
+    `TAVILY_API_KEY` 时（比如你刚在 env 里填好），Serper 那几条会被悄悄切到 Tavily
+    —— 假红，而且看起来像代码坏了。**测试不许依赖运行环境的配置。**
+    """
+    saved = {k: os.environ.pop(k, None) for k in _SEARCH_KEYS}
+    registry.invalidate_check_fn_cache()
+    return saved
+
+
+def _restore_search_keys(saved: dict) -> None:
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    registry.invalidate_check_fn_cache()
+
+
 def _defnames(**kwargs) -> list:
     """**模型实际能看到**的工具名列表。
 
@@ -597,9 +621,8 @@ def test_credential_gate_hides_tool_without_a_key() -> None:
       · 那包 JSON 里**没有**它（被 check_fn 挡住）
     只断言后者的话，工具没注册也会"通过"——**那就测不出东西。**
     """
-    saved = os.environ.pop("MINI_SEARCH_API_KEY", None)
+    saved = _isolate_search_keys()
     try:
-        registry.invalidate_check_fn_cache()
         check("web_search **注册**了（台账里查得到）", registry.get("web_search") is not None)
         check("但没配 key 时**不在**发给模型的 schema 里",
               "web_search" not in _defnames())
@@ -609,11 +632,7 @@ def test_credential_gate_hides_tool_without_a_key() -> None:
         check("配上 key 后它出现了（同一个工具，只差一个环境变量）",
               "web_search" in _defnames())
     finally:
-        if saved is None:
-            os.environ.pop("MINI_SEARCH_API_KEY", None)
-        else:
-            os.environ["MINI_SEARCH_API_KEY"] = saved
-        registry.invalidate_check_fn_cache()
+        _restore_search_keys(saved)
 
 
 def test_credential_probe_has_no_side_effects() -> None:
@@ -639,7 +658,7 @@ def test_search_result_and_error_are_json() -> None:
     """handler 的出口契约：成功是 JSON、没配 key 也是 JSON（不抛异常）。"""
     import tools.web_search as ws
 
-    os.environ.pop("MINI_SEARCH_API_KEY", None)
+    saved = _isolate_search_keys()
     r = json.loads(ws.web_search_tool(query="x"))
     check("没配 key 时返回 JSON 错误（而不是抛异常）", "error" in r, str(r)[:80])
 
@@ -662,8 +681,7 @@ def test_search_result_and_error_are_json() -> None:
         check("空 query → JSON 错误", "error" in err, str(err)[:80])
     finally:
         urllib.request.urlopen = real
-        os.environ.pop("MINI_SEARCH_API_KEY", None)
-        registry.invalidate_check_fn_cache()
+        _restore_search_keys(saved)
 
 
 def test_two_gates_are_independent() -> None:
@@ -672,17 +690,17 @@ def test_two_gates_are_independent() -> None:
     `check_fn` 管"这个环境里能不能用"，toolset 管"这一轮该不该给"。
     配了 key 但禁掉 search 组 → 照样不给；这就是为什么它们是两道闸门而不是一道。
     """
+    saved = _isolate_search_keys()
     os.environ["MINI_SEARCH_API_KEY"] = "test-key-not-real"
+    registry.invalidate_check_fn_cache()
     try:
-        registry.invalidate_check_fn_cache()
         check("key 配了 → check_fn 放行", "web_search" in _defnames())
         check("但禁掉 search toolset → 照样不给（两闸门独立）",
               "web_search" not in _defnames(disabled_toolsets=["search"]))
         check("…而且同组的 search_files 也一起消失（toolset 是整组开关）",
               "search_files" not in _defnames(disabled_toolsets=["search"]))
     finally:
-        os.environ.pop("MINI_SEARCH_API_KEY", None)
-        registry.invalidate_check_fn_cache()
+        _restore_search_keys(saved)
 
 
 # ══════════════════════════════════════════════ 9. 密钥链（$MINI_HOME/.env → ~/.hermes/.env）
@@ -731,6 +749,74 @@ def test_env_file_chain_ignores_empty_values() -> None:
                 os.environ.pop(k, None)
 
 
+def test_tavily_provider_when_its_key_is_present() -> None:
+    """★ 只配 `TAVILY_API_KEY` → 自动走 Tavily（字段名和 Serper 不同）。
+
+    Tavily 用 `content` 装摘要、Serper 用 `snippet`；认证头也不一样。
+    这条还钉死一件对你直接有用的事：**`TAVILY_API_KEY` 和 Hermes 自己的
+    `web_search` 同名** —— 同一个 key 写一份，Hermes 和 mini 都能搜。
+    """
+    import tools.web_search as ws
+
+    saved = _isolate_search_keys()
+    os.environ["TAVILY_API_KEY"] = "tvly-test-not-real"
+    registry.invalidate_check_fn_cache()
+    real = urllib.request.urlopen
+
+    class _Fake:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({
+                "answer": "TAVILY 生成的答案",
+                "results": [{"title": "T", "url": "https://tavily.example", "content": "C", "score": 0.9}],
+            }).encode()
+
+    seen = {}
+
+    def _cap(req, *a, **k):
+        seen["url"] = getattr(req, "full_url", "")
+        seen["hdrs"] = {kk.lower(): vv for kk, vv in getattr(req, "headers", {}).items()}
+        return _Fake()
+
+    urllib.request.urlopen = _cap
+    try:
+        got = json.loads(ws.web_search_tool(query="q", max_results=3))
+        # 取字段一律 .get / 兜底：**换掉供应商时这些键会消失**，
+        # 那时想要的是"干净变红 + 看得懂"，不是 KeyError 崩在测试里。
+        check("走了 Tavily 的端点", seen.get("url") == "https://api.tavily.com/search", seen.get("url"))
+        check("认证走 Authorization: Bearer（key 不进请求体）",
+              (seen.get("hdrs") or {}).get("authorization", "").startswith("Bearer "),
+              str(seen.get("hdrs")))
+        first = (got.get("results") or [{}])[0]
+        check("★ Tavily 的 content 被映射成我们的 snippet（厂商形状不外泄）",
+              first.get("snippet") == "C" and first.get("url") == "https://tavily.example",
+              str(got)[:120])
+        check("answer 原样带上", got.get("answer") == "TAVILY 生成的答案")
+        check("结果里标明 provider（看得出这次是谁答的）", got.get("provider") == "tavily", str(got)[:120])
+    finally:
+        urllib.request.urlopen = real
+        _restore_search_keys(saved)
+
+
+def test_provider_priority_tavily_first() -> None:
+    """★ 两个 key 都在 → 用排在前面的 Tavily。优先级是表里写的，不是猜的。"""
+    import tools.web_search as ws
+
+    saved = _isolate_search_keys()
+    os.environ["TAVILY_API_KEY"] = "tvly-test-not-real"
+    os.environ["MINI_SEARCH_API_KEY"] = "serper-test-not-real"
+    try:
+        check("两个都在 → Tavily 优先", ws.active_provider()["name"] == "tavily")
+        os.environ.pop("TAVILY_API_KEY")
+        check("摘掉 Tavily → 自动落到 Serper（不用改代码）",
+              ws.active_provider()["name"] == "serper")
+        os.environ.pop("MINI_SEARCH_API_KEY")
+        check("两个都没有 → 没有可用供应商（工具因此不发）", ws.active_provider() is None)
+    finally:
+        _restore_search_keys(saved)
+
+
 GROUPS = [
     ("1. AST 自动发现",
      "按语法形状判断（不按文本）/ 只看模块体 / 坏文件不炸 / 发现真实工具",
@@ -761,6 +847,9 @@ GROUPS = [
     ("6. 端到端",
      "模型实际看到的 tools 字段 / toolset 能收窄 / 工具结果是 JSON",
      [test_end_to_end_model_sees_what_it_should]),
+    ("10. 双供应商：Tavily / Serper 按 key 自动选",
+     "只配 Tavily 也走得通 / **厂商字段名不外泄** / 优先级是表里写的",
+     [test_tavily_provider_when_its_key_is_present, test_provider_priority_tavily_first]),
     ("9. 密钥链（$MINI_HOME/.env → ~/.hermes/.env）",
      "**留空 = 没写**（不挡后面的真值）/ 引号剥离 / 真环境变量优先",
      [test_env_file_chain_ignores_empty_values]),
