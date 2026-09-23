@@ -33,6 +33,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from hermes_constants import get_mini_home
+# 「我在哪个目录」只有一份实现，住在 hermes_constants（双方都依赖的叶子模块）。
+# ★ 为什么搬走：**工具执行也要用它** —— terminal / search_files / file_tools 的
+#   相对路径基准必须是同一个值。以前工具用 `os.getcwd()`，而启动器为了 import
+#   会 `cd` 到安装树，于是**提示词说"当前目录是用户的项目"、工具却在安装树里跑**。
+#   放在这个文件里会让 `tools/` 反向依赖 `agent/`（层级颠倒）。
+from hermes_constants import resolve_context_cwd, resolve_context_cwd_source  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -236,46 +242,6 @@ def read_text_with_timeout(
     return box[0]
 
 
-def resolve_context_cwd() -> str:
-    """决定"哪个目录算当前项目目录"（只要路径）。见 ``resolve_context_cwd_source``。"""
-    return resolve_context_cwd_source()[0]
-
-
-def resolve_context_cwd_source() -> Tuple[str, str]:
-    """返回 ``(目录, 来源)``。来源取值：``"context_env"`` / ``"launch_env"`` / ``"getcwd"``。
-
-    优先级（对应 Hermes 的 ``resolve_context_cwd`` + ``TERMINAL_CWD``）：
-
-    =========================  ==============  ====================================
-    来源                       返回值         什么时候
-    =========================  ==============  ====================================
-    ``MINI_CONTEXT_CWD``       context_env     显式指定（网关：一进程服务多会话）
-    ``MINI_LAUNCH_CWD``        launch_env      用户敲命令时所在的目录
-    ``os.getcwd()``            getcwd          兜底
-    =========================  ==============  ====================================
-
-    ★ **为什么要返回"来源"而不只是路径**：来源决定**可信度**。
-      ``getcwd`` 是系统**猜**出来的——它可能是 mini-hermes 自己的安装目录
-      （有人绕过 `mini` 启动脚本直接跑模块时就是这样）。
-      而"兜底猜出来的 cwd"不该获得"加载项目规则"的权力，
-      否则**仓库里的 `AGENTS.md` 会被当成用户的项目规则注入**。
-      见 ``project_context_suppressed``。
-
-    ★ **为什么需要这一层**：``mini`` 启动脚本会 ``cd`` 到项目根——
-      因为 Python 靠"脚本目录在 sys.path 上"才能 import 自己的模块。
-      但那一步会把**用户的目录换掉**，后果是：
-
-      - ``AGENTS.md`` 的发现会去看 mini-hermes 自己的目录（而不是用户的项目）
-      - git 工作区快照会探到 mini-hermes 那个仓库
-
-      **"进程从哪个目录启动"和"用户的项目在哪个目录"是两件事。**
-      Hermes 管这个叫 launch artifact（启动残留物）。
-    """
-    for env_key, source in (("MINI_CONTEXT_CWD", "context_env"), ("MINI_LAUNCH_CWD", "launch_env")):
-        value = os.environ.get(env_key)
-        if value and Path(value).is_dir():
-            return value, source
-    return os.getcwd(), "getcwd"
 
 
 def get_context_file_max_chars(context_length: Optional[int] = None) -> int:

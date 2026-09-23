@@ -490,6 +490,90 @@ def test_end_to_end_model_sees_what_it_should() -> None:
             check("工具结果进历史的是 **JSON**", False, content[:80])
 
 
+# ══════════════════════════════════════════════ 7. 工作目录与注册完整性（第 4 章复检新增）
+def test_context_cwd_is_single_sourced() -> None:
+    """★「我在哪个目录」只能有**一个实现**。
+
+    提示词侧（`agent/prompt_builder`）和工具侧（`tools/*`）必须读同一个函数，
+    否则两边会各说各话。第 4 章复检时它们就是分开的：
+    提示词读 `MINI_LAUNCH_CWD`、工具读 `os.getcwd()`。
+    """
+    import agent.prompt_builder as pb
+    import hermes_constants as hc
+
+    check("prompt_builder 暴露的就是 hermes_constants 里那个函数（单源，不是两份拷贝）",
+          pb.resolve_context_cwd is hc.resolve_context_cwd)
+    check("source 版本也是同一个", pb.resolve_context_cwd_source is hc.resolve_context_cwd_source)
+
+
+def test_tools_run_in_the_prompt_cwd() -> None:
+    """★★ 回归：工具执行的工作目录 == 提示词报告的工作目录。
+
+    **真 bug 记录**：启动器为了 import 会 `cd` 到安装树，所以进程 cwd 是安装树；
+    而提示词报的是用户项目目录。工具以前用 `os.getcwd()` →
+    **模型被告知在 A、实际在 B 里干活**。实测症状是 agent 报告
+    「/tmp/myproj 下只有 agent/ demos/ hermes_cli/ tests/ tools/」——那是安装树。
+
+    这个 bug 不看提示词和工具两边的**实际输出**是发现不了的，所以这里两边都断言。
+    """
+    proj = Path(tempfile.mkdtemp(prefix="mini_cwd_")).resolve()
+    # ★ 必须 resolve()：macOS 上 /var 是 /private/var 的符号链接，
+    #   而 `pwd` 回的是解析后的路径 → 不 resolve 就会"两边都对但字符串不等"。
+    (proj / "src").mkdir()
+    (proj / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    saved = os.environ.get("MINI_LAUNCH_CWD")
+    try:
+        os.environ["MINI_LAUNCH_CWD"] = str(proj)
+        import hermes_constants as hc
+
+        check("提示词侧报的是用户项目", hc.resolve_context_cwd() == str(proj))
+
+        entries = json.loads(model_tools.handle_function_call("list_dir", {"path": "."}))
+        names = {e["name"] for e in entries.get("entries", [])}
+        check("★ 工具看到的也是**用户项目**（不是安装树）", "src" in names, str(names))
+        check("…而安装树里的东西不在里面（这是原来的症状）", "agent" not in names, str(names))
+
+        r = json.loads(model_tools.handle_function_call("read_file", {"path": "src/app.py"}))
+        check("相对路径 `src/app.py` 解析到用户项目",
+              r.get("path") == str(proj / "src" / "app.py"), str(r.get("path")))
+
+        t = json.loads(model_tools.handle_function_call("terminal", {"command": "pwd"}))
+        check("terminal 的 cwd 也是用户项目", t.get("stdout", "").strip() == str(proj),
+              f"实际 {t.get('stdout', '').strip()!r} ≠ 期望 {str(proj)!r}")
+
+        s = json.loads(model_tools.handle_function_call("search_files",
+                                                       {"pattern": "print", "path": "."}))
+        # grep 报的是**相对它 cwd** 的路径，所以这里只能断言"搜到了 src/app.py"
+        # ——但如果它的 cwd 是安装树，就一个匹配都不会有（这也是区分力所在）。
+        hits = [m for m in s.get("matches", []) if m.get("path", "").endswith("src/app.py")]
+        check("search_files 搜的是用户项目（能找到 src/app.py）", bool(hits), str(s)[:140])
+    finally:
+        if saved is None:
+            os.environ.pop("MINI_LAUNCH_CWD", None)
+        else:
+            os.environ["MINI_LAUNCH_CWD"] = saved
+        shutil.rmtree(proj, ignore_errors=True)
+
+
+def test_every_tool_handler_is_its_own_function() -> None:
+    """★ 契约：注册的 handler 必须是**和工具同名那个**函数。
+
+    抓的是一类很隐蔽的错：**装饰器绑错了函数**。第 4 章复检时真发生过——
+    把一个新的 helper 插在 `@register_tool("read_file", ...)` 和
+    `def read_file_tool(...)` **之间**，装饰器就绑到 helper 上了：
+    `read_file` 的 handler 变成那个 helper，而真正的 `read_file_tool` 没注册。
+
+    症状：`TypeError: Object of type PosixPath is not JSON serializable` ——
+    **报错离肇事者非常远**（看起来像 JSON 契约坏了，实际是注册绑错了）。
+    """
+    bad = []
+    for name in registry.tool_names():
+        fn = registry.get(name).fn
+        if fn.__name__ not in (f"{name}_tool", name):
+            bad.append(f"{name} → {fn.__name__}")
+    check("每个工具的 handler 都是「和它同名」的那个函数", not bad, f"绑错的：{bad}")
+
+
 GROUPS = [
     ("1. AST 自动发现",
      "按语法形状判断（不按文本）/ 只看模块体 / 坏文件不炸 / 发现真实工具",
@@ -520,6 +604,11 @@ GROUPS = [
     ("6. 端到端",
      "模型实际看到的 tools 字段 / toolset 能收窄 / 工具结果是 JSON",
      [test_end_to_end_model_sees_what_it_should]),
+    ("7. 工作目录与注册完整性（复检新增）",
+     "「我在哪」单源 / **工具跑在提示词报的那个目录** / handler 没绑错函数",
+     [test_context_cwd_is_single_sourced,
+      test_tools_run_in_the_prompt_cwd,
+      test_every_tool_handler_is_its_own_function]),
 ]
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Tuple
 
 APP_NAME = "mini-hermes"
 
@@ -57,3 +58,48 @@ def logs_dir() -> Path:
     d = get_mini_home() / "logs"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def resolve_context_cwd() -> str:
+    """决定"哪个目录算当前项目目录"（只要路径）。见 ``resolve_context_cwd_source``。
+
+    ★ **这里是唯一的实现** —— 提示词和**工具执行**都读它（见下方 source 的说明）。
+    """
+    return resolve_context_cwd_source()[0]
+
+
+def resolve_context_cwd_source() -> Tuple[str, str]:
+    """返回 ``(目录, 来源)``。来源取值：``"context_env"`` / ``"launch_env"`` / ``"getcwd"``。
+
+    优先级（对应 Hermes 的 ``resolve_context_cwd`` + ``TERMINAL_CWD``）：
+
+    =========================  ==============  ====================================
+    来源                       返回值         什么时候
+    =========================  ==============  ====================================
+    ``MINI_CONTEXT_CWD``       context_env     显式指定（网关：一进程服务多会话）
+    ``MINI_LAUNCH_CWD``        launch_env      用户敲命令时所在的目录
+    ``os.getcwd()``            getcwd          兜底
+    =========================  ==============  ====================================
+
+    ★ **为什么要返回"来源"而不只是路径**：来源决定**可信度**。
+      ``getcwd`` 是系统**猜**出来的——它可能是 mini-hermes 自己的安装目录
+      （有人绕过 `mini` 启动脚本直接跑模块时就是这样）。
+      而"兜底猜出来的 cwd"不该获得"加载项目规则"的权力，
+      否则**仓库里的 `AGENTS.md` 会被当成用户的项目规则注入**。
+      见 ``project_context_suppressed``。
+
+    ★ **为什么需要这一层**：``mini`` 启动脚本会 ``cd`` 到项目根——
+      因为 Python 靠"脚本目录在 sys.path 上"才能 import 自己的模块。
+      但那一步会把**用户的目录换掉**，后果是：
+
+      - ``AGENTS.md`` 的发现会去看 mini-hermes 自己的目录（而不是用户的项目）
+      - git 工作区快照会探到 mini-hermes 那个仓库
+
+      **"进程从哪个目录启动"和"用户的项目在哪个目录"是两件事。**
+      Hermes 管这个叫 launch artifact（启动残留物）。
+    """
+    for env_key, source in (("MINI_CONTEXT_CWD", "context_env"), ("MINI_LAUNCH_CWD", "launch_env")):
+        value = os.environ.get(env_key)
+        if value and Path(value).is_dir():
+            return value, source
+    return os.getcwd(), "getcwd"

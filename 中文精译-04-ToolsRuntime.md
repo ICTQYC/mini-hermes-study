@@ -714,7 +714,7 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 | `tools/file_tools.py` | ✅ 147 行（结果改 JSON） | `tools/file_tools*.py` |
 | `tools/search_files.py` | ✅ **新建** 130 行（★ 计划外，详见《源码讲解-04》§十） | `search_files`（走 ripgrep） |
 | `tools/todo.py` | ✅ 267 行（**未动**，含 `AGENT_LEVEL_TOOLS`） | `tools/todo_tool.py` + `agent/inline_tool_executors.py` |
-| `tests/test_tools_runtime.py` | ✅ **新建** 546 行 / 54 条 / 6 组 | — |
+| `tests/test_tools_runtime.py` | ✅ **新建** 635 行 / 63 条 / 7 组 | — |
 | `run_agent.py` 的 `INLINE_TOOL_EXECUTORS` | ✅ 第 2 章就有（1 个 key） | `agent/inline_tool_executors.py`（14 个 key） |
 
 规模对比（**第 3 章末 → 第 4 章末**）：
@@ -729,9 +729,9 @@ tools/terminal.py             78    →      115 行
 tools/file_tools.py           92    →      147 行
 tools/search_files.py       （无）   →      130 行
 tools/todo.py                267    →      267 行（未动）
-测试断言                     221    →      275 条（154 + 54 + 13 + 54）
-测试代码行数                1980    →     2682 行
-源码（不含测试与 demo）     3668    →     4678 行
+测试断言                     221    →      284 条（154 + 54 + 13 + 63）
+测试代码行数                1980    →     2771 行
+源码（不含测试与 demo）     3668    →     4710 行
 含测试与 demo 总行数        5924    →     7636 行
 ```
 
@@ -910,4 +910,4 @@ $ /usr/local/bin/python3    # 3.13.14
 $ /usr/bin/python3          # 3.9.6 —— 同上，全过
 ```
 
-**合计 275 条。**
+**合计 284 条。**

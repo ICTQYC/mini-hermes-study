@@ -30,6 +30,7 @@ import subprocess
 
 from tools.approval import detect_dangerous_command
 from tools.registry import register_tool, tool_error, tool_result
+from hermes_constants import resolve_context_cwd
 
 __all__ = ["terminal_tool", "check_terminal_requirements"]
 
@@ -98,7 +99,10 @@ def terminal_tool(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=os.getcwd(),
+            # ★ 基准是「用户的项目目录」，**不是**进程 cwd ——
+            #   启动器为了 import 会 cd 到安装树，进程 cwd 是安装树。
+            #   这个函数就是提示词里报的同一个值（单源，见 hermes_constants）。
+            cwd=resolve_context_cwd(),
         )
     except subprocess.TimeoutExpired:
         # ★ 超时必须报错：一条 `tail -f` 就能把 agent 卡到天荒地老。

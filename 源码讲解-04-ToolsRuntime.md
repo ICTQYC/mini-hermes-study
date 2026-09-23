@@ -1089,7 +1089,87 @@ t=1032  宽限期关掉再问       → 若上面写了缓存，这里会命中�
 
 ---
 
-## 十一、测试覆盖：54 条在守什么
+### 10.4 ★ 工具跑在**另一个目录**里（复检抓到的，最严重的一个）
+
+**症状**：让 agent 读用户项目里的 `src/app.py`，它报告
+「`/tmp/myproj` 下只有 agent/、demos/、hermes_cli/、tests/、tools/，没有 src/」
+—— **那是 mini 的安装树**，不是用户的项目。而 `/tmp/myproj/src/app.py` 明明存在。
+
+**根因：同一个事实有两个来源。**
+
+| | 读的是 | 结果 |
+|---|---|---|
+| 提示词（`resolve_context_cwd`） | `MINI_LAUNCH_CWD` | `/tmp/myproj` ✓ |
+| 工具（`tools/terminal.py` 的 `cwd=os.getcwd()`） | 进程 cwd | **安装树** ✗ |
+
+`mini` 启动器为了 import 必须 `cd "$MINI_DIR"`（脚本目录进 `sys.path`），
+于是**进程 cwd 变成安装树**。第 3 章修过一次这个问题，但只修了**提示词那半**
+（AGENTS.md 发现 / 工作区快照），**工具执行那半没修** ——
+所以模型被告知"你在 A"，实际在 B 里干活。
+
+**为什么危险**：不是崩溃，是**静默跑在错的地方**。
+`read_file src/app.py` 报"文件不存在"、`list_dir .` 列出别人的目录，
+模型会据此得出错误结论（这次它诚实地停下来问了，所以没造成破坏）。
+
+**修法 —— 让"我在哪"只有一份实现**：
+
+```text
+hermes_constants.resolve_context_cwd()   ← 唯一的实现（双方都依赖的叶子模块）
+        ↑                    ↑
+agent/prompt_builder.py    tools/terminal.py
+（提示词，重新导出）        tools/search_files.py（cwd=）
+                          tools/file_tools.py（_abs() 解析相对路径）
+```
+
+- `resolve_context_cwd*` 从 `agent/prompt_builder.py` **搬到 `hermes_constants.py`**。
+  放 prompt_builder 会让 `tools/` 反向依赖 `agent/`（层级颠倒）。
+  `prompt_builder.resolve_context_cwd is hermes_constants.resolve_context_cwd` → True，
+  所以 `system_prompt.py` 和已有测试的调用点一行都不用改。
+- 三个工具改用 `resolve_context_cwd()`（`search_files` 原本是 `cwd=None` = 继承进程 cwd）。
+
+**为什么不"启动后 `os.chdir()`"**（先做了实验，别猜）：
+`python -m` 的 `sys.path[0]` 是 `''`——**cwd 相对**。实测 3.9 与 3.13 都一样：
+`chdir` 之后 `import mod` 直接失败，因为 `''` 跟着去了新目录。
+**所以"启动后改 cwd"这条路会砸掉 import。**
+
+**为什么不"启动器不 cd"**：`cd` 的作用是把安装树放进 `sys.path`；
+去掉它，用户项目里若有同名的 `tools/`、`agent/` 就会**抢掉 mini 自己的模块**
+（`sys.path[0]` 仍是 cwd 且排在 `PYTHONPATH` 前面）。
+
+### 10.5 装饰器绑到了错误的函数上（同一个复检，顺手撞到）
+
+把新写的 helper `_abs` 插在
+
+```python
+@register_tool("read_file", ...)      # ← 装饰器在这里
+def _abs(...): ...                    # ← 我插到这里
+def read_file_tool(...): ...          # ← 它才是该被注册的那个
+```
+
+**之间** → 装饰器绑到了 `_abs`：`read_file` 的 handler 变成 `_abs`，
+`read_file_tool` **根本没注册**。
+
+**症状极具误导性**：`TypeError: Object of type PosixPath is not JSON serializable`
+——看起来像 JSON 契约坏了（第 4 章刚立的规矩），实际是注册绑错了函数。
+**报错离肇事者非常远。**
+
+已固化成契约测试（**不是**数量断言）：
+
+```python
+for name in registry.tool_names():
+    fn = registry.get(name).fn
+    if fn.__name__ not in (f"{name}_tool", name):
+        bad.append(f"{name} → {fn.__name__}")     # read_file → _abs
+```
+
+> 📌 两条可迁移的判据：
+> ① **插入代码时，锚点行要选"装饰器上面"，不是"函数定义上面"** ——
+>    中间那一行是装饰器和函数的**绑定区**，插进去会改变装饰对象。
+> ② **报错位置离肇事者远时，先怀疑"绑定/注册"这一层**，别顺着报错往下查。
+
+---
+
+## 十一、测试覆盖：63 条在守什么
 
 | 组 | 守的承诺 | 条数 |
 |---|---|---|
@@ -1099,6 +1179,7 @@ t=1032  宽限期关掉再问       → 若上面写了缓存，这里会命中�
 | 4. 结果契约 | 未知工具 / 参数不匹配 / 内部异常 → 都是 JSON；错误有上限；非字符串被包一层 | 7 |
 | 5. agent 级工具守卫 | 绕过 agent loop 直接分发 → 错误要指出**调用方不对** | 4 |
 | 6. 端到端 | 模型实际看到的 tools 字段 / toolset 能收窄 / 工具结果是 JSON | 6 |
+| 7. **工作目录与注册完整性**（复检新增） | 「我在哪」**单源** / **工具跑在提示词报的那个目录** / handler 没绑错函数 | 9 |
 
 **为什么这样分组**：每一组对应一个**闸门**。这一章讲的所有机制最终都体现在
 "那一个 `tools` 字段里有什么"——所以第 6 组是端到端（抓真实请求），
@@ -1156,11 +1237,11 @@ tools/terminal.py       78  →  115 行
 tools/file_tools.py     92  →  147 行
 tools/search_files.py  （无） →  130 行
 tools/todo.py          267  →  267 行（未动）
-tests/test_tools_runtime.py（无）→ 546 行 / 54 条 / 6 组
+tests/test_tools_runtime.py（无）→ 635 行 / 63 条 / 7 组
 
 注册 5 个工具 / 暴露 6 个（+todo_list）
-源码 4678 行 · 测试 2682 行 · demo 276 行
-测试合计 275 条（154 + 54 + 13 + 54），Python 3.13.14 与 3.9.6 都过
+源码 4710 行 · 测试 2771 行 · demo 276 行
+测试合计 284 条（154 + 54 + 13 + 63），Python 3.13.14 与 3.9.6 都过
 ```
 
 

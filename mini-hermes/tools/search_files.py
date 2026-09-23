@@ -38,6 +38,7 @@ import subprocess
 from typing import Optional
 
 from tools.registry import register_tool, tool_error, tool_result
+from hermes_constants import resolve_context_cwd
 
 __all__ = ["search_files_tool", "check_search_requirements"]
 
@@ -101,7 +102,9 @@ def search_files_tool(pattern: str, path: str = ".", glob: Optional[str] = None)
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=DEFAULT_TIMEOUT, cwd=None)
+                              timeout=DEFAULT_TIMEOUT,
+                              # 同上：搜索的相对基准是用户的项目目录，不是进程 cwd
+                              cwd=resolve_context_cwd())
     except subprocess.TimeoutExpired:
         return tool_error(f"搜索超时（>{DEFAULT_TIMEOUT}s）")
 

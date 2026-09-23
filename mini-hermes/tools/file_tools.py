@@ -38,6 +38,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.registry import register_tool, tool_error, tool_result
+from hermes_constants import resolve_context_cwd
 
 __all__ = ["read_file_tool", "write_file_tool", "list_dir_tool", "check_file_requirements"]
 
@@ -48,6 +49,18 @@ MAX_LIST_ENTRIES = 200
 def check_file_requirements() -> bool:
     """文件工具没有外部前置条件 —— 但显式写出来（`check_fn` 的**形态 1**）。"""
     return True
+
+
+def _abs(path: str) -> Path:
+    """把工具收到的路径解析成绝对路径。
+
+    ★ 相对路径的基准是「**用户的项目目录**」，不是进程 cwd。
+      启动器为了 import 会 `cd` 到安装树，所以 `Path("src/app.py")` 那样写
+      会去**安装树**里找 —— 而提示词告诉模型的是另一个目录。
+      两边现在都读 `resolve_context_cwd()`，所以不会再打架。
+    """
+    p = Path(path).expanduser()
+    return p if p.is_absolute() else Path(resolve_context_cwd()) / p
 
 
 @register_tool(
@@ -70,7 +83,7 @@ def check_file_requirements() -> bool:
     check_fn=check_file_requirements,
 )
 def read_file_tool(path: str, offset: int = 1, limit: int = MAX_READ_LINES) -> str:
-    p = Path(path).expanduser()
+    p = _abs(path)
     if not p.exists():
         return tool_error(f"文件不存在：{p}")
     if p.is_dir():
@@ -111,7 +124,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = MAX_READ_LINES) -> s
     check_fn=check_file_requirements,
 )
 def write_file_tool(path: str, content: str) -> str:
-    p = Path(path).expanduser()
+    p = _abs(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -132,7 +145,7 @@ def write_file_tool(path: str, content: str) -> str:
     check_fn=check_file_requirements,
 )
 def list_dir_tool(path: str) -> str:
-    p = Path(path).expanduser()
+    p = _abs(path)
     if not p.is_dir():
         return tool_error(f"不是目录：{p}")
     entries = sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name))
