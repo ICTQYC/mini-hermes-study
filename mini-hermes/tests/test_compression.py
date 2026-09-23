@@ -88,6 +88,14 @@ def build_prose_history(turns: int = 10, chars: int = 3000) -> list:
     return msgs
 
 
+def _raises(fn, *a, **k) -> bool:
+    try:
+        fn(*a, **k)
+        return False
+    except Exception:                                        # noqa: BLE001
+        return True
+
+
 def build_guard_history() -> list:
     """专门构造「中间段**非空但太小**」的形状 —— 用来命中无进展守卫。
 
@@ -228,8 +236,15 @@ def test_boundary_never_splits_a_tool_group() -> None:
            {"role": "tool", "tool_call_id": "c2"}]
     check("落在连续 tool 结果上 → 一直往前退到父 assistant",
           align_boundary_backward(grp, 2) == 0, str(align_boundary_backward(grp, 2)))
+    # ★ 用 try/except 接住异常：让"没这句守卫"表现为**一条干净的 ✗（附异常文本）**，
+    #   而不是整个套件崩掉 —— 崩溃虽然也是红的，但那不是"可诊断的失败"。
+    try:
+        empty_tail = align_boundary_backward(grp, len(grp))
+        err = ""
+    except Exception as exc:                                  # noqa: BLE001
+        empty_tail, err = None, f"{type(exc).__name__}: {exc}"
     check("★ 空尾部（idx == len）是合法输入，不崩且原样返回",
-          align_boundary_backward(grp, len(grp)) == len(grp))
+          not err and empty_tail == len(grp), err or f"返回 {empty_tail}")
 
 
 def test_tail_budget_vs_count_takes_the_wider_one() -> None:
@@ -541,6 +556,76 @@ def test_anchor_fingerprint_and_serialization() -> None:
     check("clear() 之后锚点没了（压缩/重置/换模型时调）", a.estimate(msgs) is None)
 
 
+def test_prompt_caching_markers_and_gates() -> None:
+    """★ 提示词缓存：断点怎么挑 / 标记落哪 / **三种「没插标记」要能区分**。
+
+    最后一条是这一组最值钱的：三种情况都是"没插标记"，但只有"不支持"
+    需要人去改配置 —— 只返回列表的话它们在日志里长得一模一样。
+    """
+    from agent import prompt_caching as pc
+
+    msgs = [{"role": "system", "content": "sys"},
+            {"role": "user", "content": "u1"}, {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"}, {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u3"}]
+    idx = pc.breakpoints(msgs)
+    check("断点 1 是系统提示词（它最值钱）", idx[0] == 0, str(idx))
+    check("总数不超过 4（Anthropic 硬上限）", len(idx) <= pc.MAX_BREAKPOINTS, str(idx))
+    check("★ 剩下的是**倒数 3 条非 system**（滚动窗口）", idx[1:] == [3, 4, 5], str(idx))
+
+    out = pc.apply_cache_control(msgs)
+    check("字符串内容被转成内容块并带上标记",
+          isinstance(out[0]["content"], list) and out[0]["content"][0].get("cache_control"),
+          str(out[0])[:80])
+    check("★ 原始列表逐字节没变（标记会改写内容形状，所以必须深拷贝）",
+          msgs[0]["content"] == "sys" and isinstance(msgs[0]["content"], str))
+    check("没被打断点的消息不带标记", "cache_control" not in out[1])
+
+    # ★ 注意：`apply_cache_control` 是**深拷贝返回**，所以要断言在**返回值**上。
+    #   （我第一版就是断言在入参上，三条全红 —— 而那恰好证明了"入参没被改"。）
+    listed = [{"role": "system", "content": [{"type": "text", "text": "x"}]}]
+    listed_out = pc.apply_cache_control(listed)
+    check("列表内容 → 标记加在**最后一个元素**上",
+          listed_out[0]["content"][-1].get("cache_control") is not None)
+    check("★ 入参那一份也没被改（同一个深拷贝保证）",
+          "cache_control" not in listed[0]["content"][-1])
+
+    empty_c = [{"role": "system", "content": None}]
+    empty_out = pc.apply_cache_control(empty_c)
+    check("None 内容 → 标记放在消息上", empty_out[0].get("cache_control") is not None)
+
+    toolc = [{"role": "system", "content": "s"},
+             {"role": "tool", "tool_call_id": "c", "content": "r"}]
+    nn = pc.apply_cache_control(toolc, native_anthropic=False)
+    check("★ 工具消息的标记只在原生 Anthropic 上放（非原生就不放）",
+          "cache_control" not in nn[1], str(nn[1]))
+    native_out = pc.apply_cache_control(toolc, native_anthropic=True)
+    check("原生 Anthropic 上工具消息会带标记",
+          native_out[1].get("cache_control") is not None, str(native_out[1])[:80])
+
+    check("ttl 只接受 5m/1h，别的直接报错（不静默）", _raises(pc.marker, "2h"))
+    check("1h 的标记形态正确", pc.marker("1h") == {"type": "ephemeral", "ttl": "1h"},
+          str(pc.marker("1h")))
+
+    _, note_auto = pc.plan(msgs, model="deepseek-chat", provider="deepseek")
+    _, note_unsup = pc.plan(msgs, model="gpt-4o", provider="openai")
+    _, note_empty = pc.plan([], model="claude-sonnet", provider="anthropic")
+    check("① 自动前缀缓存 → 说明点出『自动前缀缓存』", "自动前缀缓存" in note_auto, note_auto[:64])
+    check("② 不支持 → 说明点出『不支持』", "不支持" in note_unsup, note_unsup[:64])
+    check("③ 空列表 → 说明点出『为空』", "为空" in note_empty, note_empty[:64])
+    check("★ 三种说明互不相同（否则日志里分不出来）", len({note_auto, note_unsup, note_empty}) == 3)
+
+    out2, note_ok = pc.plan(msgs, model="claude-sonnet-4-5", provider="anthropic")
+    check("Claude + 原生 → 真的插了标记并报出断点",
+          "断点" in note_ok and out2[0]["content"][0].get("cache_control") is not None,
+          note_ok[:70])
+    check("★ DeepSeek 路径**一个字都不动请求**（自动前缀缓存不需要标记）",
+          json.dumps(pc.plan(msgs, model="deepseek-chat", provider="deepseek")[0],
+                     sort_keys=True, ensure_ascii=False) == json.dumps(msgs, sort_keys=True, ensure_ascii=False))
+    check("模型名大小写不敏感（Claude-3-5 / claude-sonnet 都认）",
+          pc.is_anthropic_like("Claude-3-5-Sonnet") and pc.is_anthropic_like("claude-sonnet"))
+
+
 GROUPS = [
     ("1. token 估算",
      "中日韩 1 字 ≈1 token / **tool_calls 的 arguments 要计入**",
@@ -571,6 +656,9 @@ GROUPS = [
       test_no_progress_guard_skips_small_middles,
       test_guard_keeps_phase_one_result,
       test_no_progress_guard_does_not_block_real_compression]),
+    ("8. 提示词缓存（Anthropic 标记）",
+     "断点=系统+倒数 3 条非 system / 四种落位 / **三种『没插标记』要能区分**",
+     [test_prompt_caching_markers_and_gates]),
     ("7. 锚点",
      "内容指纹 / 只估算增量 / **零用量不覆盖好锚点** / 可序列化",
      [test_anchor_reports_real_plus_delta,
