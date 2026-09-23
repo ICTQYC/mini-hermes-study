@@ -799,18 +799,26 @@ def test_tavily_provider_when_its_key_is_present() -> None:
         _restore_search_keys(saved)
 
 
-def test_provider_priority_tavily_first() -> None:
-    """★ 两个 key 都在 → 用排在前面的 Tavily。优先级是表里写的，不是猜的。"""
+def test_provider_priority_is_the_table_order() -> None:
+    """★ 优先级 = 表里的顺序。现在 **Serper 在前**。
+
+    为什么这么排：Serper 免费额度 2,500/月且 **Hermes 不占用它**；
+    Tavily 那 1,000 次/月是 Hermes 和 mini **共享**的。所以让 mini 用 Serper、
+    Tavily 留给 Hermes 独占，两边的额度互不挤。
+
+    **反向验证**：把表里两项顺序换回去 → 「Serper 优先」这条立刻变红。
+    """
     import tools.web_search as ws
 
     saved = _isolate_search_keys()
     os.environ["TAVILY_API_KEY"] = "tvly-test-not-real"
     os.environ["MINI_SEARCH_API_KEY"] = "serper-test-not-real"
     try:
-        check("两个都在 → Tavily 优先", ws.active_provider()["name"] == "tavily")
-        os.environ.pop("TAVILY_API_KEY")
-        check("摘掉 Tavily → 自动落到 Serper（不用改代码）",
+        check("两个都在 → Serper 优先（额度更大，且不和 Hermes 抢）",
               ws.active_provider()["name"] == "serper")
+        os.environ.pop("MINI_SEARCH_API_KEY")
+        check("摘掉 Serper → 自动落到 Tavily（不用改代码，Hermes 那边照常）",
+              ws.active_provider()["name"] == "tavily")
         os.environ.pop("MINI_SEARCH_API_KEY")
         check("两个都没有 → 没有可用供应商（工具因此不发）", ws.active_provider() is None)
     finally:
@@ -849,7 +857,7 @@ GROUPS = [
      [test_end_to_end_model_sees_what_it_should]),
     ("10. 双供应商：Tavily / Serper 按 key 自动选",
      "只配 Tavily 也走得通 / **厂商字段名不外泄** / 优先级是表里写的",
-     [test_tavily_provider_when_its_key_is_present, test_provider_priority_tavily_first]),
+     [test_tavily_provider_when_its_key_is_present, test_provider_priority_is_the_table_order]),
     ("9. 密钥链（$MINI_HOME/.env → ~/.hermes/.env）",
      "**留空 = 没写**（不挡后面的真值）/ 引号剥离 / 真环境变量优先",
      [test_env_file_chain_ignores_empty_values]),

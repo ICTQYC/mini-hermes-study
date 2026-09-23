@@ -1413,8 +1413,8 @@ registry.invalidate_check_fn_cache()        # ← Hermes 里 `hermes tools enabl
 
 ```python
 PROVIDERS = (
-    {"name": "tavily", "key_env": "TAVILY_API_KEY",      "build": _tavily_build, "parse": _tavily_parse},
     {"name": "serper", "key_env": "MINI_SEARCH_API_KEY", "build": _serper_build, "parse": _serper_parse},
+    {"name": "tavily", "key_env": "TAVILY_API_KEY",      "build": _tavily_build, "parse": _tavily_parse},
 )
 ```
 
@@ -1430,6 +1430,10 @@ PROVIDERS = (
 | `~/.mini-hermes/.env` | ✗ **看不到** | ✓ |
 
 所以 `TAVILY_API_KEY` 的值放 `~/.hermes/.env`（单一来源），mini 那份留空。
+
+**顺序就是优先级**，现在 **Serper 在前** —— 它额度更大（2,500/月）
+而且 **Hermes 不占用它**；Tavily 那 1,000/月是 Hermes 和 mini **共享**的，
+留给 Hermes 独占更划算。两边各用各的额度，不会互相挤。
 
 ⚠️ 测试要**自己隔离这两个 key**（`_isolate_search_keys`）：机器上真配了
 `TAVILY_API_KEY` 时，Serper 那几条会被悄悄切走 —— 假红，看起来像代码坏了。

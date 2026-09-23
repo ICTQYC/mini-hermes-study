@@ -24,7 +24,9 @@
 | **Tavily** | `TAVILY_API_KEY` | 1,000 次/月 | ★ **和 Hermes 自己的 `web_search` 同名** → 一个 key 两处用（`tools/web_tools.py:118` 的自动探测会认它） |
 | **Serper** | `MINI_SEARCH_API_KEY` | 2,500 次/月 | 额度最大；Google SERP 原样结果 |
 
-优先级 = 表里的顺序（Tavily 在前）。两个都配了就都用 Tavily。
+优先级 = 表里的顺序。现在 **Serper 在前**：它的免费额度更大（2,500/月），
+而且 Hermes 不占用它 —— Tavily 那 1,000 次/月是 Hermes 和 mini **共享**的，
+留给 Hermes 独占更划算。
 
 ⚠️ **厂商形状不许长进提示词里**：`description` 描述的是**我们自己的**结果形状
 （`{query, results:[{title,url,snippet}]}`），换供应商只动下面的表，模型看到的契约不变。
@@ -99,16 +101,16 @@ def _serper_parse(payload: Dict[str, Any], n: int) -> Tuple[List[Dict[str, Any]]
 # **新增一家只加一行**，不用碰 check_fn / handler / schema。
 PROVIDERS: Tuple[Dict[str, Any], ...] = (
     {
-        "name": "tavily",
-        "key_env": "TAVILY_API_KEY",
-        "build": _tavily_build,
-        "parse": _tavily_parse,
-    },
-    {
         "name": "serper",
         "key_env": "MINI_SEARCH_API_KEY",
         "build": _serper_build,
         "parse": _serper_parse,
+    },
+    {
+        "name": "tavily",
+        "key_env": "TAVILY_API_KEY",
+        "build": _tavily_build,
+        "parse": _tavily_parse,
     },
 )
 
