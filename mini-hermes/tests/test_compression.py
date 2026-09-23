@@ -2,7 +2,7 @@
 
 跑法：python3 tests/test_compression.py
 
-## 测的是什么（7 组）
+## 测的是什么（9 组）
 
 | 组 | 守的承诺 |
 |---|---|
@@ -13,6 +13,8 @@
 | 5. 摘要与降级 | 角色避免连续同角色 · **摘要失败要说出来**（不能静默）· 迭代式更新 |
 | 6. 契约 | 出口永远是合法配对 · 不改传入的列表 · 无进展守卫（且不挡合法压缩） |
 | 7. 锚点 | 内容指纹 · 只估算增量 · **零用量不覆盖好锚点** · 可序列化 |
+| 8. 提示词缓存 | 断点选择 · 四种标记落位 · **深拷贝** · 三种「没插标记」要能区分 |
+| 9. 模型窗口 | 查证过的模型有确切窗口 · **未查证的绝不猜** · 坏值报错 · spec 带得住 |
 
 ## 隔离
 
@@ -710,14 +712,14 @@ GROUPS = [
       test_no_progress_guard_skips_small_middles,
       test_guard_keeps_phase_one_result,
       test_no_progress_guard_does_not_block_real_compression]),
-    ("8. 提示词缓存（Anthropic 标记）",
-     "断点=系统+倒数 3 条非 system / 四种落位 / **三种『没插标记』要能区分**",
-     [test_prompt_caching_markers_and_gates]),
     ("7. 锚点",
      "内容指纹 / 只估算增量 / **零用量不覆盖好锚点** / 可序列化",
      [test_anchor_reports_real_plus_delta,
       test_anchor_rejects_zero_and_missing_usage,
       test_anchor_fingerprint_and_serialization]),
+    ("8. 提示词缓存（Anthropic 标记）",
+     "断点=系统+倒数 3 条非 system / 四种落位 / **三种『没插标记』要能区分**",
+     [test_prompt_caching_markers_and_gates]),
     ("9. 模型窗口",
      "查证过的模型有确切窗口 / **未查证的绝不猜** / 坏值报错 / spec 带得住",
      [test_model_window_table_and_spec_carries_it]),

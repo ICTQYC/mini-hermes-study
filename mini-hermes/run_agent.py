@@ -939,7 +939,8 @@ class AIAgent:
         再把中间轮次总结成一段，保留最后 N 条（compression.protect_last_n，默认 20），
         且**工具调用/结果必须成对保留，绝不拆散**。
 
-        本章先留空：压缩算法在 context-compression-and-caching 章节实现。
+        实现见 agent/context_compressor.py（四阶段 + 无进展守卫）。
+        这里只负责三件事：判定（阈值/锚点）→ 调压缩器 → **原地**改写消息列表。
         """
         c = self._compressor()
         if not c.should_compress(messages):
