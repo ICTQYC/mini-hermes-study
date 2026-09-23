@@ -63,7 +63,9 @@ def _isolate_search_keys() -> dict:
 
 def _restore_search_keys(saved: dict) -> None:
     for k, v in saved.items():
-        if v is None:
+        # ★ 空值也算"没有"：`active_provider()` 看的是非空值，
+        #   所以还原一个空字符串 = 还原成"这个 key 不存在"。
+        if v is None or not v.strip():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
@@ -811,16 +813,27 @@ def test_provider_priority_is_the_table_order() -> None:
     import tools.web_search as ws
 
     saved = _isolate_search_keys()
-    os.environ["TAVILY_API_KEY"] = "tvly-test-not-real"
-    os.environ["MINI_SEARCH_API_KEY"] = "serper-test-not-real"
     try:
+        order = [s["name"] for s in ws.PROVIDERS]
+        check("优先级 = 表里的顺序，Serper 在前", order[0] == "serper", str(order))
+
+        os.environ["TAVILY_API_KEY"] = "tvly-test-not-real"
+        os.environ["MINI_SEARCH_API_KEY"] = "serper-test-not-real"
+        # ★ 前提自检：不确定环境真被设上就去断言结论，只会得到一个看不懂的 ✗。
+        check("前提：两个 key 都真的设进去了",
+              bool(os.environ.get("TAVILY_API_KEY")) and bool(os.environ.get("MINI_SEARCH_API_KEY")),
+              f"tavily={bool(os.environ.get('TAVILY_API_KEY'))} "
+              f"mini={bool(os.environ.get('MINI_SEARCH_API_KEY'))}")
         check("两个都在 → Serper 优先（额度更大，且不和 Hermes 抢）",
-              ws.active_provider()["name"] == "serper")
-        os.environ.pop("MINI_SEARCH_API_KEY")
+              ws.active_provider()["name"] == "serper",
+              str(ws.active_provider()))
+        os.environ.pop("MINI_SEARCH_API_KEY", None)
         check("摘掉 Serper → 自动落到 Tavily（不用改代码，Hermes 那边照常）",
-              ws.active_provider()["name"] == "tavily")
-        os.environ.pop("MINI_SEARCH_API_KEY")
-        check("两个都没有 → 没有可用供应商（工具因此不发）", ws.active_provider() is None)
+              ws.active_provider()["name"] == "tavily",
+              str(ws.active_provider()))
+        os.environ.pop("TAVILY_API_KEY", None)          # ← 顺序换过，这里也得跟着换
+        check("两个都没有 → 没有可用供应商（工具因此不发）",
+              ws.active_provider() is None, str(ws.active_provider()))
     finally:
         _restore_search_keys(saved)
 

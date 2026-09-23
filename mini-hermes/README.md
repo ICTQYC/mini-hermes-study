@@ -159,6 +159,12 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 python3 tests/test_packaging.py        # 13 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
 python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
+
+# ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
+#      find . -name __pycache__ -type d -exec rm -rf {} +
+#    Python 的 .pyc 失效判据是 (mtime, 文件大小)。做"两块对调"这类编辑时
+#    文件长度**完全相同**，mtime 又落在同一秒 → 缓存被判为新鲜，
+#    实际跑的是旧字节码。（本项目真踩过，排查了两轮。）
 ```
 
 > **测试跑起来是按组报告的**（第 3 章那个文件），一眼看得出失败的是哪一类保证。
@@ -216,7 +222,7 @@ doctor.py                 ←  （mini 特有）分层体检：环境→DNS→�
 
 tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响应驱动）
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
-tests/test_tools_runtime.py     # 87 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
+tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
 tests/test_packaging.py         # 13 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描）
 demos/                          # 能跑出来的故障复现，比散文有说服力
