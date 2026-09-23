@@ -1162,3 +1162,1341 @@ tests/test_tools_runtime.py（无）→ 546 行 / 54 条 / 6 组
 源码 4678 行 · 测试 2682 行 · demo 276 行
 测试合计 275 条（154 + 54 + 13 + 54），Python 3.13.14 与 3.9.6 都过
 ```
+
+
+---
+
+## 附录 B · 源码深挖长版（从《中文精译-04》搬来）
+
+**这一份东西为什么在这里、而不是在精译里**
+
+精译的职责是「让我看懂原文在讲什么」；下面这 44 段是**长版源码深挖**
+（真实签名、字段清单、规模数字、边角设计、逐句拆解）。它们读起来有信息量，
+但读它们**不是看懂原文的前提**——所以从精译搬出来了。
+
+> 📌 **和前面 §一 ~ §八 的关系**：前面那八节是**压缩版**（差异 + 结论，够你判断
+> "值不值得改"）；这一份是**长版**（同样的机制，但带上全部细节和出处）。
+> 你要查某个细节 → 来这一份；你要判断差异 → 看前面。
+
+> 📌 **如果某一段你希望它回到精译里**（比如读原文时就看不懂那一处），
+> 直接说是哪一段，我搬回去 —— 这正是"看不懂就问"那个机制。
+
+共 **1317 行**，按原章节顺序：
+
+### 来自《中文精译-04》· ## 1. 工具注册模型（`registry.register()`）
+
+#### 真实签名（比原文多 4 个参数）
+
+```python
+# tools/registry.py:619
+def register(
+    self, name: str, toolset: str, schema: dict, handler: Callable,
+    check_fn: Callable = None, requires_env: list = None, is_async: bool = False,
+    description: str = "", emoji: str = "", max_result_size_chars: int | float | None = None,
+    dynamic_schema_overrides: Callable = None, override: bool = False,
+    scope: Optional[str] = None):
+```
+
+原文没写的四个：
+
+| 参数 | 干什么 |
+|---|---|
+| `max_result_size_chars` | 单个工具结果的字符上限（各工具可以不同） |
+| `dynamic_schema_overrides` | **一个零参可调用**，返回的 dict 会在**每次 `get_definitions()` 时浅合并进 schema**——给"随运行时配置变化"的字段用（`delegate_task` 的描述要反映当前的并发上限） |
+| `override` | 显式允许覆盖 |
+| `scope` | 插件作用域（一个进程服务多个 profile/插件世代） |
+
+`dynamic_schema_overrides` 是最有意思的一个：**它让 schema 的一部分变成"每次取时现算"**。
+这跟第 3 章的三层装配是同一个思路——**有一部分内容天然会变，就把它单独放，别拖累其他部分**。
+
+#### `ToolEntry` 的真实字段（11 个）
+
+```python
+# tools/registry.py:181
+class ToolEntry:
+    """Metadata for one registered tool (identity semantics: restore/CAS paths compare ``is``)."""
+    name: str
+    toolset: str
+    schema: dict
+    handler: Callable
+    check_fn: Optional[Callable]
+    requires_env: list
+    is_async: bool
+    description: str
+    emoji: str
+    max_result_size_chars: int | float | None = None
+    dynamic_schema_overrides: Optional[Callable] = None
+```
+
+> 📌 `description` 和 `schema` **两个字段并存**这件事本身就是原文那段话的来源。
+> 它们在真实代码里是两个独立的值，**不会自动同步**。
+
+#### 注册时会做 schema 校验（原文没提）
+
+```python
+# tools/registry.py:628
+# Reject malformed schemas at registration, not at request time: a non-dict
+# ``parameters`` (e.g. a list) serializes into every provider request and 400s the
+# whole turn far from the offending plugin. Failing here names the culprit instead.
+if not isinstance(schema, dict):
+    raise ValueError(f"Tool {name!r}: schema must be a dict, got {type(schema).__name__}")
+params = schema.get("parameters")
+if params is not None and not isinstance(params, dict):
+    raise ValueError(...)
+self_name = f"Tool {name!r}: schema['parameters'] must be an object (JSON Schema dict), ...")
+```
+
+**这段注释值得单独读**——它讲的正是"为什么要在最早的地方失败"：
+
+> 畸形 schema 在**注册时**就拒绝，而不是等到请求时：一个非 dict 的 `parameters`
+> （比如列表）会被序列化进**每一次** provider 请求，让**整个 turn** 报 400 错，
+> 而报错位置离出问题的插件很远。在这里失败就能点出是谁干的。
+
+对照一下这个仓库里反复出现的模式：**"检查要对着能指出问题的那个位置"**。
+第 3 章那次是校验跑错时机（注入前 vs 注入后），这次是校验跑错位置（请求时 vs 注册时）。
+
+#### 先说清两个词：**"全局槽"和"影子"**
+
+这两个词前面用到了但没定义。它们是理解覆盖语义的前提。
+
+**注册不是往一个 dict 里放东西，是往两个"槽"之一放：**
+
+```python
+# tools/registry.py
+def _slot(self, scope: Optional[str], *, create: bool = False) -> Dict[str, ToolEntry]:
+    """The registration map for *scope*: global when None, else that profile's overlay."""
+    if scope is None:
+        return self._tools                                  # ← 全局槽：内置工具
+    if create:
+        return self._scoped_tools.setdefault(scope, {})     # ← 覆盖槽：每个插件一份
+```
+
+| 词 | 准确含义 |
+|---|---|
+| **全局槽**（`self._tools`） | `scope=None` 时注册进去的东西——**所有内置工具**（`tools/*.py` 里调 `register()`） |
+| **覆盖槽**（`self._scoped_tools[scope]`） | 插件注册时**带 scope** 落进去的地方，**每个插件（每个 profile）一份** |
+| **影子（shadow）** | 一个插件工具的名字**和全局槽里已有的工具重名**——于是它在取值时会**盖住那一个** |
+
+**"盖住"是字面意义上的覆盖**，看取值逻辑：
+
+```python
+def _merged_tools(self, scope: Optional[str] = None) -> Dict[str, ToolEntry]:
+    """Return global tools overlaid with one profile's plugin tools."""
+    return {**self._tools, **self._scoped_tools.get(scope or self.current_scope_key(), {})}
+```
+
+`{**全局, **某插件的}` —— **后者盖前者**。
+所以一个插件工具叫 `terminal`，就会在**它自己所在的 scope 里**把内置的 `terminal` 顶掉。
+它的意思是：**这个注册如果放行，取值时它会盖住一个已经存在的东西。**
+
+#### 覆盖语义其实是四条路径（原文压成了一句话）
+
+```python
+# tools/registry.py:647-682（化简）
+plugin_override_denied = (owner is not None and not self._plugin_override_allowed(scope, owner))
+# 「它想盖掉的是一个全局工具」的四条判据，缺一不可：
+shadows_global = (
+    owner is not None and        # ① 注册方是插件（不是内置代码）
+    scope is not None and        # ② 它注册进了自己的覆盖槽
+    name not in target and       # ③ 它自己槽里还没有这个名（排除重连/刷新）
+    name in self._tools)         # ④ 但全局槽里有这个名字
+if shadows_global:
+    if not override:
+        logger.error("Tool registration REJECTED: plugin %r attempted to shadow global tool %r "
+                     "without override=True", owner, name)
+        return                                    # ← ① 想盖全局工具、但没声明 override：拒绝 + 日志
+    if plugin_override_denied:
+        raise PermissionError(...)                # ← ② 声明了 override、但使用者没授权：抛异常
+
+if existing and existing.toolset != toolset:
+    if override:
+        if plugin_override_denied:
+            logger.error(...); raise PermissionError(...)   # ← ③ 同上，跨 toolset 版
+        logger.info("Tool '%s': toolset '%s' overriding existing toolset '%s' (override=True opt-in)", ...)
+    else:
+        logger.error("Tool registration REJECTED: '%s' (toolset '%s') would shadow existing "
+                     "tool from toolset '%s'. Pass override=True ...")
+        return                                    # ← ④ 跨 toolset 影子没 override：拒绝 + 日志
+```
+
+#### 关键：替换内置工具要**两个人分别点头**
+
+这是这段代码最重要的设计，说的是**两个不同的人**：
+
+| 闸门 | 谁决定 | 怎么表态 |
+|---|---|---|
+| `override=True` | **插件作者** | 在 `register()` 调用里写（声明"我是**故意**替换它的"） |
+| `allow_tool_override: true` | **使用者 / 运维** | 在 `config.yaml` 里写 `plugins.entries.<plugin_id>.allow_tool_override: true`（授权"我允许**这个**插件替换内置工具"） |
+
+拒绝时的报错原文（`_OVERRIDE_DENIED_MSG`）：
+
+> Plugin module {owner!r} **cannot override built-in tool** {name!r}
+> **without operator opt-in** (allow_tool_override).
+>
+> （插件模块 {owner!r} 在**没有使用者显式同意**的情况下，**不能覆盖内置工具** {name!r}。）
+
+> 📌 **为什么必须是两个人？** 因为这是两个不同的问题：
+>
+> - **作者**知道的是"**我的意图**"——比如"我这个 headed-Chrome 后端就是要替换默认的
+>   `browser_navigate`"，那是合情合理的替换
+> - **使用者**决定的是"**我信不信任它**"
+>
+> **只有第一道闸门**：任何粗心或恶意的插件都能悄悄把 `terminal` 换掉，
+> 用户完全看不出来（工具名没变、schema 可能也没变）。
+> **只有第二道**：那是一个全局开关，等于"以后谁都能替换我的核心工具"。
+> 两道都要 = **声明意图 + 授予权限**，而且**都是逐个插件**的。
+
+#### 两个失败形态为什么一个记日志、一个抛异常
+
+| 情况 | 形态 | 怎么理解 |
+|---|---|---|
+| 想盖全局工具、**没声明 `override`** | `logger.error` + **不注册**，进程继续 | **疏忽**：没说要覆盖。善意假设 → 当没发生过 |
+| 声明了 `override`、**但使用者没授权** | **`raise PermissionError`** | **越权尝试**：它**确实想**换掉你的核心工具，只是没被允许 |
+
+> 📌 判据不是"后果严不严重"，而是**"这是疏忽还是越权"**：
+> - **没声明意图** → 按疏忽处理（日志里留下线索，但不中断）→ 插件那个工具不生效，**内置的照常**
+> - **声明了但没被授权** → 按越权处理（抛出）→ 因为**它本会真的改掉一个核心工具的行为**
+>
+> 两次的差别还有一层：**①的结果是"少了个插件功能"，用户是"少了东西"；
+> ②的结果是"核心工具被静默换掉"，用户是"用着以为对的东西"**——后者才是信任边界。
+
+> **同 toolset 重新注册是允许的**——注释专门写了理由：
+> *same-toolset re-registration (MCP reconnect/refresh) stays allowed.*
+> （MCP 服务器重连/刷新时会重新注册同名工具，那是正常行为。）
+> 这也解释了判据 ③ `name not in target` 为什么必要：**重连时"我自己槽里已经有这个名了"，
+> 那不是影子，那是刷新。**
+
+#### 附带一个防"洗白"的设计
+
+"这是谁注册的"（`owner`）不是看**谁在调用**，而是看**函数定义在哪个模块**：
+
+```python
+def _plugin_owner_of(self, handler: Callable) -> Optional[str]:
+    """Plugin namespace that DEFINED *handler* (None for built-in/MCP handlers). Bound to
+    ``handler.__globals__["__name__"]``, fixed at definition time so it cannot drift with
+    call site/thread/timing; lambdas and nested functions inherit it, so a plugin cannot
+    launder an override via a callback."""
+```
+
+> 📌 注释最后一句是重点：*so a plugin **cannot launder an override via a
+> callback***（**插件不能通过回调把一次覆盖"洗白"**）。
+>
+> 也就是说：插件**不能**把内置工具的函数包一层 lambda 就冒充成自己的实现——
+> 因为 lambda 继承的是**定义处**的模块名（`__globals__["__name__"]`），不是调用处的。
+>
+> 规律：**判定身份要选"不会被伪装/漂移的信号"。**
+> "调用位置"是可以伪装的，"定义位置"是固定的。
+> 这和第 3 章"schema 在导入时构建、所以不能写运行时事实"同源：
+> **先想清楚哪个信号是可信的，再拿它做判据。**
+
+#### 结果必须是 JSON 字符串
+
+```python
+# tools/registry.py:965-977
+# Tool handlers must return JSON strings; these replace the ubiquitous
+# ``json.dumps({"error": msg}, ensure_ascii=False)`` boilerplate.
+
+def tool_error(message, **extra) -> str:
+    """``'{"error": "<message>", **extra}'`` — the error body is bounded so a raw
+    exception can't bloat history across retries."""
+    return json.dumps({"error": _bound_error_text(str(message)), **extra}, ensure_ascii=False)
+
+def tool_result(data=None, **kwargs) -> str:
+    """JSON-encode a dict positional arg *or* keyword arguments (not both)."""
+    return json.dumps(data if data is not None else kwargs, ensure_ascii=False)
+```
+
+这条规矩来自 `tools/AGENTS.md`：
+
+> **All handlers return a JSON string.**
+
+**为什么必须是 JSON 而不是人看的文本？** 因为工具结果要**从历史里被重新解析**——
+`todo` 的状态重建就靠这个（第 2 章那条：网关每条消息新建一个 AIAgent，
+所以状态必须能从历史里读回来）。给人看的文本解析不了。
+
+### 来自《中文精译-04》· ## 2. 发现机制（`discover_builtin_tools()`）
+
+#### ① AST 检查：其实是四条规则
+
+```python
+# tools/registry.py:58
+def _is_registry_register_call(node: ast.AST) -> bool:
+    """True when *node* is a ``registry.register(...)`` call expression."""
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        return False
+    func = node.value.func
+    return (isinstance(func, ast.Attribute) and func.attr == "register"
+            and isinstance(func.value, ast.Name) and func.value.id == "registry")
+```
+
+它认的是**语法形状**，不是文本。四个条件缺一不可：
+
+```
+ast.Expr                    ← 语句，不是赋值
+└─ ast.Call
+   └─ func = ast.Attribute，attr == "register"
+      └─ value = ast.Name，id == "registry"
+```
+
+也就是说 `registry.register(...)` 算，而 `r.register(...)`、`self.registry.register(...)`、
+`registry["x"] = ...` 都不算。**这是"按语法查"和"按文本查"的区别**——
+文本查会误伤注释和字符串，`_module_registers_tools` 的 docstring 专门交代了这一点：
+
+```python
+# tools/registry.py:68
+def _module_registers_tools(module_path: Path) -> bool:
+    """True when the module body (or a module-level ``for``) calls ``registry.register(...)``.
+    Only module-body statements count, so helpers registering inside a function are skipped;
+    a text prefilter avoids ``ast.parse`` for files lacking both words."""
+    try:
+        source = module_path.read_text(encoding="utf-8")
+        if "registry" not in source or "register" not in source:
+            return False                    # ← 文本预筛，省掉 ast.parse 的开销
+        tree = ast.parse(source, filename=str(module_path))
+    except (OSError, SyntaxError):
+        return False
+    # Table-driven modules register several tools from one loop, still at import time.
+    return any(
+        _is_registry_register_call(stmt)
+        or (isinstance(stmt, ast.For) and any(_is_registry_register_call(s) for s in stmt.body))
+        for stmt in tree.body)
+```
+
+第 4 条规则：**模块级的 `for` 循环里注册也算**。注释：*Table-driven modules register several
+tools from one loop, still at import time.*（表驱动的模块用一个循环注册好几个工具，
+同样发生在 import 时。）
+
+> 📌 这是"**规则要跟着真实用法走**"的一个例子：一开始可能只有直接调用，
+> 后来有人写了表驱动的模块，AST 检查就得跟着放宽——**否则那些工具会静默消失**。
+
+#### ② 候选文件：不只 `tools/*.py`，还有包入口
+
+```python
+# tools/registry.py:86
+def _tool_module_candidates(tools_path: Path) -> List[Path]:
+    """Flat ``tools/*.py`` modules plus the package entry point ``tools/<pkg>/tool.py``, in one
+    sorted list. Only ``tool.py`` is scanned in a package, so every other file in it is a library
+    by construction. Sorted after merging: ``register()`` lets a same-name, same-toolset duplicate
+    overwrite silently, so the import order must not depend on file depth."""
+    candidates = list(tools_path.glob("*.py")) + list(tools_path.glob("*/tool.py"))
+    return sorted(candidates)
+```
+
+三个设计点：
+
+| 点 | 理由（注释原话） |
+|---|---|
+| 包只扫 `tool.py` | *every other file in it is a library by construction*——包里其他文件**按定义就是库**，不用扫 |
+| 合并后**统一排序** | `register()` 允许同名同 toolset 静默覆盖，**所以 import 顺序不能依赖文件深度** |
+| 为什么怕顺序 | 顺序不定 → 覆盖谁不定 → **行为不定** |
+
+#### ③ 包里缺 `__init__.py` 会被跳过并警告
+
+```python
+# tools/registry.py:109
+if len(rel_parts) > 1 and not (path.parent / "__init__.py").exists():
+    # setuptools' package finder drops a directory without __init__.py, so this tool would
+    # register from a checkout and vanish from an installed wheel.
+    logger.warning("Skipping %s: package %s has no __init__.py", path, path.parent.name)
+    continue
+```
+
+> **"在源码树里能跑，装成 wheel 就消失"** —— 这是最难查的一类 bug：
+> 开发时一切正常，发布后功能静默没了。
+> 所以这里**宁可跳过 + 警告，也不让一个注定在发布版里消失的工具偷偷加载**。
+
+#### ④ 磁盘记忆化缓存（原文完全没提）
+
+```python
+# tools/registry.py:95
+def discover_builtin_tools(tools_dir: Optional[Path] = None) -> List[str]:
+    """Import built-in self-registering tool modules and return their module names. The
+    per-file AST scan costs ~145 ms over ~100 files, so verdicts are memoized on disk keyed
+    by ``(mtime_ns, size)``; a mismatch or corrupt cache re-scans that file. The write is
+    best-effort and atomic, so concurrent processes race harmlessly."""
+```
+
+- 每文件 AST 扫描在 ~100 个文件上要 **~145ms**
+- 结论按 `(mtime_ns, size)` 记在磁盘上
+- 不匹配或缓存坏了 → **重扫那一个文件**
+- 写入是 **best-effort + 原子**的 → 并发进程竞争无害
+
+缓存路径：
+
+```python
+# tools/registry.py:143
+from hermes_constants import get_hermes_home()
+return Path(get_hermes_home()) / "cache" / "tool_discovery_cache.json"
+```
+
+> 📌 这里出现了本章第二次"**启动路径上的性能优化**"。
+> 判据和别处一样：**这段代码在每个进程启动时都跑**，所以它的常数要抠。
+> 而缓存键用 `(mtime_ns, size)` 而不是内容 hash——**改了文件就失效，没改就复用**。
+
+#### ⑤ 数字：258 个文件里只有 43 个是工具
+
+这是实测的、原文完全没提的规模感：
+
+```console
+$ ls tools/*.py | wc -l
+258
+$ grep -l "^registry.register(" tools/*.py | wc -l
+43
+```
+
+**258 个 `.py` 文件里，只有 43 个含顶层 `register(`。** 其余 215 个是：
+辅助模块、后端实现（`tools/environments/*`）、按主题拆的兄弟文件（`mcp_tool_*.py`、
+`browser_tool_*.py`）、注册表自己……
+
+**这就是为什么必须用 AST 检查而不是"扫目录全 import"**：
+
+- 全 import → 215 个纯库模块会被当成工具模块加载，**副作用不可控**
+- 按名字前缀筛（比如"不以下划线开头的都算"）→ 会漏掉合法的库文件和误伤工具文件
+- **按"模块体里有没有那句调用"筛** → 精确对应"这个文件是不是声明了工具"
+
+#### 关于 MCP / 插件两批发现
+
+原文那两条是对的，位置也对：
+
+- MCP：`tools/mcp_tool_discovery.py` 的 `discover_mcp_tools()`（由 `tools/mcp_tool.py`
+  这个门面再导出）
+- 插件：`hermes_cli/plugins.py` 的 `discover_plugins()`
+
+**但原文没说一件重要的事：MCP 发现曾经就在这个文件的模块级跑，后来被移走了。**
+源码里留着两段说明（`model_tools.py` 底部）：
+
+```python
+# --- Tool discovery (importing each tools/*.py triggers registry.register) ---
+discover_builtin_tools()
+
+# MCP discovery is deliberately NOT run here: it blocks up to 120 s and the
+# gateway lazy-imports this module inside its event loop; each entry point
+# (gateway/run.py, cli.py, tui_gateway, acp_adapter) runs it at startup.
+try:  # plugin tool discovery (user/project/pip plugins)
+    # MCP tool discovery (external MCP servers from config) used to run here as a module-level side effect.
+    # It was removed because discover_mcp_tools() internally uses a blocking future.result(timeout=120)
+    # wait, and the gateway lazy-imports this module from inside the asyncio event loop on the first user
+    # message — freezing Discord/Telegram heartbeats for up to 120s whenever any configured MCP server was
+    # slow or unreachable (#16856). - gateway/run.py            -> start_gateway() uses run_in_executor -
+    # acp_adapter/server.py     -> asyncio.to_thread on session init
+    from hermes_cli.plugins import discover_plugins
+    discover_plugins()
+except Exception as e:
+    logger.debug("Plugin discovery failed: %s", e)
+```
+
+**这段注释是一个完整的故障报告**，值得拆开读：
+
+| 环节 | 内容 |
+|---|---|
+| **原来在哪** | 模块级副作用（import `model_tools` 时就跑） |
+| **它做什么** | `discover_mcp_tools()` 内部是**阻塞**的 `future.result(timeout=120)` |
+| **谁来 import 它** | **网关**在收到第一条用户消息时**懒加载**这个模块——也就是**在 asyncio 事件循环里** |
+| **后果** | 任何配置过的 MCP 服务器变慢/连不上 → **冻结 Discord/Telegram 心跳最多 120 秒** |
+| **issue** | #16856 |
+| **修法** | 从模块级移走；由每个入口**自己**在启动时跑（网关走 `run_in_executor`、ACP 走 `asyncio.to_thread`） |
+
+> 📌 **这个案例把几件事串起来了，而且全在"看起来无害"的层面上：**
+>
+> ① **"阻塞 120 秒"本身不算罪** —— 在一个普通启动路径上，慢一点只是慢。
+> 罪在于**它在事件循环里**：事件循环被占住 → **心跳发不出去** →
+> 用户在 Telegram 那边看到的是"bot 死了"。**同一个阻塞在两个上下文里的严重程度差一个数量级。**
+>
+> ② **"模块级副作用"是危险位置。** 你在模块里写一句 `discover_mcp_tools()`，
+> 看起来只是在"初始化"，但你**同时决定了它会在谁的调用栈上执行**——
+> 而 import 这个模块的人可能是网关、可能是 CLI、可能是 TUI、可能是 ACP。
+> **一个副作用，四种上下文。**
+>
+> ③ 所以修法是**"把时机还给调用方"**：模块只提供函数，**什么时候调由入口决定**。
+> 这和第 3 章"别重探 git"是同一条：
+> **不要在你不控制时机的地方做有代价的事。**
+>
+> ④ 而 `_run_async`（本章 §5④）**正是为了解决"我必须在事件循环里调阻塞东西"这一类问题**
+> 才存在的——它起一个一次性线程去跑。**同一个仓库里，同一个问题有两种应对**：
+> 移走（MCP 发现）或桥接（async 工具）。判据是**"这个东西是不是每次都需要"**：
+> 每次都要 → 桥接；只在启动时要 → 移走。
+
+补充一条原文没说的硬规矩（`tools/AGENTS.md`）：
+
+> **MCP trust is a per-profile record:** `mcp_tool_registration.py::_record_scope_trust` keys
+> trust on the home; a secondary never adopts the launch profile's trust for a same-named
+> server.
+
+（**MCP 的"信任"是按 profile 记的**：一个次要 profile 绝不会因为主 profile 信任了某个同名
+服务器就跟着信任它。）—— 这属"一个进程服务多个 profile"那条大原则，见 §3。
+
+### 来自《中文精译-04》· ## 3. 工具可用性检查（`check_fn`）
+
+#### ⭐ 抖动保护：失败分两种，处理方式相反
+
+这是我想错了一次的地方，值得完整贴出来（`tools/registry.py:331`）：
+
+```python
+    exc_info = None
+    try:
+        value, outcome = bool(fn()), "returned False"
+    except Exception as exc:
+        # Keep the exception for the verdict log below (emitted outside this block, where
+        # ``exc_info=True`` would resolve to nothing): a check_fn that raises is a bug in the probe
+        # or its resolver, and a bare "raised" verdict reads as "nothing configured" (#87950).
+        value, outcome, exc_info = False, "raised", exc
+    with _check_fn_cache_lock:
+        _prune_check_fn_caches(now)
+        if value:
+            _check_fn_last_good[cache_key] = now        # ← 记住"最后一次成功是什么时候"
+            _check_fn_cache[cache_key] = (now, True)
+            return True
+        last_good = _check_fn_last_good.get(cache_key)
+        if last_good is not None and now - last_good < _CHECK_FN_FAILURE_GRACE_SECONDS:
+            # Recent success → flake: serve last-good True, do NOT cache (next call re-probes).
+            logger.warning(
+                "check_fn %s failed (%s) within %.0fs of last success; "
+                "treating as transient and keeping tool(s) available",
+                _fn_label(fn), outcome, _CHECK_FN_FAILURE_GRACE_SECONDS)
+            return True                                 # ← ★ 刚成功过又失败 → 当作抖动，说"可用"
+
+        # No recent success (or grace expired) — honor the failure. A False verdict is the
+        # expected state for optional, unconfigured toolsets; only a raised probe is actionable.
+        log = logger.warning if exc_info else logger.info
+        log("check_fn %s %s; dependent tools will be unavailable this turn", _fn_label(fn), outcome,
+            exc_info=exc_info)
+        _check_fn_cache[cache_key] = (now, False)
+        return False
+```
+
+**两种"失败"被区别对待：**
+
+| 情况 | 判断 | 返回 | 缓存吗 |
+|---|---|---|---|
+| 从来没成功过（没配 key / 没装二进制） | 真的不可用 | **`False`** | 缓存 `False`（30s TTL） |
+| **最近 60 秒内成功过，这次失败** | **抖动（flake）** | **`True`（继续可用！）** | **不缓存**——下次调用**重新探测** |
+
+> 📌 **这个设计的价值在于它防的是"能力忽然消失"，而不是"探测变慢"。**
+>
+> 想象一个真实场景：`check_fn` 是"honcho 服务在不在跑"。某次网络抖动让它探测失败——
+> **如果直接相信这次失败，模型眼前的一批工具会突然消失**。
+> 而模型的反应是：它之前的计划里有这些工具，现在 schema 里没有了，
+> 于是它开始**编造调用**或者**换一套笨办法**。
+>
+> 所以判据是：**"这个能力刚刚还在吗？"**
+> 在 → 一次失败更可能是抖动 → **继续提供服务，但记住这次可疑**（不缓存，下次再探）。
+> 不在 → 失败就是事实 → 不可用。
+>
+> **关键的第二个动作是"不缓存"**：如果它缓存了那个 `True`，抖动就会变成
+> "假装还能用 30 秒"。**"继续乐观 + 立刻重新检查"** 才是对的组合。
+
+#### 探测失败还分级记录，而且异常必须留着
+
+```python
+# 接上面那句 log
+log = logger.warning if exc_info else logger.info
+```
+
+注释给了理由，还带一个 issue 号：
+
+> A `False` verdict is the expected state for optional, unconfigured toolsets;
+> **only a raised probe is actionable**. (#87950)
+>
+> （`False` 是"可选但没配"的**正常状态**；**只有"探测自己抛异常"才需要处理**。）
+
+> 📌 **"探测返回 False"和"探测炸了"是两件事，而且严重级别相反地反直觉：**
+>
+> - 返回 `False`（没配 key）→ **正常的**，INFO
+> - 抛异常（探测代码有 bug / 解析器坏了）→ **要处理的**，WARNING
+>
+> 而 #87950 那个注释还在防一个更细的问题：
+> **异常必须被显式保存并在 `except` 块外面用**，否则 `exc_info=True` 在块外解析不到东西，
+> 于是日志里显示成"raised"却**没有堆栈**——
+> *a bare "raised" verdict reads as "nothing configured"*
+> （一个光秃秃的 "raised" 判语，读起来像"什么都没配置"。）
+>
+> **"日志说了有事，但没说是什么事"** —— 这是排障里最难的一类：你知道出了问题，
+> 但现场信息已经丢了。
+
+配套的公开面（原文一个都没提）：
+
+```python
+def no_cache_check_fn(fn)                    # 包一层：这个 check_fn 永不缓存
+def check_fn_cache_scope() -> Optional[str]  # 当前的缓存作用域（就是 profile home key）
+def _check_fn_cached(fn) -> bool             # 带 TTL 的取结果
+def invalidate_check_fn_cache() -> None      # 手动失效（"我刚装了 key，立刻生效"）
+def get_cached_check_fn_result(fn) -> Optional[bool]   # 只读，不触发探测
+```
+
+而 `get_definitions()` 用的那个 `_memo_check` **不是**这层 TTL 缓存——它是**单次调用内的去重**：
+
+```python
+# tools/registry.py:364
+def _memo_check(fn: Callable, memo: Dict[Callable, bool]) -> bool:
+```
+
+也就是说，**原文说的"Cached per-call"确实存在**（就是 `_memo_check` + `check_results` dict），
+但它只是**最外面那一层**；底下还有一层进程级 TTL 缓存。原文只写了外层。
+
+#### 为什么需要两层，而不是一层？
+
+三层数据，问的问题不同：
+
+| 层 | 作用域 | 回答的问题 |
+|---|---|---|
+| `check_results` dict（per-call） | 一次 `get_definitions()` | "这一批工具里，同一个 `check_fn` 跑过了吗？" |
+| `_check_fn_cache`（TTL 30s / 512 条） | **一个进程** | "30 秒内问过了吗？（探测可能很贵：要起子进程、要网络）" |
+| 探测本身 | —— | "这个能力现在到底在不在？" |
+
+> 📌 **"per-call 去重"解决的是浪费，"进程级 TTL"解决的是延迟。**
+> 前者是"同一个函数别跑两遍"，后者是"别每轮都去起一个 `playwright` 子进程探浏览器在不在"。
+>
+> 30 秒这个数是为了一句注释里写明的目的：
+> `get_definitions` 的 docstring 说 *Probes use the ~30 s TTL cache so ``hermes tools enable``
+> lands quickly.* ——**让你刚启用一个工具，30 秒内就能用上**，
+> 而不是要重启进程。
+
+#### `hermes_home_key()` —— 缓存为什么要按 profile 分键
+
+`tools/AGENTS.md` 把这条单列出来：
+
+> `check_fn` answers reachability/opt-in **for the profile it runs under**, never surface.
+> Results are TTL-cached in `registry.py::_check_fn_cache` keyed by `hermes_home_key()`,
+> and one process serves many sessions AND many profiles: a probe reads credentials through
+> `agent.secret_scope.get_secret`, never bare `os.getenv` (that answers with the launch
+> profile's `.env` for everyone).
+
+（`check_fn` 回答的是"**它自己所在的 profile** 能不能到达/有没有开"。
+结果按 `hermes_home_key()` 分键缓存——而**一个进程服务多个会话、也服务多个 profile**：
+探测必须走 `get_secret` 读凭据，不能裸用 `os.getenv`，否则**所有人得到的都是启动 profile 的答案**。）
+
+> 📌 这条**不能靠"更小心"来避免**。裸 `os.getenv` 不会报错，它只是**答错**——
+> 而且答的是一个**存在的、合理的**值（启动 profile 的 `.env`）。
+>
+> 判断标准（`tools/AGENTS.md` 原文）：
+> - `check_fn` 回答**可达性 / 有没有开** → 可以
+> - `check_fn` 回答**"我是不是被 Electron 拉起来的"** → **不行**
+>   （那是**会话的**属性，不是进程的；`check_fn` 结果是进程级缓存的，放不进会话级答案）
+>
+> 这条的完整版在 `AGENTS.md` 里叫 **"capability is a property of the SESSION"**。
+
+#### 异常当"不可用"还有一层分级
+
+`tools/AGENTS.md` 补充：`UnscopedSecretError` 在捕获点被分级——
+**启动时无作用域的探测是 DEBUG 级别，不是 traceback**。
+
+> 📌 **同一个异常，在"启动探测"和"正常调用"里的严重级别不同。**
+> 启动时没有 secret scope 是**正常的**（还没有会话）；
+> 运行中读到未绑定的 secret 才是 bug。**这不是"放宽检查"，是"知道自己在什么阶段"。**
+
+> 📌 **「真实实现的五种形态」（47 处注册带 `check_fn` 的实地样本）已移到《源码讲解-04-ToolsRuntime.md》§三末**。
+> 那一节是"**真实的人在里面写什么**"的清单式调研；本节只留 `check_fn` 的机制本身
+> （抖动保护、两层缓存、契约）。
+
+#### `check_fn` 的契约（名字看不出来的那部分）
+
+`check_fn` 这个名字只说了一半——"一个检查函数"。真正约束你**能在里面写什么**的是它下面这七条契约：
+
+| 契约 | 为什么 | 从哪看出来 |
+|---|---|---|
+| 返回 `bool`，**抛异常当 `False`** | 调用方不 try/except（fail-safe） | `_run_check_fn_uncached` 里的 `except: return False` |
+| **必须便宜** | 每 30 秒就可能跑一次，且在启动路径上 | `_CHECK_FN_TTL_SECONDS = 30` + feishu 的 ~5s 注释 |
+| **不能有可见副作用** | 它会在桌面 app 启动时跑 | browser 那句 "Windows .cmd shims flash a console" |
+| **不能阻塞 / 做 I/O** | 在 schema 构建路径上 | browser 那句 "must not cost a blocking probe" |
+| **凭据要走 `get_secret`，不能 `os.getenv`** | 一个进程服务多个 profile | `UnscopedSecretError` 的处理分支 |
+| 结果被**进程级缓存** | 所以它**不能**回答"这次会话专属"的问题 | `_check_fn_cache` + `_load_enabled_toolsets` 的分工 |
+| 想不缓存：`@no_cache_check_fn` | 本地配置读，必须立刻生效 | `memory_tool` / `kanban_tools` / `browser_vault` 三处 |
+
+> 📌 **最后那两条是同一条边界的两个方向**，值得说清楚：
+>
+> - **`check_fn` 回答"这个环境里它现在能用吗"** → 环境是**进程级**的，所以可以缓存
+> - **`toolset` 回答"这次会话该不该给它"** → 会话是**每次不同**的，所以不能进 `check_fn`
+>
+> `AGENTS.md` 把这条反例写得很具体（而且给了它一个名字）：
+>
+> > `check_fn` answers reachability or opt-in, not surface. "Is the bridge wired?" — fine.
+> > **"Was I spawned by Electron?"** — not. `check_fn` results are TTL-cached process-wide
+> > (`tools/registry.py`); **a per-session answer does not belong there.**
+>
+> （"这座桥接好了吗" —— 可以。"我是不是被 Electron 拉起来的？" —— **不行**，
+> `check_fn` 的结果是进程级缓存的，**会话级的答案不该放在那儿**。）
+>
+> 而且这个反例**有真实后果**：桌面 app 可能驱动
+> 本地后端子进程、SSH 上的后端、URL+token 的后端、或 Hermes Cloud，
+> 而 `HERMES_DESKTOP=1` 只在**前两种**上存在。用环境变量当闸门 →
+> 在其他拓扑下**静默失效**：工具被从 schema 里剔掉，
+> 而平台提示还在告诉模型"你在 Hermes 桌面 app 里"。
+>
+> 正确做法是 `AGENTS.md` 给的：**闸门放 toolset**（`desktop_ui` / `project`），
+> 由 `_load_enabled_toolsets(platform)` 在**会话来源**那一层折进来。
+> 一句话判据（原文）：*if the capability still makes sense with the client on another
+> machine, it is session-scoped.*
+
+### 来自《中文精译-04》· ## 4. Toolset 解析
+
+#### ① 规模：60 个 toolset / 59 个核心工具
+
+```console
+$ TOOLSETS 的键数
+60
+$ len(_HERMES_CORE_TOOLS)
+59
+```
+
+`_HERMES_CORE_TOOLS`（`toolsets.py:11`）就是原文"包含全部已知 toolset"那句背后的东西：
+
+> `_HERMES_CORE_TOOLS` is the default bundle **every platform's base toolset inherits**,
+> not dead code.
+>
+> （`_HERMES_CORE_TOOLS` 是**每个平台的基础 toolset 都继承**的默认捆，不是死代码。）
+
+59 个工具里有：18 个 `browser_*`、12 个 `kanban_*`、8 个 `ha_*`、
+以及 `terminal` / `read_file` / `write_file` / `patch` / `search_files` / `web_search` /
+`execute_code` / `memory` / `todo_list` / `skill_*` 等。
+
+#### ② ⚠️ **"注册 ≠ 暴露"** —— 原文漏了这条硬规矩
+
+这是 `tools/AGENTS.md` 里写得最重的一条，开发者文档**完全没提**：
+
+> **Required** — discovery registers the schema, but a tool is only exposed if a toolset
+> names it. `_HERMES_CORE_TOOLS` is the default bundle every platform's base toolset
+> inherits, not dead code.
+
+（**必须做**——发现机制只是**注册了 schema**，但一个工具**只有在某个 toolset 点名它之后才会被暴露**。）
+
+于是"加一个核心工具"是**两个文件**：
+
+| 文件 | 做什么 |
+|---|---|
+| `tools/your_tool.py` | `registry.register(...)` —— 让工具**存在** |
+| `toolsets.py` | 把名字加进 `_HERMES_CORE_TOOLS` 或新 toolset —— 让它**可见** |
+
+**只做第一步的后果**：工具注册成功了、日志里没有任何异常、
+`registry.get_entry("your_tool")` 能拿到……但**模型永远看不到它**。
+
+> 📌 这是本章第三次出现"**静默失败**"，而且这次它的位置很反直觉：
+> **你以为"注册"就等于"生效"，其实中间还隔着一个 toolset 白名单。**
+>
+> 对照 `tools/AGENTS.md` 给的判断方式：
+> > Test the handler through the registry (real dispatch), not the bare function only;
+> > assert contracts ("every registered tool has a toolset", "no schema description names
+> > a tool from another toolset") rather than tool counts.
+>
+> （**走注册表测 handler（真分发），不要只测裸函数**；
+> 断言**契约**——"每个注册的工具都有 toolset"——**而不是工具数量**。）
+>
+> "断言契约而不是数量"这条也值得记：数量断言是"变更探测器"，
+> 每次加工具都要改测试，而且它**不告诉你任何关系**。
+
+#### ③ 动态 schema 修补：**10 条，不是 2 条**
+
+原文说"`execute_code` 和 `browser_navigate`"，真实是一张 10 项的表：
+
+```python
+# model_tools.py:463
+_DYNAMIC_SCHEMA_REWRITERS = {
+    "execute_code": _rewrite_execute_code,
+    "discord": _discord_rewriter("get_dynamic_schema_core"),
+    "discord_admin": _discord_rewriter("get_dynamic_schema_admin"),
+    "browser_navigate": _rewrite_browser_navigate,
+    "browser_cdp": _rewrite_browser_cdp,
+    "browser_exec": _compose_rewriters(_rewrite_browser_exec, _rewrite_input_tool_for_vault),
+    "browser_type": _rewrite_input_tool_for_vault,
+    "browser_vault_list": _rewrite_browser_vault,
+    "browser_vault_fill": _rewrite_browser_vault,
+    "delegate_task": _rewrite_delegate_task,
+}
+```
+
+执行顺序也有一句注释值得读：
+
+```python
+# model_tools.py:477
+def _apply_dynamic_schemas(tool_defs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply _DYNAMIC_SCHEMA_REWRITERS in list order; the availability set is a
+    snapshot taken before any rewrite (no rewriter's inputs are droppable)."""
+    available = {t["function"]["name"] for t in tool_defs}   # ← 先取快照
+    ...
+```
+
+> 📌 **"可用集合"在任何改写之前先取快照。**
+>
+> 理由在 rewriter 的真身里：`_rewrite_execute_code` 是这样用它的——
+>
+> ```python
+> def _rewrite_execute_code(td, available):
+>     """List only sandbox tools that are actually available."""
+>     # Without this, the model sees "web_search is available in execute_code" even when the API key isn't
+>     # configured or the toolset is disabled (#560-discord).
+>     return _fn_def(build_execute_code_schema(SANDBOX_ALLOWED_TOOLS & available, ...))
+> ```
+>
+> 注意那个 `& available`（**集合求交**）——它把"沙箱里允许的工具"和"这一轮真的有"求交，
+> 于是 schema 里只会出现**真的能用**的名字。而 `_discord_rewriter` 更狠：
+> **返回 `None` 就把整个工具丢掉**（`if td is not None: out.append(td)`）。
+>
+> 如果边改边算，后面的 rewriter 拿到的 `available` 就被前面的改动作污染了——
+> **"我引用的工具可用吗"这个判断会依赖于"谁先跑"，而不是事实。**
+>
+> 又是**校验/判断要对着一个稳定基准**，和第 3 章那条同源。
+
+#### ④ "禁止 schema 描述里点名别的 toolset 的工具" —— 一条硬规矩
+
+`tools/AGENTS.md`：
+
+> **Schema descriptions must not name tools from other toolsets** (`browser_navigate` saying
+> "prefer `web_search`"). Those tools may be unavailable (missing key, disabled toolset) and
+> the model hallucinates calls to them. Cross-references are added dynamically in
+> `get_tool_definitions()`.
+
+（**schema 描述里不许点名其他 toolset 的工具**。那些工具可能不可用，模型会幻觉出对它们的调用。
+交叉引用由 `get_tool_definitions()` **动态**添加。）
+
+> 📌 这一条把"**静态写死的提示词**"和"**运行时才知道的事实**"分开了：
+> schema 是**导入时**构建的，那时根本不知道哪些工具会被过滤掉；
+> 所以"我们还有什么工具"这句话**只能在过滤之后**才说得准。
+>
+> 这就是为什么需要 §4③ 那 10 个 rewriter——**它们是"把运行时事实写回 schema"的唯一通道。**
+
+#### ⑤ toolset 别名有两套机制
+
+原文只说了 `_LEGACY_TOOLSET_MAP`（静态映射）。真实还有**动态别名注册表**：
+
+```python
+# tools/registry.py:482
+def register_toolset_alias(self, alias: str, toolset: str) -> None:
+    """Register an explicit alias for a canonical toolset name。"""
+    existing = self._toolset_aliases.get(alias)
+    if existing and existing != toolset:
+        logger.warning("Toolset alias collision: '%s' (%s) overwritten by %s", alias, existing, toolset)
+    self._toolset_aliases[alias] = toolset
+```
+
+同名的别名被指向不同 toolset 时**警告 + 覆盖**（不是拒绝）——因为这是"后来者更清楚"的场景
+（插件知道自己该归到哪个 toolset）。
+
+另外还有**工具名**的旧名映射（原文也没提）：
+
+```python
+# model_tools.py:611
+# Legacy tool-name aliases accepted at every dispatch seam (old sessions/saved
+# prompts keep working); schemas advertise only new names.
+_LEGACY_TOOL_ALIASES = {
+    "todo": "todo_list", "cronjob": "cronjob_manage", "process": "process_manage",
+    "tour": "gui_tour", "tip": "show_tip",
+}
+```
+
+> 📌 **注意这两套别名的方向相反**：
+> - **schema 只宣传新名**（模型看到的永远是 `todo_list`）
+> - **dispatch 接受旧名**（老会话、存下来的提示词里写的 `todo` 还能用）
+>
+> 这就是"**对外收窄、对内兼容**"：**新接口只暴露一种写法，老写法在入口处兜住。**
+> 顺带解释了原文里那个 `todo` 是怎么来的——**那是个旧名**（见 §9）。
+
+#### ⑥ tool defs 也有缓存
+
+```python
+# model_tools.py:204
+_TOOL_DEFS_CACHE_MAX = 8
+def _clear_tool_defs_cache() -> None: ...
+_the_tool_defs_cache_key(...)  # 键里含 config.yaml 的 mtime+size
+```
+
+- 上限 **8** 条（不是无限）
+- 缓存键包含 **config 文件的 mtime + size** → 改了配置自动失效
+
+> 📌 又一次"**缓存必须能被真实事件失效**"（第 3 章那条原则的应用）：
+> 不是"定时刷新"，而是"**配置变了就自动失效**"——
+> 而"配置变没变"用的是文件系统给的 `(mtime, size)`，不需要额外机制。
+
+### 来自《中文精译-04》· ## 5. 分发（Dispatch）
+
+#### ① `handle_function_call()` 的真实顺序：11 步，不是 6 步
+
+原文那张流程图是对的，但漏了**一大半**。真实的 `model_tools.py:867` 是这样：
+
+```python
+def handle_function_call(function_name, function_args, task_id=None, tool_call_id=None,
+                         session_id=None, turn_id=None, api_request_id=None, user_task=None,
+                         enabled_tools=None, skip_pre_tool_call_hook=False,
+                         skip_tool_request_middleware=False, skip_tool_execution_middleware=False,
+                         tool_request_middleware_trace=None, enabled_toolsets=None,
+                         disabled_toolsets=None) -> str:
+```
+
+15 个参数。执行顺序：
+
+| # | 步骤 | 原文有吗 |
+|---|---|---|
+| 1 | `coerce_tool_args()` 参数归一 | ✗ |
+| 2 | **`_LEGACY_TOOL_ALIASES`** 旧工具名映射（`todo` → `todo_list`） | ✗ |
+| 3 | **tool_search 桥**：`tool_search` / `tool_describe` 是目录读取，**内联处理**；`tool_call` 被**拆包**成真实工具名再往下走 | ✗ |
+| 4 | **connectors**（`connectors__<name>__<tool>`）+ `manage_connections` 的可用性闸门 | ✗ |
+| 5 | **请求中间件**（`_apply_request_middleware`） | ✗ |
+| 6 | **agent-loop 守卫**：`if function_name in _AGENT_LOOP_TOOLS: return tool_error(...)` | ✓（原文说的是"直接由 loop 处理"） |
+| 7 | **pre-dispatch 守卫**（`_pre_dispatch_guards`）——包括审批 | ✓（原文只说了 pre-hook） |
+| 8 | **读循环计数重置**：非读/搜类工具会重置"连续读"计数器 | ✗ |
+| 9 | `_execute_tool()` → 最终到 `registry.dispatch()` | ✓ |
+| 10 | post_tool_call hook（带 `duration_ms`） | ✓ |
+| 11 | 错误清洗（`_sanitize_tool_error`） | ✗ |
+
+**第 6 步是真身里的守卫**，值得单独看：
+
+```python
+# model_tools.py:932
+try:
+    if function_name in _AGENT_LOOP_TOOLS:
+        return tool_error(f"{function_name} must be handled by the agent loop")
+```
+
+而那个集合的定义（**注意和原文的差异，见 §9**）：
+
+```python
+# model_tools.py:607
+_AGENT_LOOP_TOOLS = {"todo_list", "memory", "session_search", "delegate_task"}
+```
+
+**第 3 步那个"拆包"设计**值得展开一句：
+
+```python
+# model_tools.py:897
+# Tool Search bridge: tool_search / tool_describe are catalog reads handled
+# inline; tool_call is unwrapped so every downstream hook (pre/post, edit
+# approval, guardrails) sees the real tool name, never the bridge.
+```
+
+（`tool_search`/`tool_describe` 是目录读取，内联处理；
+`tool_call` 被**拆包**，好让每个下游 hook（pre/post、编辑审批、护栏）
+看到的是**真实工具名**，而不是那层桥。）
+
+> 📌 **"包装层不能泄漏到下游"** —— 这是一个通用设计约束。
+> 如果 `tool_call(actual="terminal", args=...)` 这个桥的名字被下游 hook 看到，
+> 那么**审批规则会失效**（审批表里没有叫 `tool_call` 的东西）、
+> **统计会失真**、**护栏看不见真实意图**。
+>
+> 和第 3 章"临时层不能进历史"是同一类要求的另一面：
+> **中介层的存在不应该改变被中介双方看到的事实。**
+
+#### ② 错误包装其实是**三层**，而且错误文本有上限
+
+原文说了两层，真实还有**第三层**（在 `registry.dispatch` **之前**的 `_execute_tool`），
+以及**上限控制**：
+
+```python
+# tools/registry.py:25
+_MAX_TOOL_ERROR_CHARS = 2048
+_TOOL_ERROR_TRUNCATION_MARKER = "… [truncated]"
+_MAX_LOGGED_ERROR_CHARS = 8192
+
+def _bound_error_text(text: str) -> str: ...
+def _bound_json_error_result(result: str) -> str: ...
+```
+
+```python
+# tools/registry.py（dispatch 的 except 分支）
+except Exception as e:
+    # exc_info already renders the exception, so keep the message copy bounded.
+    logger.exception("Tool %s dispatch error: %s", name, _bound_error_text(str(e)))
+    # Sanitize so framing tokens/CDATA/fences in exception text aren't structural noise.
+    raw = f"Tool execution failed: {type(e).__name__}: {e}"
+    try:
+        from model_tools import _sanitize_tool_error
+        sanitized = _sanitize_tool_error(raw)
+    except Exception:
+        sanitized = raw  # defensive: never let the sanitizer block error propagation
+    return tool_error(sanitized)
+```
+
+两个原文没说的关键设计：
+
+**(a) 错误文本必须截断（2048 / 8192）。** 注释说明了理由链：
+
+> `_bound_error_text` 的 docstring：*the error body is bounded so a raw
+> exception can't bloat history across retries.*
+>
+> （错误体有上限，**这样一个原始异常不会在重试中把历史撑爆**。）
+
+> 📌 **异常文本会进历史，历史会随每次请求重发，所以"一条超长异常"的成本是复利的。**
+> 一个 200KB 的 traceback 会在**之后每一轮**都被重新发送。
+>
+> 这和第 3 章"截断"是同一个洞察：**进上下文的东西要有上限**。
+> 只不过第 3 章管的是工具读回来的内容，这里管的是异常。
+
+**(b) 错误文本必须清洗。** `_sanitize_tool_error` 的理由（注释）：
+
+> Sanitize so framing tokens/CDATA/fences in exception text aren't structural noise.
+>
+> （清洗掉异常文本里的**框架标记 / CDATA / 代码围栏**，免得它们变成结构噪声。）
+
+> 📌 这是**注入防御**：异常信息里可能**碰巧**（或恶意地）含有
+> `<|im_start|>`、`]]>`、` ``` ` 这类在别处有结构性含义的字符串。
+> 一个工具的报错信息不应该能把消息格式搞坏。
+>
+> 而且这段代码自己还包了 try/except，理由是：
+> *never let the sanitizer block error propagation*——
+> **清洗失败也必须让错误传出去。** 这是一个"辅助机制不能比主流程更严格"的范例。
+
+#### ③ ⚠️ agent 级工具：**有两层不同的集合，14 个 vs 4 个**
+
+这是本章**最重要的一处出入**。原文说"四个工具被拦截"，但真实有两层：
+
+| 集合 | 在哪 | 数量 | 作用 |
+|---|---|---|---|
+| **`INLINE_TOOL_EXECUTORS`** | `agent/inline_tool_executors.py` | **14** | **执行表**：agent loop 拿它来跑 agent 级工具 |
+| **`_AGENT_LOOP_TOOLS`** | `model_tools.py:607` | **4** | **守卫**：这 4 个如果到了 dispatch，返回错误 |
+| 关系 | —— | —— | **前者 ⊇ 后者**（4 个全在 14 个里） |
+
+14 个的真身：
+
+```python
+# agent/inline_tool_executors.py（顺序即历史上 execute_tool_calls_sequential 的 if/elif 顺序）
+INLINE_TOOL_EXECUTORS = {
+    "todo_list":        _tool("tools.todo_tool", ...),
+    "message_agent":    _tool("tools.bot_mode_dm", ...),
+    "session_search":   _session_search,
+    "memory":           _memory,
+    "clarify":          _tool("tools.clarify_tool", ...),
+    "read_terminal":    _callback_tool("tools.read_terminal_tool", ...),
+    "desktop_preview":  _desktop_preview,
+    "drive_preview":    _callback_tool("tools.drive_preview_tool", ...),
+    "annotate_preview": _callback_tool(...),
+    "read_window_below": _callback_tool(...),
+    "gui_tour":         _callback_tool(...),
+    "manage_connections": _manage_connections,
+    "setup_mcp":        _setup_mcp_shim,
+    "delegate_task":    lambda agent, args, ctx: ...,
+}
+```
+
+**只在 14 里、不在 4 里的那 10 个**：
+
+```
+annotate_preview, clarify, desktop_preview, drive_preview, gui_tour,
+manage_connections, message_agent, read_terminal, read_window_below, setup_mcp
+```
+
+看这 10 个的**共同特征**：它们需要的是 **agent 的 callback / 会话界面**，
+**不是某个 Store**：
+
+| 工具 | 它需要什么 |
+|---|---|
+| `clarify` | `agent.clarify_callback`（要弹窗问用户） |
+| `read_terminal` / `desktop_preview` / `drive_preview` / `annotate_preview` / `read_window_below` / `gui_tour` | 桌面/终端界面回调 |
+| `message_agent` | Bot Mode 的会话身份 + task_id |
+| `manage_connections` / `setup_mcp` | 网关连接配置 + session_id |
+
+> 📌 **所以原文给的理由（"需要 agent 级状态（TodoStore、MemoryStore 等）"）是不完整的。**
+>
+> 准确的说法是：**凡是"执行需要 agent 对象本身"的工具**都要走这张表——
+> 需要 Store 只是其中一类，**需要 callback / 界面 / 会话身份是另一类，而且是更大的一类**。
+>
+> 这个区分有实际后果：
+> - `_AGENT_LOOP_TOOLS`（4 个 = 需要 Store 的）**还要额外挡 dispatch**，
+>   因为它们**功能上不该被独立调用**（todo 的状态必须由 loop 管）
+> - 那 10 个 callback 类工具**不需要那个守卫**——它们是"只有在特定界面下才有意义"，
+>   如果界面不在，`check_fn` 或 toolset 解析阶段就把它过滤掉了（见 §4）
+>
+> 一句话：**"需要 agent 状态"和"需要 agent 界面"是两种不同的依赖，
+> 原文把它们合成了一种，于是数量少算了 10 个。**
+
+#### ④ async 桥接的**真实**三条路
+
+原文三句话是对的，实现在 `model_tools.py:92`，比原文复杂得多：
+
+```python
+def _run_async(coro):
+    """Run a coroutine from sync code; safe under a running loop (gateway/RL env)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        # Inside a running loop: run in a fresh thread whose loop we keep a
+        # reference to, so on timeout we can cancel the task inside it
+        # (ThreadPoolExecutor.cancel() is a no-op on a running worker).
+        ...
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        # Carry profile + approval/sudo context so get_hermes_home() resolves correctly.
+        from tools.thread_context import propagate_context_to_thread
+        future = pool.submit(propagate_context_to_thread(_run_in_worker))
+        try:
+            return future.result(timeout=300)
+        except concurrent.futures.TimeoutError:
+            # Cancel inside the worker's own loop so the thread can wind down.
+            ...
+            raise
+        finally:
+            pool.shutdown(wait=False)  # never block the caller on a stuck coroutine
+```
+
+**⚠️ 真实的分支判据不是"CLI / 网关"，而是"在哪个线程 + 有没有 running loop"：**
+
+```python
+# model_tools.py:142（上面那段 if 之后）
+    if threading.current_thread() is not threading.main_thread():
+        return _get_worker_loop().run_until_complete(coro)
+    return _get_tool_loop().run_until_complete(coro)
+
+def _get_tool_loop():
+    """Long-lived event loop for async tool handlers on the main thread."""
+
+def _get_worker_loop():
+    """Persistent event loop for the current worker thread (thread-local)."""
+```
+
+| 真实条件 | 用哪个 loop | 保住了什么 |
+|---|---|---|
+| 有 running loop（网关 / RL 环境） | 一次性线程 + 它自己的 loop | 不嵌套，且超时时能在**那个 loop 里**取消 |
+| **非主线程**、无 running loop | `_get_worker_loop()`（**线程局部**常驻） | 每个 worker 线程一个，互不干扰 |
+| **主线程**、无 running loop | `_get_tool_loop()`（**进程级**常驻） | async client 的连接池活着 |
+
+> 📌 文档那三个名字（CLI / 网关 / worker）是这三种组合的**常见场景**，不是代码里的判据。
+> 区别有实际后果：**任何"新起的线程里调 async 工具"都走第二条路**，
+> 不管它是不是文档说的"并发工具线程"。
+
+这段里藏着**四个**原文没说的设计：
+
+**a) 为什么"有 loop 时"不能直接 `run_until_complete`？**
+因为**你不能在一个已经跑着的 loop 里再跑一个 loop**（`RuntimeError`）。
+也不能用 `asyncio.run()`（它要求当前线程没有 running loop）。
+所以只能**扔到另一个线程**去跑。
+
+**b) 为什么不用 `ThreadPoolExecutor.cancel()` 做超时取消？** 注释直接给了答案：
+
+> *ThreadPoolExecutor.cancel() is a no-op on a running worker*
+> （对已经在跑的 worker，`cancel()` 是空操作。）
+
+于是必须**先把 worker 里的 loop 引用拿出来**，超时时用
+`loop.call_soon_threadsafe(t.cancel)` **在它自己的 loop 里**取消任务。
+
+> 📌 **"取消"必须在被取消对象自己的调度器上做。** 这是并发里的通用规律：
+> 跨线程取消一个正在跑的任务，只有"投递到它的 loop 里"是安全的。
+> 对照第 2 章那条：**`threading.Event` 只是旗子，不表达"什么时候停"**——
+> 这里是同一件事的另一面：**旗子要有人去看，而且要看对地方。**
+
+**c) 超时 300 秒** —— 有明确上限，不是无限等。
+
+**d) `finally: pool.shutdown(wait=False)`** —— 注释：*never block the caller on a
+stuck coroutine*（**绝不让调用方被一个卡住的协程阻塞**）。
+
+> 📌 这行是"**善后工作不能比主流程更危险**"的范例：
+> 关线程池本来是好习惯，但如果 `wait=True`，一个卡死的协程会让**整条路径**挂住——
+> 于是"清理"变成了新的故障点。**没有 wait 是一种有意的放弃。**
+
+**e) `propagate_context_to_thread`** —— 注释说明了目的：
+*Carry profile + approval/sudo context so `get_hermes_home()` resolves correctly.*
+（**带上 profile + 审批/sudo 上下文，好让 `get_hermes_home()` 解析正确。**）
+
+这是"一个进程服务多个 profile"那条大原则的又一次出现：
+**跨线程会丢掉上下文，所以要显式搬运。** `tools/AGENTS.md` 甚至点名了正确做法：
+
+> New threads from scoped code use `agent.memory_provider.spawn_context_thread`
+> (a bare `threading.Thread` drops the scope).
+
+### 来自《中文精译-04》· ## 6. 危险命令审批（`DANGEROUS_PATTERNS`）
+
+#### ① ⚠️ `DANGEROUS_PATTERNS` **不在 `tools/approval.py` 里**
+
+实测位置：
+
+```console
+$ grep -rn "^DANGEROUS_PATTERNS" tools/
+tools/approval_detection.py:203:DANGEROUS_PATTERNS = [
+tools/approval_detection.py:440:DANGEROUS_PATTERNS_COMPILED = [(re.compile(p, _RE_FLAGS), d) for p, d in DANGEROUS_PATTERNS]
+```
+
+**它在 `tools/approval_detection.py`。** `approval.py` 是那个**门面**（1336 行），
+按主题拆成了 8 个文件：
+
+| 文件 | 该看的时候 |
+|---|---|
+| `approval.py`（1336 行） | 门面：公开入口 |
+| **`approval_detection.py`** | **`DANGEROUS_PATTERNS` 在这里（107 条）** |
+| `approval_context.py` | 审批上下文（会话/profile 作用域） |
+| `approval_floors.py` | "底线"——无论如何都不能自动批准的东西 |
+| `approval_human_wait.py` | 等人类回答 |
+| `approval_gateway_wait.py` | 等网关（消息平台）回答 |
+| `approval_prompt.py` | 提示怎么渲染 |
+| `approval_smart.py` | 辅助 LLM 的自动批准 |
+
+> 📌 这是本仓库的**门面 + 兄弟**结构（`tools/AGENTS.md` 顶层的说法：
+> *Find code by topic, not by facade*）：
+>
+> > **Find code by topic, not by facade:** `grep -rn "def name" <dir>/<stem>_*.py`.
+> > Reading the facade first is the expensive way.
+>
+> （**按主题找代码，不要按门面找。先读门面是更贵的做法。**）
+>
+> 开发者文档说"定义在 `tools/approval.py`"——**按它去找会读完 1336 行才发现在别的文件**。
+> 这是"文档跟不上重构"的典型：**文件拆分之后，文档里的路径就成了误导**。
+
+#### ② 107 条模式，而且**预编译**
+
+```console
+$ DANGEROUS_PATTERNS 的条数
+107
+```
+
+原文举了 7 类，真实是 **107 条**。而且它们被**预编译一次**：
+
+```python
+# tools/approval_detection.py:440
+DANGEROUS_PATTERNS_COMPILED = [(re.compile(p, _RE_FLAGS), d) for p, d in DANGEROUS_PATTERNS]
+```
+
+> 📌 **`re.compile` 缓存的意义**：每个命令都要对**全部 107 条**跑一遍匹配。
+> Python 的 `re` 模块内部有编译缓存（默认 512 条），但**显式预编译**有两个好处：
+> ① 不受缓存上限/淘汰影响；② `_RE_FLAGS` 统一（大小写、多行等），
+> 免得某一条忘记加 flag 导致漏检。
+>
+> **安全检测里"某一条正则没匹配上"是静默失败**——所以要消除这种可能性。
+
+#### ③ 8 个文件的分工说明了审批的真实复杂度
+
+原文的 5 步流程是对的，但**"Smart 审批"和"网关模式"各自是一整个文件**。
+这说明真实系统里这两个不是"分支"，而是**两套独立的等待机制**：
+
+```
+approval_human_wait.py     ← CLI：等人在终端里回答
+approval_gateway_wait.py   ← 网关：等人从消息平台回答（跨进程！）
+approval_smart.py          ← 辅助 LLM 判断（不用等人）
+approval_floors.py         ← 底线：这些即使 smart 说 OK 也不自动批
+```
+
+**`approval_floors.py` 是最值得注意的一个**——它说明系统里有一条
+"**无论辅助判断说什么都不放行**"的底线。
+
+> 📌 **这是"LLM 判断"这类机制的必备补丁。**
+> 让一个 LLM 来判断"这个危险命令其实安全吗"很方便，但它的**失效模式是放行**——
+> 所以必须有**不经过它的**一层。这和"fail-safe"是同一个方向：
+> **当你不确定判断对不对时，选更保守的那个默认值。**
+
+### 来自《中文精译-04》· ## 7. 终端 / 运行时环境
+
+#### ① 后端清单：**文档是对的**，而且这里文档比 AGENTS.md 更准
+
+```python
+# tools/terminal_tool_backends.py:54
+_BUILTIN_BACKENDS = "local, docker, singularity, modal, daytona, vercel_sandbox, ssh"
+```
+
+**7 个，和原文完全一致。** 顺带一提：`tools/AGENTS.md` 里列的是
+`(local, docker, ssh, modal, daytona, singularity)` —— **6 个，少了 `vercel_sandbox`**。
+所以这一节**是文档更准**（虽然 AGENTS.md 那行有个 "等"字兜着）。
+
+> 📌 这提醒一件事：**"更靠近代码的文档"也不保证更准。**
+> 两边都要按文件系统核。
+
+还有两个原文没说的分类：
+
+```python
+# tools/terminal_tool_config.py:64
+_CONTAINER_BACKENDS = frozenset({"docker", "singularity", "modal", "daytona", "vercel_sandbox"})
+
+# tools/terminal_tool.py:579
+_DEFAULT_CWD_BY_BACKEND = {"ssh": "~", "vercel_sandbox": _VERCEL_SANDBOX_DEFAULT_CWD}
+```
+
+- **5 个是"容器类"后端**（会改变文件可见性、网络、生命周期）
+- **默认 cwd 是每后端不同的**——`ssh` 默认 `~`（远程主机的家），
+  **`local` 没有条目**（因为本地就继承当前目录）
+
+> 📌 **"默认 cwd 按后端不同"这件事，是"同一个工具在不同后端语义不同"的最小例子。**
+> 第 3 章讲过"远端后端不给主机信息"（`build_environment_hints`）——
+> 那是**提示词层**的应对；这里是**执行层**的应对。
+> 同一条约束在两个地方各处理一次，因为它们是两个不同的层。
+
+#### ② 每个后端是一个"环境类" + 一个"构建器"
+
+```python
+# tools/terminal_tool_backends.py:184
+"vercel_sandbox": (lambda: importlib.import_module("tools.environments.vercel_sandbox")
+                   .VercelSandboxEnvironment, ...)
+```
+
+**注意那个 `lambda` + `importlib`** —— 这是**懒加载**：
+只有在真的要用这个后端时才 import 对应的环境模块。
+
+`tools/environments/` 里的实现文件：
+
+```
+base.py            ← 抽象基类
+base_output.py     ← 输出处理
+base_session_env.py← 会话型环境
+base_wait.py       ← 等待语义
+local.py           ← ★ 本地（还有 3 个 local_*.py 处理策略/路径探测）
+docker.py  docker_egress.py
+ssh.py
+modal.py   modal_utils.py  managed_modal.py
+daytona.py
+singularity.py
+vercel_sandbox.py
+```
+
+> 📌 **`base_*.py` 有 4 个** —— 这说明"环境"这个抽象被拆成了几个独立的关注点：
+> 环境本身 / 输出 / 会话 / 等待。**不是一个大基类。**
+>
+> 对照 `tools/AGENTS.md` 的形状规则：
+> *Adding a backend = a new sibling or provider entry in the existing table,
+> never an `elif` on a backend name.*
+> （加后端 = 加一个兄弟文件或在现有表里加一条，**绝不是 `elif` 后端名**。）
+
+#### ③ ⭐ 每个 spawn 都走同一个 env 构建器（原文完全没提，但是 hard rule）
+
+`tools/AGENTS.md` 把这条写得很重：
+
+> **Every spawn goes through one env builder.** `environments/local.py::build_subprocess_env`
+> (+ `hermes_constants.apply_subprocess_home_env`, `env_passthrough.py::resolve_passthrough_value`)
+> is how a terminal, `execute_code`, background process, delegation child, ACP or MCP stdio
+> child gets its environment.
+
+（**每一次 spawn 都走同一个 env 构建器**：终端、`execute_code`、后台进程、
+委派子 agent、ACP 子进程、MCP stdio 子进程——**它们的运行环境都由同一个函数决定**。）
+
+以及 profile 版本：
+
+```python
+environments/local.py::served_profile_child_env(target_home=, inherit_credentials=)
+```
+
+它做三件事：
+1. 丢掉启动 profile 的 `.env` / `TERMINAL_*` 残留（`strip_launch_profile_env`）
+2. 钉住目标 home
+3. **只叠加目标自己的**密钥
+
+而禁止的做法写得非常直白：
+
+> `os.environ.copy()` / `dict(os.environ)` **pins the launch profile**;
+> contextvars **do not cross process boundaries**, so resolve before `Popen`.
+
+（`os.environ.copy()` 会把**启动 profile** 钉进去；contextvar **不跨进程边界**，
+所以要在 `Popen` 之前就解析好。）
+
+> 📌 这是"**一个进程服务多个 profile**"这条原则在**进程创建**这一层的表现，
+> 也是本章第三次看到它（前两次：`check_fn` 缓存分键、`_run_async` 搬运上下文）。
+>
+> 规律：**凡是"隐式继承当前进程状态"的地方，都是 profile 泄漏的入口。**
+> `os.environ.copy()` 看起来是"原样传下去"（无害），实际是"把**启动** profile 传给**服务** profile"。
+>
+> 而且**它不会报错**——子进程会拿到一份**完整、合法、但是错的**环境。
+
+#### ④ `process_registry` 那一大段：逐句拆
+
+原文那段话密度很高，值得一句一句对：
+
+| 原文（英） | 中文 | 它在防什么 |
+|---|---|---|
+| `process_registry_checkpoint.py` owns running-process checkpoints and PID-safe adoption | `checkpoint` 模块管**运行中进程**的检查点和**PID 安全接管** | 重启后认领"上次那个 PID 还是我要的那个吗" |
+| Completed output is separate: `process_registry_results.py` writes one **atomic, redacted receipt** per process under the profile's `logs/process-results/` | **已完成**的输出分开管：每个进程一份**原子、脱敏**的"回执" | 把"进程活着"和"进程说完了什么"解耦 |
+| Producers cannot overwrite another parent's results by rewriting the shared PID checkpoint | 生产者**不能**通过改共享的 PID 检查点去覆盖**另一个父**的结果 | 两个父 agent 都起了进程时，A 不能借改共享文件抹掉 B 的输出 |
+| The registry persists the receipt **before** releasing its completion event | 注册表**先落盘回执、再**释放完成事件 | 顺序反了 → 等事件的人醒来时可能读不到回执 |
+| one-shot linger waits on that event | 一次性 linger 等的是那个事件 | —— |
+| Query methods load retained snapshots **without adopting PIDs or enqueuing notifications** | 查询方法只读快照，**不接管 PID、不入队通知** | **"看一眼"不该有副作用**——否则一次查询会意外启动接管流程 |
+| Reads require the **commissioning durable session** or its compression continuation | 读要求是**下单的那个持久会话**（或它的压缩续体） | **只拿着 handle 不足以授权**读一个留存结果 |
+| The registry captures that owner **before starting any output reader** | 注册表在启动任何输出读取器**之前**就记下所有者 | 读取器线程起来之后才知道 owner → 中间有个窗口 |
+| preserves the producer's profile context in reader threads | 在读取器线程里保留**生产者**的 profile 上下文 | 又一次 profile 作用域（第 3 次在原文里出现） |
+| Receipt redaction is **forced independently of live-output opt-out** | 回执脱敏是**强制的**，与"实时输出关不关"无关 | 有人为了隐私关掉实时输出，**不能因此让落盘的回执不脱敏** |
+| retention is bounded **by age and count** | 留存有**时间和数量**两个界 | 只按时间 → 高产进程会堆爆磁盘；只按数量 → 老的敏感数据留着 |
+
+> 📌 **这一段的每一句都是一个具体的失效模式。**
+> 读它的正确姿势不是"记住这些规则"，而是**注意它一条都没说"要注意安全"**——
+> 它说的全是"**谁在什么时刻能读到什么**"。
+>
+> 这一段的价值在于它是一个**范例**：怎么把"并发 + 多租户 + 持久化"这三件事
+> 写成一串**可验证的顺序约束**（先 X 后 Y、读不触发写、owner 在启动读取器前就钉住）。
