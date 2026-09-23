@@ -491,6 +491,70 @@ cost a blocking probe.`**
 
 ## 五、分发（Dispatch）
 
+### 工具清单在请求里的位置（**第 3 章 ↔ 第 4 章的接缝**，原文没讲）
+
+> 这一节是**第 3 章和第 4 章的接缝**。读第 4 章时很容易把工具清单想成"提示词的一部分"，
+> 从而以为它该归到第 3 章的三层里。**位置不对，但耦合是真的** —— 下面把两半都说清。
+
+**① 物理位置：它是 payload 的另一个顶层字段，不在三层里面**
+
+```python
+payload = {
+    "model": ...,
+    "messages": api_messages,      # ← 第 3 章那三层提示词住在这里面（messages[0] 是 system）
+    "tools": model_tools.get_tool_definitions(),   # ← 工具清单在**旁边**，和 messages 平级
+    "tool_choice": "auto",
+    "temperature": 0.3,
+}
+```
+
+第 3 章的三层（stable / context / volatile）划分的是**系统提示词那个字符串**。
+工具清单是另一个块，**形式上不属于任何一层**。
+
+**② 但它和三层共享同一个「缓存前缀」—— 这才是关键**
+
+第 3 章的核心原则是"按**变化频率**从低到高排，让最长公共前缀尽量长"。
+工具清单虽然不在字符串里，但它**吃同一个缓存前缀**。三处证据：
+
+| # | 证据 | 说明 |
+|---|---|---|
+| ① | `agent/bedrock_adapter.py:916` | 缓存点被**显式打在 tools 块的末尾**：`{"tools": converse_tools + [dict(_CACHE_POINT)] if "tools" in cache_at else ...}` |
+| ② | Hermes 顶层 `AGENTS.md` | 把 **swaps toolsets** 和 **rebuilds the system prompt** 列成**同一类**缓存失效事件：*Anything that mutates past context, **swaps toolsets**, reloads memories, or **rebuilds the system prompt** mid-conversation invalidates that cache* |
+| ③ | **提示词里埋的「能力指纹」**（`agent/conversation_loop.py:609` 的 `_bot_chat_prompt_stale()`，机制在 `tools/bot_mode_probe.py`） | 存盘的提示词里**嵌了一个能力指纹**，对不上就**故意重建一次**。docstring 原话：*a deliberate **once-per-change** rebuild*。⚠️ 这处是 **Bot Chat 专属**的，不是通用机制 —— 但它证明"**能力面变了 → 提示词该重建**"这个模式在 Hermes 里是**被显式处理**的，而不是碰巧 |
+
+> 📌 ③ 那处还有两个细节值得抄（都是这条原则的落地方式）：
+>
+> - **"一次性"**：重建后打上标记（stamped），**不会反复触发**——否则每轮都失效。
+> - **探测失败 fail closed 到"复用"**：docstring 原话
+>   *probe failures fail closed to "reuse" so the cache is kept* ——
+>   宁可留着旧提示词，也不误伤缓存。
+>   （判据方向和 `check_fn` 的 fail-safe **相反**：那里失败=不可用（少给），
+>   这里失败=复用旧的（保住缓存）。**方向由"失败时哪边代价更大"决定。**）
+
+**为什么"共享缓存前缀/绑同一失效事件"比"归到 volatile 层"更准**：
+
+- volatile 层只是**拼装顺序上的一个位置**（在字符串里排最后）。
+- 缓存前缀是**代价** —— 它被失效要重新 prefill 整个上下文，而且**随上下文增长**
+  （第 3 章实测每轮 +806 字符）。
+- 所以真正的约束不是"它该排第几"，而是"**它的变化必须绑到一个已经要失效的事件上**"。
+
+> 📌 一句话：**三层管的是"提示词字符串内部怎么排"；工具清单是并排的另一个块，
+> 但它和提示词共享同一个缓存前缀、同一个失效事件。**
+> 这条和第 3 章里"时间戳该绑在压缩边界上"是同一条原则的第二次应用：
+> **任何会变的东西，都要绑到一个已经发生失效的事件上，而不是引入新的失效点。**
+
+**③ 顺带钉死一个常见混淆：AST 检查 / toolset / `check_fn` 判的不是同一件事**
+
+| 阶段 | 它回答的问题 | 判据 | 不通过的后果 |
+|---|---|---|---|
+| **AST 检查**（§二） | 这个文件里有工具吗？→ **import 它吗** | 模块体里有没有那句注册 | 文件不被 import → 工具**根本不存在** |
+| **toolset**（§四） | 这类能力**在这个界面上**存在吗 | 界面 / 会话属性 | 工具存在但**模型看不见** |
+| **`check_fn`**（§三） | **这个环境里**它现在能用吗 | 凭据 / 服务 / 二进制在不在 | 同上（也不进那包 JSON） |
+
+★ **AST 检查跟"暴露"无关** —— 它只管"发现"，决定的是工具**存不存在**。
+"存在但不暴露"是一种正常状态，`tests/test_tools_runtime.py` 里有一条就是钉它的：
+注册进台账、但没被任何 toolset 点名 → **不在那包 JSON 里**。
+
 ### mini 版怎么做的
 
 **一层**：`model_tools.handle_function_call()`。顺序是四道闸门：

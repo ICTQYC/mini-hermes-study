@@ -291,6 +291,12 @@ Toolset 是**具名的工具捆**。Hermes 通过以下途径解析：
 
 ## 5. 分发（Dispatch）
 
+> 📌 **和第三章的接缝**：工具清单**不是**提示词的一部分——它是 API 请求 payload 的
+> **另一个顶层字段**（和 `messages` 平级）。但它**和三层提示词共享同一个缓存前缀**，
+> 而且"换工具集"与"重建提示词"被绑成**同一个失效事件**（提示词里埋了"能力指纹"，
+> 对不上就故意重建一次）。所以它不属于 volatile 层，却和 volatile 层受同一个约束管。
+> 展开见《源码讲解-04-ToolsRuntime.md》§五第一小节。
+
 ### 原文
 
 > At runtime, tools are dispatched through the central registry, with agent-loop exceptions
@@ -337,7 +343,7 @@ Return result string (or JSON error)
 |---|---|
 | Model response with tool_call | 模型返回了带 `tool_call` 的响应 |
 | agent loop (`agent/conversation_loop.py`, via `run_agent.py`'s `AIAgent` facade) | 进入 agent loop（真身在 `agent/conversation_loop.py`，经 `run_agent.py` 的 `AIAgent` 门面进去） |
-| `model_tools.handle_function_call(name, args, task_id, user_task)` | 调 `handle_function_call`，参数是工具名、参数、任务 id、用户任务 |
+| `model_tools.handle_function_call(name, args, task_id, user_task)` | 调 `handle_function_call`，参数工具名、参数、任务 id、用户任务 |
 | `[Agent-loop tools?]` → handled directly by agent loop (todo, memory, session_search, delegate_task) | 【是不是 **agent 级工具**？】→ 是则**由 agent loop 直接处理**，不往下走。原文点名四个：`todo` / `memory` / `session_search` / `delegate_task` |
 | `[Plugin pre-hook]` → `invoke_hook("pre_tool_call", ...)` | 【**插件前置钩子**】→ 触发 `pre_tool_call` |
 | `registry.dispatch(name, args, **kwargs)` | 交给注册表分发 |
@@ -383,16 +389,6 @@ handler 是 async 时，`_run_async()` 把它桥到同步分发路径上：
 - **CLI 路径（没有跑着的 loop）** —— 用一个**常驻事件循环**，好让缓存住的 async client 活着
 - **网关路径（有跑着的 loop）** —— 起一个**一次性线程**跑 `asyncio.run()`
 - **worker 线程（并发工具）** —— 用存在线程局部存储里的**每线程常驻 loop**
-
-### 【源码】真身
-
-> 📌 **本节的源码深挖（282 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
 
 ### 为什么这么设计 / 砍掉会怎样
 
@@ -446,16 +442,6 @@ terminal 工具集成了定义在 `tools/approval.py` 里的危险命令审批�
 
 **5. 永久允许清单** —— "永久允许"选项把模式写进 `config.yaml` 的 `command_allowlist`，
 跨会话持久。
-
-### 【源码】真身
-
-> 📌 **本节的源码深挖（76 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
 
 ### 为什么这么设计 / 砍掉会怎样
 
@@ -519,16 +505,6 @@ Smart 审批     → 辅助 LLM → 一次额外 API 调用
 > bounded by age and count.
 
 这一段逐句翻译见 §7.2 ——它值得单拆，因为**每一句都在防一个具体的竞态或越权**。
-
-### 【源码】真身
-
-> 📌 **本节的源码深挖（132 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
 
 ### 为什么这么设计 / 砍掉会怎样
 
