@@ -8,22 +8,6 @@
 > 📌 **本文里 mini 版的数字（行数 / 工具数 / 测试条数）锚的是标签 `ch04-tools-runtime`**
 > —— 也就是第 4 章末的状态。行号会随章节漂移，标签不会：
 > `git show ch04-tools-runtime:mini-hermes/tools/registry.py`。
->
-> **读法 —— 第 4 章定稿的职能边界（往后每章都按这个来）**
->
-> | 成分 | 在不在本文 | 不在的话去哪了 |
-> |---|---|---|
-> | 原文的段落式**翻译** | ✅ **本文主体** | — |
-> | `【源码】` **要点**（看懂原文必需的那部分） | ✅ 保留 | — |
-> | 「为什么这么设计 / 砍掉会怎样」 | ✅ 保留（每节末） | — |
-> | `【源码】` **长版深挖**（签名清单 / 规模数字 / 边角设计 / 逐句拆） | ❌ | 《源码讲解-04》**附录 B** |
-> | `【动手】` mini 版现状（**动手前**的记录） | ❌ | 实现后对照见《源码讲解-04》各节首段 |
-> | mini vs Hermes 的**差异区分** | ❌ | 《源码讲解-04》§一~§十二 |
->
-> 一句话：**精译只负责"看懂原文在讲什么"**。深挖和差异留给后面实现 / 讲解代码的阶段。
->
-> 📌 **看不懂就问。** 本文是故意留薄的 —— 哪一段你看着费劲，说一声，
-> 我把对应的深挖从《源码讲解-04》附录 B 搬回来（那里面有全部细节和出处，没丢）。
 
 [TOC]
 
@@ -98,22 +82,6 @@ registry.register(
 
 原文的结论：**除非有注册表消费者确实需要不同的元数据，否则描述只在 schema 里写一次。**
 
-### 【源码】真身
-
-> 📌 **这条链的全景深读已移到 《源码讲解-04-ToolsRuntime.md》**§九**** —— 拿真实工具 `read_terminal`（89 行）
-> 从注册一路走到结果，共 11 步，并给出"每一步漏了会怎样"的对照表。
->
-> **为什么搬走**：它讲的是**一条链**（横跨本章 §1/§2/§4/§5 四节），不是某一节的
-> "【源码】真身"。本节只留 `register()` 自己的机制。
-
-> 📌 **本节的源码深挖（229 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
-
 ### 为什么这么设计 / 砍掉会怎样
 
 **为什么"自注册"而不是"一张中央表列所有工具"？**
@@ -179,18 +147,6 @@ def discover_builtin_tools(tools_dir=None):
 1. **MCP 工具** —— `tools.mcp_tool_discovery.discover_mcp_tools()` 读 MCP 服务器配置，
    注册来自外部服务器的工具。
 2. **插件工具** —— `hermes_cli.plugins.discover_plugins()` 加载用户/项目/pip 插件。
-
-### 【源码】真身
-
-真实的 `discover_builtin_tools()` 比原文的简化版多**五件事**。
-
-> 📌 **本节的源码深挖（209 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
 
 ### 为什么这么设计 / 砍掉会怎样
 
@@ -260,14 +216,6 @@ CHECK_FN_CACHE_BYPASS = ""          # 哨兵：强制不走缓存
 | `_CHECK_FN_CACHE_MAX` | **512** | 缓存条目上限 |
 | `CHECK_FN_CACHE_BYPASS` | `""` | 一个哨兵值，用它可以**绕过缓存** |
 
-> 📌 **本节的源码深挖（200 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
-
 ### 为什么这么设计 / 砍掉会怎样
 
 **`check_fn` 存在的根本原因**是 `narrow waist` 那条铁律（`AGENTS.md`）：
@@ -320,16 +268,6 @@ Toolset 是**具名的工具捆**。Hermes 通过以下途径解析：
 带 `_tools` 后缀的旧 toolset 名（如 `web_tools`、`terminal_tools`）通过
 `_LEGACY_TOOLSET_MAP` 映射到现代工具名，用于向后兼容。
 
-### 【源码】真身
-
-> 📌 **本节的源码深挖（176 行）已移到《源码讲解-04-ToolsRuntime.md》附录 B**。
-> 这里只留「看懂原文」需要的部分；真实实现的细节 / 清单 / 规模数据去那边看，
-> 或者直接问我把那一段搬回来。
-
-> 📌 **本节的「mini 版现状（动手前）」已移除** —— 第 4 章已实现完，那段记录现在是**错的**
-> （它写着「 mini 版还没有 check_fn 」）。实现后的对照看《源码讲解-04》对应节的第一段；
-> 原事件可用 `git show 28e73f3:中文精译-04-ToolsRuntime.md` 找回。本章要做什么，见 §10 那张表。
-
 ### 为什么这么设计 / 砍掉会怎样
 
 **为什么要有 toolset 这一层，而不是直接给"工具名白名单"？**
@@ -363,6 +301,13 @@ agent loop 例外。）
 
 #### 原文给的流程
 
+原文这里有个小标题和一句引子（这些精译里之前漏了）：
+
+> **Dispatch flow: model tool_call → handler execution**
+> When the model returns a `tool_call`, the flow is:
+
+（**分发流程：模型的 tool_call → 真正执行 handler**。当模型返回一个 `tool_call` 时，流程如下：）
+
 ```
 Model response with tool_call
     ↓
@@ -385,6 +330,27 @@ Return result string (or JSON error)
     ↓
 [Plugin post-hook] → invoke_hook("post_tool_call", ...)
 ```
+
+每个节点的中文意思（**方括号 = 判断/分支**，不是顺序执行的一步）：
+
+| 原文节点 | 中文 |
+|---|---|
+| Model response with tool_call | 模型返回了带 `tool_call` 的响应 |
+| agent loop (`agent/conversation_loop.py`, via `run_agent.py`'s `AIAgent` facade) | 进入 agent loop（真身在 `agent/conversation_loop.py`，经 `run_agent.py` 的 `AIAgent` 门面进去） |
+| `model_tools.handle_function_call(name, args, task_id, user_task)` | 调 `handle_function_call`，参数是工具名、参数、任务 id、用户任务 |
+| `[Agent-loop tools?]` → handled directly by agent loop (todo, memory, session_search, delegate_task) | 【是不是 **agent 级工具**？】→ 是则**由 agent loop 直接处理**，不往下走。原文点名四个：`todo` / `memory` / `session_search` / `delegate_task` |
+| `[Plugin pre-hook]` → `invoke_hook("pre_tool_call", ...)` | 【**插件前置钩子**】→ 触发 `pre_tool_call` |
+| `registry.dispatch(name, args, **kwargs)` | 交给注册表分发 |
+| Look up ToolEntry by name | 按名字查出那条 `ToolEntry` |
+| `[Async handler?]` → bridge via `_run_async()` | 【handler 是 **async** 的？】→ 经 `_run_async()` **桥接**到同步路径 |
+| `[Sync handler?]` → call directly | 【是**同步**的？】→ 直接调用 |
+| Return result string (or JSON error) | 返回结果字符串（**或 JSON 错误**） |
+| `[Plugin post-hook]` → `invoke_hook("post_tool_call", ...)` | 【**插件后置钩子**】→ 触发 `post_tool_call` |
+
+> 📌 这张图是**原文的**，所以有两处要和真实源码分开看（细节见 §9 不一致清单）：
+> ① 第 4 个节点写"四个 agent 级工具被拦截"——实际是**两层集合**，
+> `INLINE_TOOL_EXECUTORS` **14 个** ⊇ `_AGENT_LOOP_TOOLS` **4 个**；
+> ② `handle_function_call` 的真实顺序是 **11 步**，不是这张图里的 6 步。
 
 #### 错误包装（原文）
 
