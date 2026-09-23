@@ -35,7 +35,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set
 
 __all__ = ["TOOLSETS", "MINI_CORE_TOOLS", "resolve_toolset",
-           "get_enabled_tool_names", "toolset_of_tool", "orphan_tools"]
+           "get_enabled_tool_names", "toolset_of_tool", "orphan_tools",
+           "describe_toolsets"]
 
 
 # ── toolset 表 ──────────────────────────────────────────────────────────
@@ -43,6 +44,12 @@ __all__ = ["TOOLSETS", "MINI_CORE_TOOLS", "resolve_toolset",
 #
 # `description` 不是装饰：`/tools` 命令和 `mini --list-toolsets` 会显示它，
 # 用户靠它决定"我要不要开这个 toolset"。
+#
+# ⚠️ 这句话原来只兑现了一半：`--list-toolsets` **当时根本没实现** ——
+#    注释替一个不存在的命令行参数做了承诺，而且**没有任何东西会因此变红**，
+#    于是它漂了很久（用户 `mini --list-toolsets` 撞到 `unrecognized arguments` 才发现）。
+#    同一个 bug 形状第 4 章出现过一次：系统提示词在宣传一个注册表里没有的工具。
+#    → 现在两件事都做了：参数真的存在，且**注释里的承诺变成 test_packaging 的一条断言**。
 TOOLSETS: Dict[str, Dict[str, Any]] = {
     "file": {
         "description": "读写文件、列目录",
@@ -143,3 +150,42 @@ def orphan_tools(registered: List[str]) -> List[str]:
       断言**契约**而不是**数量**——数量断言每次加工具都要改，而且不告诉你任何关系。）
     """
     return sorted(n for n in registered if toolset_of_tool(n) is None)
+
+
+# ── 给人看的清单（`mini --list-toolsets` 与 `/tools` 共用这一份）────────────
+def describe_toolsets() -> str:
+    """返回一份可直接打印的 toolset 清单（纯文本，不带颜色，调用方自己决定怎么包装）。
+
+    ★ **为什么是一个函数、两处共用**：这个文件上方原来写着
+      "`/tools` 命令和 `mini --list-toolsets` 会显示它（`description`）" ——
+      而那个命令行参数**根本不存在**，`/tools` 也只打了 toolset 名字、没打说明。
+      同一件事实写两处就会漂（本项目已踩过三次：工具分发、结果回填、状态重建），
+      所以这里把"怎么描述 toolset"收敛成一份实现：谁要显示就调它。
+
+    ★ **只读**：不 import 注册表、不问 `check_fn`、不出网。
+      所以 `mini --list-toolsets` **不需要密钥**也能跑（这个性质是刻意的 ——
+      "我有哪些 toolset"和"我配没配 key"是两件事）。
+      工具的 **schema 存不存在**归注册表管，"此刻放不放行"归 `check_fn` 管 ——
+      这三件事在 `/tools` 里是**分开**显示的，别混（第 4 章 §1 六站全景）。
+    """
+    core = set(MINI_CORE_TOOLS)
+    total = sum(len(spec["tools"]) for spec in TOOLSETS.values())
+    out: List[str] = [f"toolset 表：{len(TOOLSETS)} 个 toolset / {total} 个工具名额（同一个工具可以出现在多个 toolset 里）"]
+    for name, spec in TOOLSETS.items():
+        out.append("")
+        out.append(f"{name}　{spec['description']}")
+        for tool in spec["tools"]:
+            # ⚠️ 诚实标注：**当前这张表里 7 个工具全都在默认捆里**，所以下面那个 `·` 分支
+            #    现在没有数据（打印出来永远是 ✓）。它存在是因为"默认捆 ≠ 全部 toolset"，
+            #    一旦加一个"只在显式点名时暴露"的 toolset，这一支立刻变成
+            #    "为什么模型看不见这个工具"的第一眼答案。别把它当装饰删掉。
+            if tool in core:
+                out.append(f"    ✓ {tool:<14s} 在默认捆里")
+            else:
+                out.append(f"    · {tool:<14s} 只有显式点名 {name} 时才暴露")
+    out.append("")
+    out.append(f"默认捆 MINI_CORE_TOOLS（不给 --toolsets 时暴露的那批，{len(MINI_CORE_TOOLS)} 个）：")
+    out.append("    " + "、".join(MINI_CORE_TOOLS))
+    out.append("")
+    out.append("读法：✓ 在默认捆里 / · 需要显式点名所属 toolset。")
+    return "\n".join(out)

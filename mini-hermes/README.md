@@ -120,14 +120,29 @@ Ctrl-C   中断当前 turn
 命令行参数：
 
 ```text
--q "问题"        单次提问（失败时退出码非 0）
---quiet          只输出最终答复（配合 -q）
---system "..."   临时系统提示（只作用于本次请求，不写进历史）
---platform cli   cli 或 tui（决定平台提示）
---debug          异常时直接把 traceback 打到 stderr（或设 MINI_DEBUG=1）
---max-turns N    迭代预算
---resume         恢复最近一次会话
+-q "问题"          单次提问（失败时退出码非 0）
+-p/--provider 名   provider（默认 deepseek）
+-m/--model 名      模型名（默认取 provider 的默认模型）
+--max-turns N      迭代预算（默认 500）
+--resume           恢复最近一次会话
+--quiet            只输出最终答复（配合 -q）
+--debug            异常时直接把 traceback 打到 stderr（或设 MINI_DEBUG=1）
+--system "..."     临时系统提示（只作用于本次请求，不写进历史）
+--platform cli     cli 或 tui（决定平台提示）
+--list-toolsets    列出所有 toolset（名字 / 说明 / 工具 / 在不在默认捆里）后退出 —— **不需要密钥**
+--doctor           跑网络体检后退出 —— **不需要密钥**
 ```
+
+**查 toolset（第 4 章那道"注册 ≠ 暴露"的闸门）**：
+
+```bash
+./mini --list-toolsets     # 不需要密钥、不联网
+```
+
+它回答的是"这套代码里有哪些 toolset、每个里面有哪些工具、哪些在**默认捆**里"。
+REPL 里的 `/tools` 看的是**三件事分开**的版本 ——
+① 已注册 ② 被 toolset 放行 ③ `check_fn` 此刻说可用不可用（例：`web_search` 有没有 key）。
+两者共用同一份实现（`toolsets.describe_toolsets()`），所以不会漂。
 
 **状态文件都在 `$MINI_HOME`（默认 `~/.mini-hermes/`）**：
 
@@ -145,6 +160,7 @@ logs/errors.log    异常 traceback —— "报了错但没法查"的解药
 
 ```bash
 python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
+./mini --doctor            # 等价写法（同样不需要密钥）
 ```
 
 它分层查：环境 → DNS（几个地址、顺序）→ 逐个连通性 → 分层计时（DNS/TCP/TLS/首字节）
@@ -156,7 +172,8 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ## 发布前自检
 
 ```bash
-python3 tests/test_packaging.py        # 13 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描
+python3 tests/test_packaging.py        # 18 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描 /
+                                       #        命令行旗标契约（宣传的 `mini --旗标` 必须真的存在）
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
 python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
 python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
@@ -232,7 +249,8 @@ tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
 tests/test_compression.py       # 114 条压缩与缓存自测（★ 第 5 章：token 记账 / 边界 /
                                 #   四阶段 / 无进展守卫 / 契约 / 缓存标记 / 模型窗口表）
-tests/test_packaging.py         # 13 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描）
+tests/test_packaging.py         # 18 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 /
+                                #   写死路径扫描 / **命令行旗标契约**：README 与注释宣传的旗标必须真的存在）
 demos/                          # 能跑出来的故障复现，比散文有说服力
   why_interactive_is_serial.py  # 为什么 interactive 工具必须打断并发（三个真实故障）
   why_slow_connect_matters.py   # 连接超时 ≠ 读取超时（75s vs 2s，要等约 80 秒）

@@ -2,16 +2,27 @@
 
 跑法：python3 tests/test_packaging.py
 
-检查四件事：
+检查六件事：
   1. 真的零第三方依赖（不是嘴上说说 —— 逐文件 AST 扫 import，再查模块来源）
   2. 没有写死某台机器的绝对路径（/Users/某人、/home/某人）
-  3. 启动脚本不硬编码解释器路径（别人机器上 /usr/local/bin/python3 不存在）
+     + 启动脚本不硬编码解释器路径（别人机器上 /usr/local/bin/python3 不存在）
+  3. 密钥发现链完整（别人没有 Hermes 也能用），且**报错信息要告诉别人怎么做**
   4. 启动脚本被**符号链接**调用时也能跑（`ln -s .../mini /usr/local/bin/mini`，
      这是"想让它像普通命令一样用"的最自然做法）
+  5. 用户可见的字符串里没有写死 `~/.mini-hermes`（`MINI_HOME` 是可重定向的）
+  6. ★ **命令行旗标契约**：README / 注释里宣传的 `mini --旗标` 必须真的存在，
+     且每个真实参数都在 README 里出现过
 
 第 1 条尤其重要：一旦某个未来章节偷偷引入了第三方库，
 这个测试会立刻红 —— 而 README 和 requirements.txt 还在说"零依赖"，
 那种不一致比一开始就有依赖糟糕得多。
+
+第 6 条是**补一个真踩过的洞**：`toolsets.py` 的注释写着"`/tools` 命令和
+`mini --list-toolsets` 会显示它（description）"、`doctor.py` 写着"或 `./mini --doctor`"，
+而这两个参数**从来没实现**，`/tools` 也只打名字不打说明 ——
+注释替不存在的功能做了承诺，**没有任何测试会因此变红**，于是漂了很久
+（用户敲 `mini --list-toolsets` 撞到 `unrecognized arguments` 才发现）。
+同一个病第 4 章出现过一次：系统提示词宣传 `search_files`，而注册表里没有它。
 """
 from __future__ import annotations
 
@@ -298,6 +309,83 @@ def test_no_hardcoded_home_in_messages() -> None:
     )
 
 
+# ------------------------------------------------- 6 命令行旗标契约
+# 宣传了就必须存在。**扫描范围刻意限定在 mini-hermes/ 内部**：
+# 本目录是"能单独分发"的单元（README 承诺"源码 + 启动脚本 + README 就够了"），
+# 所以测试不能依赖仓库根那几篇章节 md 存不存在。
+FLAG_CLAIM_RE = re.compile(r"mini(?:-hermes)?\s+(--[a-z][a-z0-9-]*)")
+
+
+def _declared_options() -> list[list[str]]:
+    """真实存在的命令行参数，**按 argparse 的 add_argument 分组**（一组 = 一个参数 + 它的别名）。
+
+    用 AST 取，不用正则 —— 注释和字符串里的 `--xxx` 不是声明（这条纪律和 §1 那条一样）。
+    """
+    path = PROJECT_ROOT / "hermes_cli" / "main.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    options: list[list[str]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"):
+            continue
+        flags = [a.value for a in node.args
+                 if isinstance(a, ast.Constant) and isinstance(a.value, str)
+                 and a.value.startswith("-")]
+        if flags:
+            options.append(flags)
+    return options
+
+
+def test_advertised_flags_exist() -> None:
+    """README / 注释里宣传的 `mini --旗标` 必须真的存在；真实参数也必须在 README 里出现过。"""
+    declared = {f for group in _declared_options() for f in group}
+    claim_files = [PROJECT_ROOT / "README.md"] + message_source_files()
+
+    offenders: list[str] = []
+    for path in claim_files:
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for flag in FLAG_CLAIM_RE.findall(line):
+                if flag not in declared:
+                    offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{i} 宣传了 {flag}")
+    check(
+        f"扫了 {len(claim_files)} 个会对外宣传用法的文件；宣传的 `mini --旗标` 都真实存在"
+        f"（实际有 {len(declared)} 个：{' '.join(sorted(declared))}）",
+        not offenders,
+        "; ".join(offenders),
+    )
+
+    # 反向：每个真实参数都得在 README 里出现至少一种写法 —— 防"加了参数忘了写文档"
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    undocumented = ["/".join(group) for group in _declared_options()
+                    if not any(f in readme for f in group)]
+    check("每个命令行参数都在 README 里被提到过（参数与文档同步）",
+          not undocumented, "README 里没提：" + "; ".join(undocumented))
+
+    # 只读查询类参数必须**不需要密钥**就能跑 —— 实测，而不是读代码猜。
+    # 隔离手段：MINI_HOME 指到临时目录 + HOME 也指到临时目录（否则会退到 ~/.hermes/.env
+    # 复用本机的 Hermes 密钥，那样"没有密钥也能跑"就没被真正验证）。
+    with tempfile.TemporaryDirectory() as td:
+        iso = {"MINI_HOME": td, "HOME": td, "PYTHONPATH": "", "MINI_ENV_FILE": ""}
+        env = {k: v for k, v in os.environ.items() if k != "DEEPSEEK_API_KEY"}
+        env.update(iso)
+        launcher = str(PROJECT_ROOT / "mini")
+        r = subprocess.run([launcher, "--list-toolsets"], capture_output=True, text=True,
+                           timeout=120, env=env)
+        check("`mini --list-toolsets` 不需要密钥就能跑（退出码 0）",
+              r.returncode == 0, (r.stderr or r.stdout)[-200:])
+        check("它列出了 toolset 名字与说明（不只是名字）",
+              all(t in r.stdout for t in ("file", "search", "terminal", "todo"))
+              and "读写文件" in r.stdout and "搜索文件内容" in r.stdout,
+              r.stdout[:200])
+
+        r_help = subprocess.run([launcher, "-h"], capture_output=True, text=True,
+                                timeout=120, env=env)
+        missing = [f for f in ("--list-toolsets", "--doctor") if f not in r_help.stdout]
+        check("`-h` 里能看到 --list-toolsets 与 --doctor（它们在前面的 argv 里走的是 argparse）",
+              not missing, f"-h 里没有：{missing}")
+
+
 if __name__ == "__main__":
     print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}")
     print(f"项目根：{PROJECT_ROOT}\n")
@@ -306,6 +394,7 @@ if __name__ == "__main__":
     test_env_discovery()
     test_launcher_via_symlink()
     test_no_hardcoded_home_in_messages()
+    test_advertised_flags_exist()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))

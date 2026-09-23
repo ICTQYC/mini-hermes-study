@@ -270,6 +270,13 @@ class MiniCLI:
                         print(f"{DIM}  ✗ {n} —— {why}{RESET}")
                 print(f"{DIM}toolset：{sorted(toolsets.TOOLSETS)}　"
                       f"探测缓存：{registry.check_fn_cache_info()}{RESET}")
+                # ★ 第 4 章之后的补充：先把**工具清单**按 toolset 展开（名字 + 说明 + 工具），
+                #   再打那行"选中的 toolset / 探测缓存"。
+                #   这里调的是 `toolsets.describe_toolsets()` —— 和 `mini --list-toolsets`
+                #   **同一份实现**。原来这行只打 `sorted(TOOLSETS)`（一串名字），
+                #   于是 toolsets.py 里"`/tools` 会显示 description"那句承诺**是假的**：
+                #   同一件事实写两处就会漂，所以现在只有一处。
+                print(f"{DIM}{toolsets.describe_toolsets()}{RESET}")
                 continue
             if user == "/budget":
                 print(f"{DIM}迭代预算 {self.agent.budget.used}/{self.agent.budget.max_total}{RESET}")

@@ -7,14 +7,40 @@
     python3 -m hermes_cli.main -q "问题"          # 单次提问
     python3 -m hermes_cli.main --resume           # 恢复最近一次会话
     python3 -m hermes_cli.main --max-turns 8      # 改迭代预算
+    python3 -m hermes_cli.main --list-toolsets    # 看 toolset（**不需要密钥**）
+    python3 -m hermes_cli.main --doctor           # 网络/连通性体检（**不需要密钥**）
+
+★ 纪律：**只读的查询类参数必须在构造 MiniCLI 之前处理**。
+  构造 agent 需要 API key（`MiniCLI.__init__` 会去解析 provider），
+  而"我有哪些 toolset""我的网络通不通"跟密钥无关 ——
+  放到构造之后，用户没配 key 时连这两个都问不了。
+  （本文件原来还宣传过一个 `--doctor`：`doctor.py` 的 docstring 写着
+   "或 `./mini --doctor`"，而启动器只是 `exec python3 -m hermes_cli.main "$@"`，
+  那个参数同样不存在。两处一起修。）
 """
 from __future__ import annotations
 
 import argparse
 import os
+import runpy
 import sys
+from pathlib import Path
 
 from cli import MiniCLI
+
+
+def _run_doctor() -> int:
+    """跑 `doctor.py`（它是一个脚本，逻辑在 `__main__` 块里，所以用 runpy 跑）。
+
+    不把它改成 `main()`：那是第 2 章的交付物，为一个入口重排它的结构不划算
+    （改它就要重跑它的验证）。runpy 是 stdlib，代价 0。
+    """
+    script = Path(__file__).resolve().parent.parent / "doctor.py"
+    if not script.exists():
+        print(f"[配置错误] 找不到体检脚本：{script}", file=sys.stderr)
+        return 2
+    runpy.run_path(str(script), run_name="__main__")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,7 +61,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--platform", default="cli", choices=["cli", "tui"], help="界面平台（决定平台提示，默认 cli）"
     )
+    parser.add_argument(
+        "--list-toolsets",
+        action="store_true",
+        help="列出所有 toolset（名字 / 说明 / 工具 / 在不在默认捆里）后退出。不需要 API 密钥",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="跑网络体检（环境→DNS→逐地址连通性→分层计时→真实调用）后退出。不需要 API 密钥",
+    )
     args = parser.parse_args(argv)
+
+    # ---- 只读的查询类参数：**在构造 MiniCLI 之前**处理 ----
+    # 它们问的是"这套代码里有什么""我的网络通不通"，与密钥无关。
+    # 放到构造之后的话，没配 key 的人连这两个都问不了（会先撞 [配置错误]）。
+    if args.list_toolsets:
+        import toolsets
+
+        print(toolsets.describe_toolsets())
+        # ⚠️ 这一句留在**调用方**、不放进 describe_toolsets()：
+        #    那句"进 REPL 敲 /tools"在由 /tools 自己打印时是循环的（用户已经在 /tools 里）。
+        #    所以共享的那份只说 toolset 本身，各自补自己的下一步提示。
+        print("\n（这只是静态清单。某个工具**此刻放不放行**由运行时的 check_fn 决定 —— "
+              "例：web_search 要有 key。那道闸门看 REPL 里的 /tools。）")
+        return 0
+    if args.doctor:
+        return _run_doctor()
 
     try:
         app = MiniCLI(
