@@ -1422,6 +1422,15 @@ PROVIDERS = (
 `TAVILY_API_KEY` 这个名字是**故意**选的：它和 Hermes 自己的 `web_search`
 （`tools/web_tools.py` 的自动探测）同名，**一个 key 两份工具用**。
 
+⚠️ 但**放哪个文件决定谁读得到**（实测过，方向是单向的）：
+
+| key 放在 | Hermes 自己的 `web_search` | mini 的 `web_search` |
+|---|---|---|
+| `~/.hermes/.env` | ✓（它只读这个） | ✓（回退链第 3 项） |
+| `~/.mini-hermes/.env` | ✗ **看不到** | ✓ |
+
+所以 `TAVILY_API_KEY` 的值放 `~/.hermes/.env`（单一来源），mini 那份留空。
+
 ⚠️ 测试要**自己隔离这两个 key**（`_isolate_search_keys`）：机器上真配了
 `TAVILY_API_KEY` 时，Serper 那几条会被悄悄切走 —— 假红，看起来像代码坏了。
 
