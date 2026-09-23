@@ -12,7 +12,7 @@
 | 1 | `architecture.md` | — （只是地图） | 《Hermes架构总览.md》 |
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
-| 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》 |
+| 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ⬜ 待做（`_preflight_compression` 是空函数） | — |
 | 6 | `session-storage.md` | ⬜ 待做（现在是 JSON，要换 SQLite） | — |
 | 7 | `gateway-internals.md` | ⬜ 待做 | — |
@@ -210,6 +210,7 @@ agent/prompt_builder.py   ←  agent/prompt_builder.py（★ 第 3 章：内容�
 agent/system_prompt.py    ←  agent/system_prompt.py（★ 第 3 章：排序层 —— 三层装配）
 hermes_cli/main.py        ←  hermes_cli/main.py（命令行入口）
 hermes_cli/runtime_provider.py ← hermes_cli/runtime_provider.py
+doctor.py                 ←  （mini 特有）分层体检：环境→DNS→逐地址连通性→计时→真实调用
 
 依赖链：tools/registry.py ← tools/*.py ← model_tools.py ← run_agent.py ← cli.py
 
