@@ -653,7 +653,7 @@ class AIAgent:
         payload = {
             "model": cand["model"],
             "messages": api_messages,
-            "tools": model_tools.get_tool_schemas(),
+            "tools": model_tools.get_tool_definitions(),
             "tool_choice": "auto",
             "temperature": 0.3,
         }

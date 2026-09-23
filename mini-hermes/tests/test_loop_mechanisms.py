@@ -96,24 +96,15 @@ def test_order_and_concurrency() -> None:
             order.append("B-finished")
         return "result-B"
 
-    model_tools.registry._REGISTRY["_test_slow"] = {
-        "name": "_test_slow",
-        "fn": slow,
-        "toolset": "test",
-        "interactive": False,
-        "requires_approval": False,
-        "danger_check": None,
-        "schema": {"type": "function", "function": {"name": "_test_slow", "description": "x", "parameters": {}}},
-    }
-    model_tools.registry._REGISTRY["_test_fast"] = {
-        "name": "_test_fast",
-        "fn": fast,
-        "toolset": "test",
-        "interactive": False,
-        "requires_approval": False,
-        "danger_check": None,
-        "schema": {"type": "function", "function": {"name": "_test_fast", "description": "x", "parameters": {}}},
-    }
+    # ★ 用**公开接口**注册，不要戳 `_REGISTRY`。
+    #   第 4 章把条目从 dict 换成了 `ToolEntry` 类——直接塞 dict 的写法
+    #   会以 "dict has no attribute 'interactive'" 的形式挂掉，
+    #   而那个报错**指向测试本身**，不是被测代码。
+    #   教训：**测试戳私有结构 = 把测试和实现焊死**；走 register_tool 就不会。
+    model_tools.registry.register_tool(
+        "_test_slow", description="x", parameters={}, toolset="test")(slow)
+    model_tools.registry.register_tool(
+        "_test_fast", description="x", parameters={}, toolset="test")(fast)
 
     agent._http_post = canned(
         tool_response(("_test_slow", "{}"), ("_test_fast", "{}")),
@@ -189,7 +180,7 @@ def test_agent_level_tool() -> None:
     check("todo_list 不在 registry 里（它靠 run_agent 拦截）", model_tools.registry.get("todo_list") is None)
     check(
         "todo_list 的 schema 仍然会发给模型",
-        "todo_list" in [s["function"]["name"] for s in model_tools.get_tool_schemas()],
+        "todo_list" in [s["function"]["name"] for s in model_tools.get_tool_definitions()],
     )
     agent._http_post = canned(
         tool_response(

@@ -5,6 +5,10 @@
 > `tools/approval.py`（1336 行）+ 7 个 `approval_*.py` 兄弟、`tools/environments/*`、
 > `agent/inline_tool_executors.py`（241 行）
 >
+> 📌 **本文里 mini 版的数字（行数 / 工具数 / 测试条数）锚的是标签 `ch04-tools-runtime`**
+> —— 也就是第 4 章末的状态。行号会随章节漂移，标签不会：
+> `git show ch04-tools-runtime:mini-hermes/tools/registry.py`。
+>
 > 读法同前两章：**段落式翻译 + `【源码】` 块接真实实现 + `【动手】` 块接 mini 版 +
 > 每节末尾「为什么这么设计 / 砍掉会怎样」。**
 
@@ -700,7 +704,7 @@ TOOLS = {
 更糟的是：**表里有一个名字写错，只在运行时暴露**。
 
 自注册把耦合方向倒过来：**工具知道注册表，注册表不认识任何具体工具**。
-`tools/registry.py` 是个 **零依赖叶子**（`tools/AGENTS.md`：*has no deps and is imported by
+`tools/registry.py` 是个 **零依赖**（`tools/AGENTS.md`：*has no deps and is imported by
 every tool file*）——它 import 的东西只有标准库。
 
 **砍掉会怎样**：你会得到一张手工维护的表 + 一个永远在涨的 import 列表。
@@ -2550,51 +2554,143 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 
 ## 10. 给 mini 版的改造清单（本章动手做什么）
 
+**这一节是动手前的"计划"，§10.1 起是做完之后的记录。两节都留着——计划与实际的差额本身是信息。**
+
 按"值不值得改"排：
 
-| # | 改什么 | 为什么值得 | 工作量 |
-|---|---|---|---|
-| ① | **手写名单 → AST 自动发现** | 本章核心。手写名单的失效模式是**静默少一个工具** | 中 |
-| ② | **加 `check_fn` + 发 schema 前过滤** | 让"没配好就不发给模型"这件事在 mini 里也能演示 | 小 |
-| ③ | **加 toolset 解析（含"注册≠暴露"）** | mini 已经有 `toolset` 字段但没人用——把语义补上 | 中 |
-| ④ | **错误返回改 JSON 字符串 + 截断** | 契约问题。纯文本错误模型解析不了 | 小 |
-| ⑤ | **加 `_AGENT_LOOP_TOOLS` 守卫** | 让"这 4 个不该被独立调用"变成结构保证 | 小 |
-| ⑥ | **加 `_LEGACY_TOOL_ALIASES`** | 演示"对外收窄、对内兼容" | 极小 |
-| ⑦ | **危险检测挪到一处** | mini 现在是"工具自己带检测"，没有单一事实来源 | 小 |
-| ⑧ | 只留 local 后端，但**把后端表的位置留出来** | 见 §7 的"动手" | 小 |
-| ❌ | async 桥接 | mini 没有 async 工具 —— **记录"为什么可以不做"** | — |
-| ❌ | 107 条危险模式 | 把检测挪到一处就够，**抄数量没有教学价值** | — |
-| ❌ | process_registry 那一整套 | 需要"多父 + 持久化 + 重启"的真实场景 | — |
+| # | 改什么 | 为什么值得 | 计划 | 实际 |
+|---|---|---|---|---|
+| ① | **手写名单 → AST 自动发现** | 本章核心。手写名单的失效模式是**静默少一个工具** | 中 | ✅ 做了 |
+| ② | **加 `check_fn` + 发 schema 前过滤** | 让"没配好就不发给模型"这件事在 mini 里也能演示 | 小 | ✅ 做了（含抖动保护） |
+| ③ | **加 toolset 解析（含"注册≠暴露"）** | mini 已经有 `toolset` 字段但没人用——把语义补上 | 中 | ✅ 做了 |
+| ④ | **错误返回改 JSON 字符串 + 截断** | 契约问题。纯文本错误模型解析不了 | 小 | ✅ 做了（**成功**结果也一起改了） |
+| ⑤ | **加 `_AGENT_LOOP_TOOLS` 守卫** | 让"这 4 个不该被独立调用"变成结构保证 | 小 | ✅ 做了（mini 只有 1 个） |
+| ⑥ | **加 `_LEGACY_TOOL_ALIASES`** | 演示"对外收窄、对内兼容" | 极小 | ✅ 位置留了，空表 |
+| ⑦ | **危险检测挪到一处** | mini 现在是"工具自己带检测"，没有单一事实来源 | 小 | ✅ 做了 |
+| ⑧ | 只留 local 后端，但**把后端表的位置留出来** | 见 §7 的"动手" | 小 | ✅ 做了 |
+| ⑨ | **（计划外）补上 `search_files`** | 提示词一直在宣传它，但它**不存在**（见 §10.1①） | — | ✅ 做了 |
+| ❌ | async 桥接 | mini 没有 async 工具 —— **记录"为什么可以不做"** | — | 不做 |
+| ❌ | 107 条危险模式 | 把检测挪到一处就够，**抄数量没有教学价值** | — | 只留 10 条 |
+| ❌ | process_registry 那一整套 | 需要"多父 + 持久化 + 重启"的真实场景 | — | 不做 |
+
+### 10.1 计划外的：**这一章的原则抓出了 mini 自己的两个 bug**
+
+**① 提示词在宣传一个不存在的工具**
+
+动手前的注册表是：
+
+```python
+['list_dir', 'read_file', 'terminal', 'write_file']
+```
+
+而 system prompt 里一直有这么一行：
+
+```text
+需要搜索文件内容：search_files（**不要**用 grep/find）
+```
+
+`search_files` **根本不存在**。这正是本章反复讲的那种病：
+**描述里点名了模型实际调不到的工具**。
+区别只在于 Hermes 是在 `_DYNAMIC_SCHEMA_REWRITERS` 里防这个
+（发出去之前把"可用工具清单"重写一遍），
+mini 是在**提示词的散文里**犯的同一个错。
+
+修法是**把工具补上**，不是把提示词那行删掉——因为
+"不要用 grep/find" 这个指引本身是对的：`grep` 的输出**没有边界、没有结构**，
+一个递归 grep 能把上下文冲掉一半。
+
+**② `read_file` 到底返不返回 JSON？**
+
+动手前先核对过一遍，因为看起来矛盾：
+`AGENTS.md` 说 *All handlers return a JSON string*，
+而模型看到的 `read_file` 输出格式说明写的是 `LINE_NUM|CONTENT`。
+
+```python
+# tools/file_tools.py:457（Hermes 真身）
+"content": file_ops._add_line_numbers(page_text, offset) if page_text else "",
+```
+
+**不矛盾**：handler 返回的是 JSON，`LINE_NUM|CONTENT` 是 `content` **字段里面**的格式。
+所以 mini 也是这个形态：`{"path": …, "content": "1|foo\n2|bar"}`——
+**人读的部分留在字段里，外壳是 JSON**。
+
+### 10.2 一处"看起来做了、其实没做"被这一章点破
+
+第 2、3 章的 mini 里 `register_tool(…, toolset="…")` 这个参数**一直存在**，
+每个工具文件也都老老实实填了。但**没有任何代码用它决定"要不要发给模型"**——
+注册表里有什么，模型就看到什么。
+
+这就是"**看起来做了、其实没做**"：参数名对、赋值对、注释也写了，
+唯一的问题是**没有消费者**。而且它在测试里也不会露馅——
+除非专门去断言"这个工具**不在** schema 里"。
+
+把它接上（§10 ③）之后，"注册 ≠ 暴露"这句话才第一次在 mini 里
+成为**可验证的事实**，而不是一条注释。
+
+### 10.3 一处测试设计错误（反向教训）
+
+写 `check_fn` 抖动保护的测试时，我第一版把 `TTL` 设成 0 来"让每次调用都重新探测"，
+然后断言"探测了 3 次"——想以此证明"兜底的 True 没被缓存"。
+
+**这个装置证明不了这件事。** `TTL=0` 时，"没缓存"和"缓存了但立刻过期"
+表现**完全一样**，两种实现都会得到同样的探测次数。
+我当时的断言只是**记住了某次运行的数字**，不是一条性质。
+
+改法：把 `registry.time` 换成一个**可拨的假时钟**
+（`registry.time` 只是模块级名字，直接替换即可——**不需要为可测性去改生产代码**），
+然后构造一个真能区分的场景：
+
+```text
+t=1000  探测成功            → 缓存 (1000, True)
+t=1010  再问                → 命中缓存，0 次探测
+t=1031  缓存过期 + 探测失败  → 抖动保护 → 返回 True，**不写缓存**
+t=1032  宽限期关掉再问       → 若上面写了缓存，这里会命中并返回 True（错的）；
+                             实际重新探测 → False（对的）
+```
+
+教训与第 3 章那条同源：**别拿间接信号当证据**。
+"探测次数"是间接信号；能区分两种实现的是**时序**。
 
 ---
 
 ## 附录 A · mini 版代码结构对照（本章相关）
 
+**本节记录的是第 4 章**做完之后**的状态。**
+
 | mini 版文件 | 状态 | 对应 Hermes |
 |---|---|---|
-| `tools/registry.py` | ⬜ 待改（加 `check_fn`/`toolset` 语义/JSON 错误） | `tools/registry.py`（977 行） |
-| `model_tools.py` | ⬜ 待改（手写名单 → AST 发现；加别名映射；发 schema 前过滤） | `model_tools.py`（987 行） |
-| （新建）`toolsets.py` | ⬜ 待建 | `toolsets.py`（485 行，60 个 toolset / 59 个核心工具） |
-| （新建）`tools/approval.py` | ⬜ 待建（把危险检测从 `terminal.py` 挪出来） | `tools/approval.py` + 7 个兄弟 = 8 文件 |
-| `tools/terminal.py` | ✅ 已有（78 行，只有 local） | `tools/terminal_tool.py` + `terminal_tool_backends.py` |
-| `tools/file_tools.py` | ✅ 已有（92 行） | `tools/file_tools*.py` |
-| `tools/todo.py` | ✅ 已有（267 行，含 `AGENT_LEVEL_TOOLS`） | `tools/todo_tool.py` + `agent/inline_tool_executors.py` |
-| `run_agent.py` 的 `INLINE_TOOL_EXECUTORS` | ✅ 已有（第 2 章） | `agent/inline_tool_executors.py`（14 个 key） |
+| `tools/registry.py` | ✅ 362 行（加了 `check_fn` + TTL 缓存 + JSON 契约） | `tools/registry.py`（977 行） |
+| `model_tools.py` | ✅ 293 行（AST 发现 + toolset 解析 + 分发） | `model_tools.py`（987 行） |
+| `toolsets.py` | ✅ **新建** 144 行（4 个 toolset） | `toolsets.py`（485 行，60 个 toolset / 59 个核心工具） |
+| `tools/approval.py` | ✅ **新建** 84 行（危险检测的唯一事实来源） | `tools/approval.py` + 7 个兄弟 = 8 文件 |
+| `tools/terminal.py` | ✅ 115 行（只有 local；后端表的位置留着） | `tools/terminal_tool.py` + `terminal_tool_backends.py` |
+| `tools/file_tools.py` | ✅ 147 行（结果改 JSON） | `tools/file_tools*.py` |
+| `tools/search_files.py` | ✅ **新建** 130 行（★ 计划外，见 §10.1①） | `search_files`（走 ripgrep） |
+| `tools/todo.py` | ✅ 267 行（**未动**，含 `AGENT_LEVEL_TOOLS`） | `tools/todo_tool.py` + `agent/inline_tool_executors.py` |
+| `tests/test_tools_runtime.py` | ✅ **新建** 546 行 / 54 条 / 6 组 | — |
+| `run_agent.py` 的 `INLINE_TOOL_EXECUTORS` | ✅ 第 2 章就有（1 个 key） | `agent/inline_tool_executors.py`（14 个 key） |
 
-规模对比（**第 3 章末 → 第 4 章末**，动手前先记着起点）：
+规模对比（**第 3 章末 → 第 4 章末**）：
 
 ```text
-                          第 3 章末
-tools/registry.py            105 行
-model_tools.py                66 行
-tools/terminal.py             78 行
-tools/file_tools.py           92 行
-tools/todo.py                267 行
-（无 toolsets.py / approval.py）
+                          第 3 章末      第 4 章末
+tools/registry.py            105    →      362 行
+model_tools.py                66    →      293 行
+toolsets.py                 （无）   →      144 行
+tools/approval.py           （无）   →       84 行
+tools/terminal.py             78    →      115 行
+tools/file_tools.py           92    →      147 行
+tools/search_files.py       （无）   →      130 行
+tools/todo.py                267    →      267 行（未动）
+测试断言                     221    →      275 条（154 + 54 + 13 + 54）
+测试代码行数                1980    →     2682 行
+源码（不含测试与 demo）     3668    →     4678 行
+含测试与 demo 总行数        5924    →     7636 行
 ```
 
 **对照 Hermes 的规模**：`tools/` 下 258 个 `.py`，其中 43 个是工具模块。
-mini 有 4 个工具模块。**这个比例（0.1 倍不到）正是"手写名单还能活"的原因**——
+mini 现在有 **4 个**工具模块（terminal / file_tools / search_files / todo）。
+**这个比例（0.1 倍不到）正是"手写名单还能活"的原因**——
 而这一章要做的恰是"在还小的时候就把该有的结构立起来"。
 
 ## 附录 B · 本章砍掉的东西（与何时补）
@@ -2696,3 +2792,75 @@ $ ls tools/environments/*.py | wc -l
 | `_TOOL_DEFS_CACHE_MAX` | 8 | `model_tools.py:204` |
 | `_BUILTIN_BACKENDS` | 7 个（local/docker/singularity/modal/daytona/vercel_sandbox/ssh） | `tools/terminal_tool_backends.py:54` |
 | `_CONTAINER_BACKENDS` | 5 个 | `tools/terminal_tool_config.py:64` |
+
+### C.6 第 4 章末的 mini：实测输出
+
+**① AST 自动发现（`_BUILTIN_MODULES` 手写名单已删）**
+
+```console
+$ python3 -c "import model_tools; print(model_tools.discover_builtin_tools())"
+AST 发现的模块： ['tools.file_tools', 'tools.search_files', 'tools.terminal']
+注册的工具：     ['list_dir', 'read_file', 'search_files', 'terminal', 'write_file']
+默认暴露：       ['list_dir','read_file','search_files','terminal','todo_list','write_file']
+孤儿工具：       []
+```
+
+注意它**自己跳过**了 `registry.py` / `approval.py` / `__init__.py`（基础设施），
+也跳过了 `todo.py`（它不用 `register_tool`，走 `AGENT_LEVEL_TOOLS`）——
+而上面那张手写名单**永远做不到这件事**，因为它连"什么是工具模块"都不知道。
+
+**② `/tools`（把静默的闸门变成可见的）**
+
+```console
+你 › /tools
+发给模型的工具（6 个）：
+  ✓ list_dir: 列出一个目录下的文件和子目录。
+  ✓ read_file: 读一个文本文件。返回 JSON：{path, total_lines, shown, content, ...
+  ✓ search_files: 在目录下递归搜索文件**内容**（正则）。返回 JSON：{matches:[...
+  ✓ terminal: 在本机 shell 里执行一条命令。返回 JSON：{exit_code, stdout, stderr
+  ✓ todo_list: 维护多步任务（3 步以上）的任务清单。…
+  ✓ write_file: 把内容完整写入文件（会覆盖已有内容），父目录不存在会自动创建。
+toolset：['file', 'search', 'terminal', 'todo']　探测缓存：{'cached': 3, 'last_good': 3, 'no_cache': 0}
+```
+
+最后那行 `探测缓存` 是**活的 check_fn 缓存**：3 条 = 三个不同的探测函数
+（终端 / 搜索 / 文件工具；文件那三个工具共用同一个 → 被 memo 层去重成 1 次探测）。
+
+**③ 真跑一轮（DeepSeek，抓的是会话记录里每一次真实请求/结果）**
+
+任务一（**空结果**，验"模型不会把失败说成结果"）：
+
+```text
+→ search_files({"pattern": "def build_system_prompt", "path": "agent/prompt_builder.py"})
+← {"matches": [], "total_shown": 0, "truncated": false}
+→ todo_list({"todos": [{"id":"1","content":"验证第4章实现","status":"pending"}]})
+← {"todos": [{"id":"1","content":"验证第4章实现","status":"pending"}], "revision": 1}
+[agent] 没搜到——agent/prompt_builder.py 里不存在 'def build_system_prompt'（可能文件不存在或函数名不同）
+```
+
+`build_system_prompt` 确实在 `agent/system_prompt.py:291` 而不是 `prompt_builder.py`——
+**agent 的"没搜到"是诚实的**，它没有把空结果编成内容。
+
+任务二（**命中路径**，三个工具串起来）：
+
+```text
+[agent] search_files 在 agent/system_prompt.py 命中两处（237 行 build_system_prompt_parts、
+        291 行 build_system_prompt）；read_file 显示 291 行是函数定义，292-297 行是 docstring；
+        terminal 显示该文件共 404 行。
+```
+
+三个数字（237 / 291 / 404）事后都单独核对过，全对。
+这也证明**JSON 外壳没有妨碍模型读内容**——`{"exit_code":0,"stdout":"404 ..."}` 它照样读得懂。
+
+**④ 全量测试（Python 3.13.14 与 3.9.6，两个解释器都过）**
+
+```console
+$ /usr/local/bin/python3    # 3.13.14
+  test_loop_mechanisms.py    54 通过 / 0 失败
+  test_prompt_assembly.py   154 通过 / 0 失败　（13 组）
+  test_packaging.py          13 通过 / 0 失败
+  test_tools_runtime.py      54 通过 / 0 失败　（6 组）
+$ /usr/bin/python3          # 3.9.6 —— 同上，全过
+```
+
+**合计 275 条。**

@@ -981,16 +981,9 @@ def test_budget_warning_end_to_end() -> None:
     ——因为一次性标志不存在，历史又没被污染，所以每轮重插；
     第 1 条更是 `['system','user','user']`，第 4 条的文案还写着"还剩 0 次迭代"。
     """
-    model_tools.registry._REGISTRY["_test_e2e_echo"] = {
-        "name": "_test_e2e_echo",
-        "fn": lambda **kw: {"ok": True},
-        "toolset": "test",
-        "interactive": False,
-        "requires_approval": False,
-        "danger_check": None,
-        "schema": {"type": "function",
-                   "function": {"name": "_test_e2e_echo", "description": "x", "parameters": {}}},
-    }
+    model_tools.registry.register_tool(
+        "_test_e2e_echo", description="x", parameters={}, toolset="test")(
+        lambda **kw: {"ok": True})
 
     requests: list = []
     counter = {"n": 0}
@@ -1014,7 +1007,7 @@ def test_budget_warning_end_to_end() -> None:
         ag._http_post = recorder
         res = ag.run_conversation("跑几个工具")
     finally:
-        model_tools.registry._REGISTRY.pop("_test_e2e_echo", None)
+        model_tools.registry.deregister("_test_e2e_echo")
 
     check(f"端到端：录到 4 条真实请求（实际 {len(requests)}）", len(requests) == 4, str(len(requests)))
 

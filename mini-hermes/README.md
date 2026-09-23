@@ -12,7 +12,7 @@
 | 1 | `architecture.md` | — （只是地图） | 《Hermes架构总览.md》 |
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
-| 4 | `tools-runtime.md` | ⬜ 待做（当前只有 4 个工具 + 注册表） | — |
+| 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ⬜ 待做（`_preflight_compression` 是空函数） | — |
 | 6 | `session-storage.md` | ⬜ 待做（现在是 JSON，要换 SQLite） | — |
 | 7 | `gateway-internals.md` | ⬜ 待做 | — |
@@ -112,7 +112,7 @@ cd ~/我的项目 && mini
 /new     开新会话（清空历史 + 重置预算 + **重建系统提示词**）
 /prompt  看三层系统提示词（★ 验证"哪块归属哪一层、顺序对不对"用这个）
 /todo    看 agent 的任务清单（★ 跨进程验证"从历史重建"用这个）
-/tools   看已注册的工具
+/tools   看工具：**发给模型的** vs **注册了但没发的**（★ 第 4 章：一眼看出是哪道闸门关着）
 /budget  看迭代预算用了多少
 Ctrl-C   中断当前 turn
 ```
@@ -197,12 +197,14 @@ Hermes 的发布形态也是这个：源码 + 安装脚本，**没有 wheel、�
 
 ```text
 run_agent.py              ←  run_agent.py（AIAgent 中枢）
-model_tools.py            ←  model_tools.py（工具发现 + 分发）
+model_tools.py            ←  model_tools.py（★ 第 4 章：AST 发现 + toolset 解析 + 分发）
+toolsets.py               ←  toolsets.py（★ 第 4 章：哪些工具**暴露**给模型 —— "注册 ≠ 暴露"）
 hermes_state.py           ←  hermes_state.py（会话存储，暂时是 JSON）
 hermes_constants.py       ←  hermes_constants.py（路径解析）
 cli.py                    ←  cli.py（CLI 壳：界面逻辑，不含 agent 行为逻辑）
-tools/registry.py         ←  tools/registry.py（中央注册表）
-tools/*.py                ←  tools/*.py（一个工具一个文件，import 时自注册）
+tools/registry.py         ←  tools/registry.py（★ 第 4 章：中央注册表 + check_fn TTL 缓存）
+tools/approval.py         ←  tools/approval_detection.py（★ 第 4 章：危险检测的唯一事实来源）
+tools/*.py                ←  tools/*.py（一个工具一个文件，**import 时自注册**）
 agent/iteration_budget.py ←  agent/iteration_budget.py
 agent/prompt_builder.py   ←  agent/prompt_builder.py（★ 第 3 章：内容层）
 agent/system_prompt.py    ←  agent/system_prompt.py（★ 第 3 章：排序层 —— 三层装配）
@@ -213,11 +215,27 @@ hermes_cli/runtime_provider.py ← hermes_cli/runtime_provider.py
 
 tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响应驱动）
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
+tests/test_tools_runtime.py     # 54 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
+                                #   check_fn 抖动保护 / 结果契约 / 端到端）
 tests/test_packaging.py         # 13 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描）
 demos/                          # 能跑出来的故障复现，比散文有说服力
   why_interactive_is_serial.py  # 为什么 interactive 工具必须打断并发（三个真实故障）
   why_slow_connect_matters.py   # 连接超时 ≠ 读取超时（75s vs 2s，要等约 80 秒）
 ```
+
+**第 4 章为什么新增 `toolsets.py`**：
+
+```text
+tools/registry.py   →  "这个工具**存在**吗"（import 时自注册，来者不拒）
+toolsets.py         →  "这一轮该不该把它**告诉模型**"（按平台/会话收窄）
+```
+
+两层分开的关键后果：**注册成功≠模型看得见**。注册了但没在任何 toolset 里点名，
+工具会**静默消失**——不报错、日志干净、`registry.get()` 拿得到。
+`/tools` 就是为了让这个静默变成可见的。
+
+同一个工具还有另一道闸门 `check_fn`（"**这个环境里**它现在能用吗"）。
+两道闸门的分工判据：**"换个会话答案会变吗？"** 会 → toolset；不会 → `check_fn`。
 
 **第 3 章为什么把提示词拆成两个文件**：
 
@@ -236,6 +254,38 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 网关多平台 · 子 agent
 
 详细清单和"砍掉的代价"见《中文精译-02-AgentLoop.md》和《中文精译-03-PromptAssembly.md》的附录 B。
+
+> 📌 **第 4 章故意跳过的，按"抄结构不抄数量"分类**：
+>
+> **数量型**（抄了没意义，mini 只要证明机制存在）：
+> - Hermes 的 `DANGEROUS_PATTERNS` 有 **107 条**，mini 只留 10 条 —— 结构一样，覆盖面不装。
+> - Hermes 的 terminal 有 **7 种后端**（docker/ssh/modal/…），mini 只留 local，
+>   但把"后端表"的位置留出来了（`tools/terminal.py` 顶部的注释）。
+> - Hermes 的 `INLINE_TOOL_EXECUTORS` 有 **14 个**，mini 只有 1 个。
+>
+> **机制型**（有真实需求再补，现在做就是投机）：
+> - **异步桥接**（`_run_async`）：mini 的工具全是同步的。Hermes 需要它是因为
+>   有些工具（MCP、桌面 UI）本质是异步的，而且它的判据是
+>   **"在哪个线程 + 有没有 running loop"**，不是"CLI 还是网关"。
+> - **发现结果的磁盘缓存**（按 `(mtime, size)`）：Hermes 有 ~100 个工具文件，
+>   每次 AST 扫要 ~145ms。mini 只有 6 个 → 现在缓存是纯开销。
+> - **`check_fn` 缓存按 profile 分键**（`hermes_home_key()`）：mini 是单 profile 的。
+>   ⚠️ 这是**有意的简化**，代价写在 `tools/registry.py` 的模块 docstring 里——
+>   如果以后支持多 profile，一个 profile 的探测结果会被另一个复用。
+> - **`scoped slots` / 影子 / override 双闸门**：Hermes 允许插件注册同名工具覆盖内置的，
+>   但要过两道闸门（作者声明 `override=True` + 使用者 `config.yaml` 里 `allow_tool_override: true`），
+>   而且用 `handler.__globals__["__name__"]` 防止"包一层 lambda 冒充自己的实现"。
+>   mini 没有插件系统 → 第 10 章再回来加。
+> - **`_DYNAMIC_SCHEMA_REWRITERS`**：发 schema 前动态改工具描述（Hermes 用它把
+>   "可用工具清单"塞进 `execute_code` 的描述里）。mini 没有 `execute_code` 工具。
+> - **MCP 发现**：Hermes 把它**故意**从模块级移走了（阻塞 120s 会冻结网关心跳，
+>   issue #16856），改由每个入口自己在启动时跑。mini 没有网关。
+>
+> **顺手修好的两个真 bug**（不是"没做"，是"做错了被这一章的原则抓出来"）：
+> - 提示词里一直宣传 `search_files`（"不要用 grep/find"），但注册表里**没有这个工具**
+>   —— 正是这一章讲的"**在描述里点名不可用的工具**"。现在它真的存在了。
+> - 工具结果从 `"[error] xxx"` 纯文本改成 **JSON 字符串**（Hermes 的契约：
+>   *All handlers return a JSON string*），因为结果要**从历史里被重新解析**。
 
 > 📌 **流式输出排在哪**：官方文档里**没有**聊天文本流式的专章
 > （`streaming-tts.md` 讲的是流式语音合成，不是这个）。

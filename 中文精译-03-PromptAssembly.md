@@ -2196,6 +2196,10 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 
 三个测试文件，**全量 221 条**（154 + 54 + 13）：
 
+> 📌 这是**第 3 章末的快照**（本文锚的标签是 `ch03-prompt-assembly`）。
+> 第 4 章加了 `test_tools_runtime.py`（54 条）之后是 **4 个文件 / 275 条** ——
+> 所以如果你在今天的工作区里数出 275，**本文没有过期**，它记的就是这一刻的数。
+
 ```console
 $ python3 tests/test_prompt_assembly.py    # 154 条（47 个测试函数 / 13 组）
 $ python3 tests/test_loop_mechanisms.py    # 54 条（第 2 章的 agent loop）

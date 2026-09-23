@@ -44,7 +44,7 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 RESET = "\033[0m"
 
-BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（第 3 章：Prompt Assembly）{RESET}
+BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（第 4 章：Tools Runtime）{RESET}
 {DIM}命令：/exit 退出 · /new 开新会话 · /prompt 看三层提示词 · /todo 看任务清单 · /tools 看已注册工具 · /budget 看迭代预算 · Ctrl-C 中断当前 turn{RESET}
 """
 
@@ -237,10 +237,33 @@ class MiniCLI:
                 print(prompt_preview(self.agent))
                 continue
             if user == "/tools":
+                # 第 4 章：这个命令要能回答"**为什么模型看不到我那个工具**"，
+                # 所以它必须把三件事分开显示：
+                #   ① 已注册 ② 被 toolset 放行 ③ check_fn 说可用
+                # 只显示①会让人以为"注册了就完事"（§1 六站全景的教训：
+                # 11 步里有 5 步漏掉之后是**静默**的，得按站排查）。
                 import model_tools
+                from tools import registry
+                import toolsets
 
-                for s in model_tools.get_tool_schemas():
-                    print(f"{DIM}- {s['function']['name']}: {s['function']['description'][:60]}{RESET}")
+                visible = {s["function"]["name"] for s in model_tools.get_tool_definitions()}
+                registered = registry.tool_names()
+                allowed = toolsets.get_enabled_tool_names()
+
+                print(f"{DIM}发给模型的工具（{len(visible)} 个）：{RESET}")
+                for s in model_tools.get_tool_definitions():
+                    print(f"{DIM}  ✓ {s['function']['name']}: "
+                          f"{s['function']['description'][:52]}{RESET}")
+
+                hidden = [n for n in registered if n not in visible]
+                if hidden:
+                    print(f"{DIM}注册了但**没发给模型**（{len(hidden)} 个）：{RESET}")
+                    for n in hidden:
+                        why = ("没有 toolset 放行" if n not in allowed
+                               else "check_fn 说现在不可用")
+                        print(f"{DIM}  ✗ {n} —— {why}{RESET}")
+                print(f"{DIM}toolset：{sorted(toolsets.TOOLSETS)}　"
+                      f"探测缓存：{registry.check_fn_cache_info()}{RESET}")
                 continue
             if user == "/budget":
                 print(f"{DIM}迭代预算 {self.agent.budget.used}/{self.agent.budget.max_total}{RESET}")

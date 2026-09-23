@@ -38,6 +38,7 @@ PROJECT_MODULES = {
     "tools",
     "agent",
     "hermes_cli",
+    "toolsets",          # ← 第 4 章新增（对应 Hermes 的 toolsets.py）
 }
 
 STDLIB_PATH = Path(sysconfig.get_paths()["stdlib"]).resolve()
