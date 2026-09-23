@@ -104,6 +104,9 @@ class MiniCLI:
             approval_callback=self._ask_approval,
             status_callback=self._on_status,
             debug=debug,
+            # ---- 第 5 章：上下文压缩 ----
+            # ★ 压缩阈值 = context_length × threshold，所以窗口必须传进来。
+            context_length=spec.get("context_length"),
             # ---- 第 3 章：提示词装配 ----
             session_id=self.session_id,
             platform=platform,
@@ -115,7 +118,10 @@ class MiniCLI:
                 or None
             ),
         )
-        self._say(f"{DIM}provider={spec['provider']} model={spec['model']} api_mode={spec['api_mode']}{RESET}")
+        self._say(
+            f"{DIM}provider={spec['provider']} model={spec['model']} "
+            f"api_mode={spec['api_mode']} 窗口={spec['context_length']:,}{RESET}"
+        )
 
     # ---------------- 回调面（这些就是文档 Callback Surfaces 那一表） ----------------
 

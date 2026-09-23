@@ -556,6 +556,60 @@ def test_anchor_fingerprint_and_serialization() -> None:
     check("clear() 之后锚点没了（压缩/重置/换模型时调）", a.estimate(msgs) is None)
 
 
+def test_model_window_table_and_spec_carries_it() -> None:
+    """★ 窗口必须从 spec 一路传到压缩器。
+
+    真跑那次抓到的：`cli.py` 没传 `context_length` → 压缩阈值永远吃默认值，
+    等于"假装知道模型多大"。这条守的是那条链路的每一节。
+    """
+    import os
+    from hermes_cli import runtime_provider as rp
+
+    def _raised(fn, *a, **k):
+        try:
+            fn(*a, **k)
+            return False
+        except Exception:
+            return True
+
+    check("查证过的模型有确切窗口（deepseek-chat = 128K，来源：官方 API 文档）",
+          rp.resolve_context_length("deepseek-chat") == 128_000,
+          str(rp.resolve_context_length("deepseek-chat")))
+    check("★ 未查证的模型不猜，落保守值（宁可压早，不可压晚）",
+          rp.resolve_context_length("gpt-4o-mini") == rp.MODEL_CONTEXT_DEFAULT == 64_000,
+          f"{rp.resolve_context_length('gpt-4o-mini')} / 默认 {rp.MODEL_CONTEXT_DEFAULT}")
+    check("表里没有的模型也走保守值",
+          rp.resolve_context_length("某个不存在的模型") == rp.MODEL_CONTEXT_DEFAULT)
+
+    os.environ["MINI_CONTEXT_LENGTH"] = "8000"
+    try:
+        check("环境变量能覆盖（试不同窗口用）",
+              rp.resolve_context_length("deepseek-chat") == 8_000)
+        os.environ["MINI_CONTEXT_LENGTH"] = "abc"
+        check("★ 坏值**报错**而不是静默用默认值（静默 = 你以为设了 8000）",
+              _raised(rp.resolve_context_length, "deepseek-chat"))
+        os.environ["MINI_CONTEXT_LENGTH"] = "-1"
+        check("负数也报错", _raised(rp.resolve_context_length, "deepseek-chat"))
+    finally:
+        os.environ.pop("MINI_CONTEXT_LENGTH", None)
+    check("清理干净（不然污染别的测试）", "MINI_CONTEXT_LENGTH" not in os.environ)
+
+    had = os.environ.get("DEEPSEEK_API_KEY")
+    os.environ["DEEPSEEK_API_KEY"] = "test-key-not-used"
+    try:
+        spec = rp.resolve_provider("deepseek")
+        check("★ spec 里带着 context_length（cli.py 就是从这里取的）",
+              spec.get("context_length") == 128_000, str(spec.get("context_length")))
+        check("spec 的 model 名和窗口对得上", spec["model"] == "deepseek-chat", spec["model"])
+    finally:
+        if had is None:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+        else:
+            os.environ["DEEPSEEK_API_KEY"] = had
+    check("假 key 清理干净（不污染别的测试）",
+          os.environ.get("DEEPSEEK_API_KEY") != "test-key-not-used")
+
+
 def test_prompt_caching_markers_and_gates() -> None:
     """★ 提示词缓存：断点怎么挑 / 标记落哪 / **三种「没插标记」要能区分**。
 
@@ -664,6 +718,9 @@ GROUPS = [
      [test_anchor_reports_real_plus_delta,
       test_anchor_rejects_zero_and_missing_usage,
       test_anchor_fingerprint_and_serialization]),
+    ("9. 模型窗口",
+     "查证过的模型有确切窗口 / **未查证的绝不猜** / 坏值报错 / spec 带得住",
+     [test_model_window_table_and_spec_carries_it]),
 ]
 
 

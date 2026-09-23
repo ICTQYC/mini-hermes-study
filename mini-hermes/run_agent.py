@@ -212,7 +212,9 @@ class AIAgent:
         self.context_cwd = context_cwd
         self.skip_context_files = skip_context_files
         self.load_soul_identity = load_soul_identity
-        self.context_length = context_length
+        # ★ 显式参数优先；没传就从 spec 拿（`resolve_provider` 已经查过表了）。
+        #   两者都没有才落到 None，由压缩器用它的保守默认值兜住。
+        self.context_length = context_length or spec.get("context_length")
 
         # ★ 系统提示词的缓存 —— **这一章的立章之本**。
         #   不缓存 = 每轮重读文件 + 每轮结果可能不同 = "字节不稳定"，

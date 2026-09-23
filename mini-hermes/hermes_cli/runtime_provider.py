@@ -55,6 +55,42 @@ PROVIDER_REGISTRY: Dict[str, Dict[str, Any]] = {
 }
 
 
+# ── 模型 → 上下文窗口（token）────────────────────────────────────────────
+# ★ 这张表是**外部事实**，会过时，所以：一条一行、带来源、允许环境变量覆盖。
+#
+# 为什么必须知道这个数：压缩阈值 = 窗口 × 0.50。窗口填**大**了 → 永远不压缩 →
+# 溢出报错；填**小**了 → 压得太勤 → 多花辅助调用的钱。**宁可填小**。
+#
+# 查证过的：
+#   deepseek-chat  128_000  —— DeepSeek 官方 API 文档：deepseek-chat / deepseek-reasoner
+#                              对应 DeepSeek-V3.2，128K 上下文。查证于 2026-09-23。
+#                              ⚠️ 若该别名已指向 V4（1M），要重新查证再改这一行。
+# 没查证的**不填**（不猜）：例如 gpt-4o-mini / claude-sonnet-4-5 目前落到下面的
+# MODEL_CONTEXT_DEFAULT。要用它们就先查官方文档，再把数字连同来源加进来。
+MODEL_CONTEXT_WINDOWS: Dict[str, int] = {
+    "deepseek-chat": 128_000,
+}
+# 表里没有的模型用这个（保守值：压早一点，不冒溢出的风险）
+MODEL_CONTEXT_DEFAULT = 64_000
+
+
+def resolve_context_length(model: str) -> int:
+    """模型 → 窗口大小。环境变量 MINI_CONTEXT_LENGTH 优先（用来试不同窗口）。
+
+    环境变量的值解析不出来时**报错**而不是静默用默认值 —— 静默的话你会以为
+    自己设了 8_000、实际在用 64_000，压缩行为完全对不上。"""
+    raw = os.environ.get("MINI_CONTEXT_LENGTH", "").strip()
+    if raw:
+        try:
+            val = int(raw)
+        except ValueError:
+            raise RuntimeError(f"MINI_CONTEXT_LENGTH 必须是整数，收到 {raw!r}") from None
+        if val <= 0:
+            raise RuntimeError(f"MINI_CONTEXT_LENGTH 必须为正，收到 {val}")
+        return val
+    return MODEL_CONTEXT_WINDOWS.get(model, MODEL_CONTEXT_DEFAULT)
+
+
 def env_file_candidates() -> List[Path]:
     """密钥文件的候选路径，按优先级排序。"""
     out: List[Path] = []
@@ -127,10 +163,14 @@ def resolve_provider(provider: str, model: Optional[str] = None) -> Dict[str, An
     if spec.get("base_url_env"):
         base_url = os.environ.get(spec["base_url_env"], base_url) or base_url
 
+    model_name = model or spec["default_model"]
     return {
         "provider": provider,
         "api_mode": spec["api_mode"],
         "base_url": base_url.rstrip("/"),
         "api_key": api_key,
-        "model": model or spec["default_model"],
+        "model": model_name,
+        # ★ 窗口大小随 spec 一起走 —— 压缩阈值 = 窗口 × threshold，
+        #   没有它就只能吃默认值，等于"假装知道模型多大"。
+        "context_length": resolve_context_length(model_name),
     }
