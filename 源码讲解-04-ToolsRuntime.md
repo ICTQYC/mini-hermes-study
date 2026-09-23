@@ -128,6 +128,64 @@ def read_file_tool(path, offset=1, limit=...): ...
 
 ---
 
+### 自注册换掉了什么：一张中央表的三个代价
+
+> 精译 §0.5 给了点题版；这里是完整证据。
+
+**假想的"中央表"写法**：
+
+```python
+# tools/_table.py
+from tools.terminal import terminal_tool
+from tools.file_tools import read_file_tool, write_file_tool, list_dir_tool
+from tools.search_files import search_files_tool
+
+TOOLS = {
+    "terminal":     terminal_tool,
+    "read_file":    read_file_tool,
+    "write_file":   write_file_tool,
+    "list_dir":     list_dir_tool,
+    "search_files": search_files_tool,
+}
+```
+
+| # | 代价 | 具体表现 |
+|---|---|---|
+| ① | **加工具 = 改一个共享文件** | 要在 `_table.py` 改两处（import + 表项）。而这个文件**出现在每个人的 diff 里** → 天天撞冲突（Hermes 有 **59** 个核心工具） |
+| ② | ★ **一个名字变成两个真相** | 表里的 key 和 `@register_tool("...")` 里的名字要**手动对齐**。改一处忘另一处 → 名字与实现对不上，而**没有任何机制会报错** |
+| ③ | **删工具会留下悬空项** | 表里那行还在，指向一个不存在的函数 |
+
+第 ② 条是根本的：自注册保住了 **`name` 只有一个来源**——
+那个参数同时喂了台账的 key 和 schema 的名字，所以"两边一致"是**结构保证**。
+中央表把它换成"记得两边都改"。
+
+**依赖方向的真实现测**（`grep` 出来的 import 关系）：
+
+```text
+tools/registry.py   →  （空）                          ← 叶子，谁都不依赖
+tools/terminal.py   →  tools.approval, tools.registry, hermes_constants
+tools/file_tools.py →  tools.registry（+ hermes_constants）
+model_tools.py      →  toolsets, tools.registry         ← 发现器也不认识具体工具
+run_agent.py        →  model_tools, agent.*, tools.todo
+```
+
+**单向**：registry（叶子）← 工具 ← 发现器 ← agent。
+**工具之间零依赖**——`terminal.py` 不认识 `file_tools.py`，反之亦然。
+中央表版会把这条链反过来：`_table.py` 必须 import 每一个工具实现。
+
+**判据：怎么看出一个项目有没有退化成中央表？**
+搜"同时点名了多个工具名"的文件。mini 里只有两个命中，而且**都不是中央表**：
+
+- `tools/file_tools.py` 点名 3 个 —— 那 3 个是**它自己实现的**（每个名字只出现在它自己的注册调用里）
+- `toolsets.py` 点名 5 个 —— 这是**暴露表**，是另一回事（§四）
+
+**配套**：自注册只回答"谁来登记"，不回答"谁去 import 那些文件"。
+所以必须配发现机制（§二）。两个机制是一对，缺一个都不成立。
+
+**边界**：自注册 ≠ 自动暴露 —— 加工具仍要改 `toolsets.py`。
+
+---
+
 ## 二、发现机制 ★ 本章核心差异
 
 ### mini 版怎么做的

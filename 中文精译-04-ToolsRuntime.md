@@ -31,6 +31,79 @@
 
 ---
 
+## 0.5 点题：「自注册」为什么值得记住
+
+这是本章最容易被当成"实现细节"、实际上是**设计创新**的一点。
+原文只在第一句用了这个词（*self-registering*），**没有解释它换掉了什么**。
+
+### 它换掉的是"一张中央表"
+
+一张中央表长这样（假想的另一种写法）：
+
+```python
+# tools/_table.py
+from tools.terminal import terminal_tool
+from tools.file_tools import read_file_tool, write_file_tool, list_dir_tool
+
+TOOLS = {
+    "terminal":  terminal_tool,
+    "read_file": read_file_tool,
+    "write_file": write_file_tool,
+    "list_dir":  list_dir_tool,
+}
+```
+
+自注册则是**每个工具文件自己报名**：
+
+```python
+# tools/terminal.py
+@register_tool("terminal", ...)      # ← 模块被 import 时，这一行就执行
+def terminal_tool(...): ...
+```
+
+实测（全新进程，只做了一句 `import`，**没调用任何函数**）：
+
+```text
+刚启动，注册表： []
+import tools.terminal            → ['terminal']      ← 凭空多了一条
+import tools.file_tools          → ['list_dir', 'read_file', 'terminal', 'write_file']
+```
+
+**注册是 `import` 这个动作的副作用**——因为装饰器写在模块体里，模块一被 import 就执行。
+
+### 收益有两层，第二层才是重点
+
+| 层 | 收益 | 具体是什么 |
+|---|---|---|
+| 表层 | 加工具不用改共享文件 | 中央表会出现在**每个人的 diff 里** → 天天撞冲突（Hermes 有 **59** 个核心工具） |
+| ★ 深层 | **依赖方向是单向的** | 工具只 import `tools/registry.py`（一个**谁都不依赖的叶子**）；**工具之间互不认识**；连发现器都不认识具体工具 |
+
+还有一条同样重要：**一个名字只写一次**。
+
+`@register_tool("read_file")` 里那个 `name` 参数**同时喂了两个地方**——台账的 key、
+以及发给模型的 schema 名字。所以"两边一致"是**结构保证**，不是纪律要求。
+换成中央表，一个名字就有**两个真相**（表里的 key + 装饰器里的名字），
+改一处忘一处**不会报错**。
+
+### 必须配套的东西：有人得去 import
+
+自注册只回答"**谁来登记**"，不回答"**谁去 import 那些文件**"。
+没人 import，那个文件就永远不会注册。
+
+所以它必须配一个**发现机制**（§2 的 AST 检查）：只要文件里有那句注册，就会被发现。
+**两个机制是一对**：只有自注册没有发现 → 谁也不注册；只有发现没有自注册 → 发现器
+得自己知道该注册什么（又退回中央表）。
+
+### 边界：自注册 ≠ 自动暴露
+
+加一个工具**仍然要改 `toolsets.py`**（§4）。自注册省掉的是"发现"那一半，
+不解决"暴露"。
+
+> 📌 完整版（中央表的三个具体代价、依赖方向的 import 实测）在
+> 《源码讲解-04-ToolsRuntime.md》**§一**。
+
+---
+
 ## 1. 工具注册模型（`registry.register()`）
 
 ### 原文
