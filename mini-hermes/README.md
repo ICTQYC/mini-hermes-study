@@ -13,7 +13,7 @@
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
-| 5 | `context-compression-and-caching.md` | ⬜ 待做（`_preflight_compression` 是空函数） | — |
+| 5 | `context-compression-and-caching.md` | ⬜ **进行中**（`_preflight_compression` 还是空函数） | 《中文精译-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ⬜ 待做（现在是 JSON，要换 SQLite） | — |
 | 7 | `gateway-internals.md` | ⬜ 待做 | — |
 
