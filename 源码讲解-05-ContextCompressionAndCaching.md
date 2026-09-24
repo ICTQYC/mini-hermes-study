@@ -29,7 +29,7 @@ mini 版（本仓库，第 5 章末）
     run_agent.py（接线六处）              ←  agent/compression_facade.py         289 行
     tests/test_compression.py     748 行     agent/conversation_compression.py 4,104 行
                                              agent/micro_compaction.py         419 行
-                                             gateway/run_turn.py（卫生那一半）4,174 行
+                                             gateway/run_turn.py               4,174 行（会话维护那一半）
 
 真实版
   ~/.hermes/hermes-agent/
@@ -70,7 +70,7 @@ mini 版（本仓库，第 5 章末）
 | 20 | **不插标记的判据** | 3 种（空列表 / 自动前缀 / 非 Claude 路由） | **10 类**（开关、MoA、传输方式、自定义 provider 能力声明、LiteLLM 路由的 tool 标记、非缓存路由主动剥离…） | 规模 | ⬜ 抄"主动剥离"这一条 |
 | 21 | **TTL 夹取** | 只校验合法值 | `1h` 有**白名单**，Alibaba/Qwen 系强制降到 5m（注释：*narrowing DISABLES caching*） | 缺失 | ❌（mini 用不上） |
 | 22 | **"自动前缀缓存"** ★ | 自建 `AUTO_PREFIX_CACHE_PROVIDERS = ("deepseek",)` | 源码里**没有这个概念**；唯一的自动前缀分支是 MiniMax-M3；DeepSeek 只在 usage 字段解析和一处"排除"注释里出现 | **mini 自造** | ❌（但要在讲解里说清它为什么不影响结论） |
-| 23 | **网关会话卫生（85%）** | 无 | `gateway/run_turn.py`，0.85 阈值 + 会话级租约 + 提交栅栏 + 失败冷却 | 缺失 | ❌ 属于第 7 章 |
+| 23 | **网关侧的会话维护（session hygiene，85%）** | 无 | `gateway/run_turn.py`，0.85 阈值 + 会话级租约 + 提交栅栏 + 失败冷却 | 缺失 | ❌ 属于第 7 章 |
 | 24 | **工具结果契约** | ✅ 输出永远配对完整（`validate_tool_pairs` 契约检查） | ✅ 同（但检查点更多） | **已对齐** | — |
 
 > **读法**：6、9、10、12、16、17 是本章**真正值钱**的六条 ——
@@ -1193,7 +1193,7 @@ mini 的做法在**教学上更好**（它把"为什么不动请求"说出来了
 
 ### 真实 Hermes 怎么做的
 
-网关侧**另有一套**会话卫生（mini 没有网关，这一半属于第 7 章）。它的阈值注释逐字说明了
+网关侧**另有一套**会话维护（session hygiene；mini 没有网关，这一半属于第 7 章）。它的阈值注释逐字说明了
 两套系统的关系（`gateway/run_turn.py:595-607`）：
 
 ```python
@@ -1393,7 +1393,7 @@ tests/test_compression.py     114 通过 / 0 失败　（9 组）
 | 13 | 引擎解析链（三跳 + 深拷贝 + 警告回退） | ⬜ 等插件系统 | — |
 | 14 | 窗口九级降级链 | ⬜ 抄结构不抄数据源；mini 保持"只填查证过的" | — |
 | 15 | 缓存十类"不插标记" + TTL 白名单 | ⬜ 抄"主动剥离"这一条就够 | ~5 行 |
-| 16 | 网关会话卫生（85%） | ❌ 第 7 章的事 | — |
+| 16 | 网关侧的会话维护（session hygiene，85%） | ❌ 第 7 章的事 | — |
 | 17 | 微压缩 / 原生 Responses 压缩 / Codex 三条支线 | ❌ 不属于本章主线 | — |
 | 18 | 锚点指纹改成"最后一条已计价消息"（O(1)） | ⬜ 性能优化，mini 的历史规模用不上 | ~10 行 |
 

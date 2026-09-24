@@ -663,7 +663,7 @@ def _auto_load_parts(agent):
 
 > 与 `_skills_prompt` 同一个门控：没有技能工具就什么都不给，
 > 而且 **`skip_context_files` 的 agent 也不给**（委派出去的子 agent、curator/review fork、
-> 网关的卫生检查 agent）——**钉住的技能是"给用户这个会话的运维指导"，不是给每个内部 fork 的载荷。**
+> 网关的会话维护 agent）——**钉住的技能是"给用户这个会话的运维指导"，不是给每个内部 fork 的载荷。**
 
 > 📌 这句话和第 2 章讲的"**子 agent 不加载 SOUL.md**"是同一套判断：
 > **内部 fork 不该继承用户的个人化配置**——那些东西是给"用户面前的那个 agent"的。
