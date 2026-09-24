@@ -552,7 +552,7 @@ so the session wedges"* → 静默截断的 provider 永远不会报溢出，会
 
 | | 查不到窗口时 | 理由 |
 |---|---|---|
-| mini | 落 **64,000**（偏小） | 「宁可压早，不可压晚」——mini 没有反应式恢复，被 provider 拒一次就废一轮 |
+| mini | 落 **64,000**（偏小） | 「宁可压早，不可压晚」——mini 没有被拒后补救（reactive recovery），被 provider 拒一次就废一轮 |
 | 真实 | 落 **256,000**（`DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]`，`model_metadata.py:300`；测试钉住 `== 256_000`：`tests/hermes_cli/test_custom_provider_context_length.py:213`） | 「不猜小」——因为**猜小的代价是白压缩**（丢信息 + 断缓存），而猜大的代价只是一次可恢复的 400 |
 
 📌 **顺带纠正一个 mini 自己的用词**：mini 把 64,000 叫"窗口的保守默认值"，
