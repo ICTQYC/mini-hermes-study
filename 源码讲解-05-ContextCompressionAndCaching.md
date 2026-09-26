@@ -589,7 +589,9 @@ so the session wedges"* → 静默截断的 provider 永远不会报溢出，会
 
 📌 **顺带纠正一个 mini 自己的用词**：mini 把 64,000 叫"窗口的保守默认值"，
 但在真实版里 **64,000 是 `MINIMUM_CONTEXT_LENGTH` —— 阈值的地板，不是窗口的默认值**。
-两个常量、两个用途，mini 让它们共用一个数字是巧合，写文档时别混。
+两个常量、两个用途。抄平三步算术（`f59d4f8`）之后 mini **两个常量都有了**：
+`DEFAULT_CONTEXT_LENGTH = 64_000`（窗口兜底）与 `MINIMUM_CONTEXT_LENGTH = 64_000`（阈值地板）——
+**同值不同用**，写文档/读代码时别混。
 
 ---
 
@@ -621,7 +623,7 @@ so the session wedges"* → 静默截断的 provider 永远不会报溢出，会
 
 | 趟 | 函数 | 干什么 | mini 有吗 |
 |---|---|---|---|
-| 1 | `_dedupe_tool_results`（:2752-2768） | `hashlib.md5(...)[:12]` 去重，重复的换成 `[Duplicate tool output — same content as a more recent call]` | ❌ |
+| 1 | `_dedupe_tool_results`（:2752-2768） | `hashlib.md5(...)[:12]` 去重，重复的换成 `[Duplicate tool output — same content as a more recent call]` | ✅ **已抄**（`f59d4f8`） |
 | 2 | `_demote_tool_result_at`（:2786） | 长结果 → 摘要/占位（**正在引用的 skill 内容例外**，`_SKILL_VIEW_PRUNE_MIN_CHARS = 5000`） | ✅（简化为整条替换） |
 | 3 | `_truncate_tool_call_args_at`（:2770-2784） | `len(args) > 500` 时**在 JSON 内部**截断参数（保持仍是合法 JSON，否则 provider 每轮 400） | ❌ |
 | 3.5 | `_retire_stale_tool_result_images`（:1237） | 尾部里的旧图片载荷退役成占位；**最新的几帧留着** | ❌（mini 无多模态） |
@@ -629,8 +631,9 @@ so the session wedges"* → 静默截断的 provider 永远不会报溢出，会
 
 ### 差在哪
 
-- **第 1 趟（去重）性价比最高**：一个 hash + 一张表，就能处理"同一个文件被读了三遍"这个
-  长会话里最常见的浪费。**mini 应该抄**（约 15 行）。
+- **第 1 趟（去重）已经抄了（`f59d4f8`）**：`dedupe_tool_results()` —— 一个 hash + 一张表，
+  处理掉"同一个文件被读了三遍"这个长会话里最常见的浪费。真跑里它也参与了收据
+  （34 条 → 14 条那一次，阶段一清掉的 6 条里有它的份）。
 - **第 3 趟解决的是一个 mini 想不到的故障**：截断 `tool_calls.arguments` 时如果只在字符串层面
   砍，JSON 就废了，而**每轮都要重发工具调用** —— 于是"每轮 400"直到那条消息滑出窗口。
   这类 bug 的形状是"**一个坏数据 + 一个每轮重发的路径**"。
@@ -997,19 +1000,23 @@ def _await_worker_within_budget(future, fence, *, idle, ceiling, wait_started) -
 
 ---
 
-## 九、工具配对：三层，且有一条和 mini 正好相反
+## 九、工具配对：三层（其中一层 mini 曾经正好相反，现已抄平）
 
 ### mini 版怎么做的
 
 ```python
-# mini-hermes/agent/context_compressor.py:210-258（化简）
+# mini-hermes/agent/context_compressor.py:342-402（化简；★ f59d4f8 抄平之后的版本）
 def sanitize_tool_pairs(messages):
     """· 引用了**已被移除**的调用的工具结果 → 删掉
-       · 结果**已被移除**的工具调用 → 注入一条占位结果"""
+       · 结果**已被移除**的工具调用 → **剥掉那个 tool_call**（保留可见内容）
+       · in-flight：最后一条非 tool 的 assistant 的调用视为**在途**、原样保留"""
 ```
 
-外加一个**契约检查** `validate_tool_pairs()`（:261-285）：返回问题列表，空 = 没问题。
+外加一个**契约检查** `validate_tool_pairs()`（:404-428）：返回问题列表，空 = 没问题。
 这是 mini 保证"出口永远配对完整"的手段（有测试钉住）。
+
+> 📌 原来 mini 走的是**注入一条占位结果**（和真实版正好相反）—— 下面"差在哪"里那段
+> "为什么 mini 的占位能活、真实版的不行"保留着，它是这一节最值钱的推理，只是**现在成了历史**。
 
 ### 真实 Hermes 怎么做的
 
@@ -1068,14 +1075,14 @@ id 别名策略的注释解释了为什么压缩器**必须转发**而不是自�
 | 缺结果的调用 | **剥掉 `tool_calls`**，保留可见内容（空则写「工具调用已在压缩时移除…」） | **剥掉 tool_calls**，并保留可见内容（空则写 `"(tool call removed)"`） |
 | 理由 | 「**注入的 stub 会被下游按 id 别名当孤儿丢掉**」 | 同（`repair_message_sequence`，id 对不上） |
 | in-flight | 最后一条非 tool 的 assistant 视为**在途**，原样保留 | 同 |
+| 判据来源 | 自己写（`tool_call_id` 精确匹配） | 单一事实源 + id 别名转发 |
 
-> ✅ **已抄平**（`f59d4f8`）。原来的状态是"**正好相反**"（mini 注入占位结果）—— 那句话之所以值钱，
+> ✅ **已抄平**（`f59d4f8`）。原来的状态是"**正好相反**"（mini 注入占位结果）—— 下面那段为什么值钱，
 > 是因为它解释了一个**看不出来**的错：mini 的推理"删掉会改变对话的形状"并不错，
 > 它只是**不知道自己下游有谁**。
-| 判据来源 | 自己写 | 单一事实源 + id 别名转发 |
 
-📌 **mini 的推理并不错，错在它不知道自己下游有谁。**
-mini 的占位结果里 `tool_call_id` 和调用 id **是一致的**，所以在 mini 里能活下来；
+📌 **（历史）mini 的推理并不错，错在它不知道自己下游有谁。**
+**（抄平前）** mini 的占位结果里 `tool_call_id` 和调用 id **是一致的**，所以在 mini 里能活下来；
 真实版下游还有 `repair_message_sequence` 会做"**id 变体匹配**"，
 一个"位置对但拼法不对"的 stub 会被它当孤儿丢掉 —— 于是**在两个组件之间被消灭**。
 → 这就是"**为什么真实版选择剥掉而不是补上**"：**补上的东西必须能被下游认出来，
@@ -1225,7 +1232,7 @@ mini 的做法在**教学上更好**（它把"为什么不动请求"说出来了
 | 不插标记 | 3 类 | 10 类（含"主动剥离"） | ⬜ 抄 (h) 主动剥离 |
 | TTL 夹取 | 只校验合法 | 1h 白名单 + Alibaba/Qwen 降级 | ❌ mini 用不上 |
 | 工具消息 | 仅原生 Anthropic 才带 | 同上 + LiteLLM 路由禁 part 标记 | ❌ |
-| 幂等性 | 深拷贝后直接插 | 深拷贝后**先剥旧的**再插 | ✅ **值得抄**：重刷请求时不会叠标记 |
+| 幂等性 | 深拷贝后**先剥旧的**再插（`strip_cache_control()`）✅ | 同 | ✅ **已抄**（`f59d4f8`）：重刷请求时不会叠标记（断点滚动后标记数仍 ≤ 4） |
 
 ---
 
