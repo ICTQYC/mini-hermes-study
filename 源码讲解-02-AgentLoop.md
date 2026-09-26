@@ -6,6 +6,10 @@
 > 所有结论都标了 `文件:行号` 来源。行号会漂，**按方法名 grep 更可靠**：
 > `grep -rn "def 方法名" ~/.hermes/hermes-agent/agent/*.py`
 
+[TOC]
+
+---
+
 ## 两份代码的路径
 
 ```bash
