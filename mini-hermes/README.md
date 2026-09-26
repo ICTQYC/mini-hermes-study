@@ -13,7 +13,7 @@
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
-| 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · 114 条测试 · 接线 · 真跑验证） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
+| 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ⬜ 待做（现在是 JSON，要换 SQLite） | — |
 | 7 | `gateway-internals.md` | ⬜ 待做 | — |
 
@@ -177,7 +177,7 @@ python3 tests/test_packaging.py        # 18 条：零依赖 / 无硬编码路径
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
 python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
 python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
-python3 tests/test_compression.py      # 114 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
+python3 tests/test_compression.py      # 152 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
 #      find . -name __pycache__ -type d -exec rm -rf {} +
@@ -247,7 +247,7 @@ tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响�
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
 tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
-tests/test_compression.py       # 114 条压缩与缓存自测（★ 第 5 章：token 记账 / 边界 /
+tests/test_compression.py       # 152 条压缩与缓存自测（★ 第 5 章：token 记账 / 边界 /
                                 #   四阶段 / 无进展守卫 / 契约 / 缓存标记 / 模型窗口表）
 tests/test_packaging.py         # 18 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 /
                                 #   写死路径扫描 / **命令行旗标契约**：README 与注释宣传的旗标必须真的存在）
@@ -335,13 +335,13 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 >   无 `state.db` → 它的消费者还不存在。
 > - **微压缩 / 原生 Responses 压缩 / Codex 三条支线**：都不是本章主线。
 >
-> **mini 与真实版"语义不同"的两处**（不是做得少，是做的不一样，详见《源码讲解-05》§五、§九）：
-> - **尾部条数地板**：mini 用 `protect_last_n=20` 直接取"更宽松的" → 20 条以内的历史**什么都压不动**；
->   真实版把它封顶到 ≤8（`_MAX_TAIL_MESSAGE_FLOOR`），注释里写的正是这个症状。
-> - **配对清理**：mini 给"缺结果"的调用**注入占位结果**；真实版**剥掉调用**
->   （注释：占位会被下游 `repair_message_sequence` 当孤儿丢掉）。
+> **这两处"语义不同"已经在差距清单 A+B 批（`f59d4f8`）抄平了**（保留原始差异描述以备查）：
+> - **尾部条数地板**：原来 mini 用 `protect_last_n=20` 直接取"更宽松的" → 20 条以内的历史**什么都压不动**；
+>   现在与真实版一致：封顶到 ≤8（`_MAX_TAIL_MESSAGE_FLOOR`）、下限 3（`tail_message_floor`）。
+> - **配对清理**：原来 mini 给"缺结果"的调用**注入占位结果**；现在**剥掉调用** + in-flight 保护
+>   （真实版注释：占位会被下游 `repair_message_sequence` 当孤儿丢掉）。
 >
-> 另外，读源码时**核出上游文档 6 处不一致**（最重的是"默认 50% 触发"——
+> 另外，读源码时**核出上游文档 7 处不一致**（最重的是"默认 50% 触发"——
 > 源码对 <512K 窗口的模型抬到 75%，还要过 64K 地板与 85% 上限），
 > 清单在《源码讲解-05》附录 C。
 
