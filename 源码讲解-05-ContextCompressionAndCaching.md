@@ -219,6 +219,28 @@ def _select_context_engine(_agent_cfg):
 - **`tools()` 必须配一个执行入口**。mini 的 `tools()` 只有 schema、没有 `handle_tool_call`，
   等于"能宣称自己有工具、但没人能调" —— 这和第 4 章那个"注册了却没被 toolset 放行"的坑
   是**同一个形状**（单向的接口）。真要支持插件引擎时，这两半必须一起加。
+
+  **但只补 `handle_tool_call` 也还不够**：真实 Hermes 里"引擎工具能被调用"靠的是**宿主的三处接线**，
+  它们都不在引擎里 ——
+
+  | 环节 | 谁做 | 位置 |
+  |---|---|---|
+  | ① 把引擎的 schema 塞进**发给模型的那一包** | 宿主（启动时） | `agent/agent_init.py:1970`（含去重、无名跳过 —— 无名 schema 会让 strict provider 400 并**废掉整个 toolset**，#47707） |
+  | ② 把名字登记成**可路由的集合**（`_context_engine_tool_names`） | 宿主 | 同上，`:1985` |
+  | ③ 分发时判断"这个名字归引擎"→ 调 `handle_tool_call` | 宿主 | `agent/tool_executor.py:1561` |
+  | ④ 真正干活、返回 JSON | 引擎 | `ContextEngine.handle_tool_call()` |
+
+  **mini 现在这三处都没有** → 单补④就是死代码。两条旁证：
+
+  - 引擎的工具**不进 registry**（`tool_executor.py:1565` 注释逐字：*"Memory-provider tools
+    (hindsight_retain, honcho_search, ...) are **not in the registry**."*）—— 它走的是
+    "**名字集合 + 显式分支**"这**第二套来源**；mini 只有 AST 发现那一套，要抄它就得动第 4 章的地基。
+  - 引擎的工具**同样过 toolset 闸门**：`agent_init.py:1963` 的条件里有
+    `"context_engine" in agent.enabled_toolsets` —— 第 4 章那两道闸门在这里被复用。
+  - 而且 mini **没有消费者**：内置引擎的 `tools()` 恒为 `[]`，也没有插件引擎。
+
+  → 所以这里的状态是"**接口形状留对了、文档明说没接**"，和第 4 章那种"注释里承诺了却根本没做"
+  的假承诺（`--list-toolsets`）**不是一类**：那个是"做出来才算数"，这个是有真实消费者了再做。
 - **可选参数按签名过滤**（`_accepts_keyword_argument`，见 `agent/context_compressor_summary.py:29-48`）
   是为了**旧引擎不炸**：宿主加一个新参数（比如 `bypass_cooldown`），第三方引擎的
   `compress` 没有这个形参就**不传**。mini 没有第三方引擎，所以不需要这层 ——
