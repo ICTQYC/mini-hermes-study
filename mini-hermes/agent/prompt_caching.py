@@ -128,6 +128,39 @@ def _put_marker(msg: Dict[str, Any], mark: Dict[str, Any], *, native_anthropic: 
     msg["cache_control"] = mark
 
 
+def strip_cache_control(messages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """剥掉全部 `cache_control` 标记，并把"装饰产生的列表形状"还原回字符串（★ 差距清单 #8）。
+
+    ★ 与真实版 `strip_anthropic_cache_control`（`agent/prompt_caching.py:156`）对齐，
+    它的 docstring 逐字：*"Remove ``cache_control`` markers and undo decoration-produced list
+    shapes (in place)."*  —— 差异只有一处接口：真实版**就地**改（调用方负责先拷贝），
+    mini 直接返回副本（和 `apply_cache_control` 一样，绝不碰存储里的历史）。
+
+    为什么必须有这一步（真实版的理由，不是洁癖）：**同一个请求可能被组装多次**
+    （重试、回退供应商、MoA 多路准备），而 `apply` 会把**字符串内容换成内容块数组**。
+    不先剥的话第二次 apply 会：
+      ① 在已带标记的元素上再写一个 `cache_control`（幂等性没了）；
+      ② 在"只有一个 text 块"的数组外面继续套（形状越滚越深）。
+    真实版还专门注明：剥的时候要**还原成 `apply` 会产出的那种确切形状** ——
+    被装饰的那份是**要发出去的副本**，不是存储里的转写本。
+    """
+    out = copy.deepcopy(list(messages))
+    for msg in out:
+        msg.pop("cache_control", None)
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict):
+                part.pop("cache_control", None)
+        # 还原 apply 的"字符串 → 单元素 text 列表"装饰形状
+        if (len(content) == 1 and isinstance(content[0], dict)
+                and content[0].get("type") == "text"
+                and set(content[0]) <= {"type", "text"}):
+            msg["content"] = content[0]["text"]
+    return out
+
+
 def apply_cache_control(
     messages: Sequence[Dict[str, Any]],
     *,
@@ -139,8 +172,10 @@ def apply_cache_control(
     ⚠️ 必须深拷贝的理由（原文原话）：标记会**改写消息内容本身**
     （字符串内容被转成内容块数组）。就地改的话，历史会被永久改成
     "带 cache_control 的形状"，下一轮发给别的供应商时就多了一个未知字段。
+
+    ★ 差距清单 #8：进来先 `strip_cache_control`（**先剥旧的再插**）→ 幂等。
     """
-    out = copy.deepcopy(list(messages))
+    out = strip_cache_control(messages)
     mark = marker(ttl)
     for idx in breakpoints(out):
         _put_marker(out[idx], mark, native_anthropic=native_anthropic)
