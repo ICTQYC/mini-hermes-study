@@ -3,6 +3,10 @@
 > 配套《中文精译-05-ContextCompressionAndCaching.md》。那篇讲**原理**（原文说了什么），
 > 这篇讲**差异**：mini 版和真实版差在哪、每处差价值不值得改，外加本章实现时抓出的真问题。
 >
+> **阅读顺序**：最前面是「**导言 · 机制总览：Hermes 具体怎么做的**」—— 先把 Hermes 一侧讲清
+> （只有机制与源码，不含 mini），再看 §〇 差异一览表，最后逐项看差距与真问题。
+> 这条体例从第 5 章起固定：**每章《源码讲解》最前面都有一节机制总览**。
+>
 > 体例同《源码讲解-03 / 04》：**先给差异一览表**（一眼看全）→ 逐项「mini 怎么做的 /
 > 真实 Hermes 怎么做的 / 差在哪」→ 真问题 → 结尾差距清单。
 >
@@ -41,6 +45,197 @@ mini 版（本仓库，第 5 章末）
 本章挖出的每一处差异，几乎都能在上游找到一个 issue 号或一段故障报告注释。
 
 ---
+
+## 导言 · 机制总览：Hermes 具体怎么做的（先读这一节）
+
+> **这一节只有 Hermes 一侧**：不讲 mini 怎么实现、也不讲差异（那些从 §〇 开始）。
+> 读完它应该能独立回答一个问题：**这一章里 Hermes 到底做了什么？**
+>
+> 行号锚在上游 `f5d1926110`（v0.21.3）；引文优先取**注释原话**（WHY 都写在注释里）。
+
+### 0.1 谁在管这件事：三个角色
+
+| 角色 | 是谁 | 什么时候干活 |
+|---|---|---|
+| **接口** | `class ContextEngine(ABC)` `agent/context_engine.py:47` | 定义"引擎必须提供什么"，让压缩引擎**可替换**（Hermes 另有一个 `lcm` 引擎） |
+| **实现** | `class ContextCompressor(...)` `agent/context_compressor.py:1782` | agent **跑一轮时**醒来：该不该压 → 压 |
+| **兜底** | `_hmwa_run_session_hygiene` `gateway/run_turn.py:1261` | **两轮之间**（消息刚到、还没交给 agent） |
+
+```python
+"""Base class all context engines must implement."""          # context_engine.py:48
+# Token state: engines MUST maintain these; run_agent.py reads them directly.   # :55
+```
+
+必做的只有四个：`name` / `update_from_response` / `should_compress` / `compress`；
+其余（`prune_tool_results_only`、`select_context`、`should_defer_preflight_to_real_usage`、
+`get_tool_schemas`、`on_session_*` …）都是**可选钩子**，引擎按能力实现。
+
+### 0.2 什么时候压：阈值是**三步算术**，不是一个百分比
+
+`_effective_threshold_percent` `agent/context_compressor.py:2365` + `_compute_threshold_tokens` `:2372`。
+为什么不能只写"50%"——注释说得比文档清楚：
+
+> `The base value is effective_input_budget * threshold_percent, floored at MINIMUM_CONTEXT_LENGTH
+> so large-context models don't compress prematurely at 50%. BUT that floor degenerates at small
+> windows: for a model whose context_length is at/below the minimum (e.g. a 64K local model),
+> max(0.5*64000, 64000) == 64000 makes the threshold equal the ENTIRE window — auto-compression can
+> never fire because the provider rejects the request before usage reaches 100% (#14690).` — `:2379-2383`
+
+三步，**顺序不能换**：
+
+| 步 | 做什么 | 出处 |
+|---|---|---|
+| ① | 有效输入预算 = `窗口 − max_tokens`（provider 预留的输出空间） | `:2388-2391` |
+| ② | 百分比按窗口大小**抬升**：< 512K 的模型至少 **0.75**（raise-only） | `_SMALL_CTX_WINDOW_LIMIT=512_000` / `_SMALL_CTX_THRESHOLD_PERCENT=0.75` `:991-992` |
+| ③ | 结果抬到 **64K 地板**；若地板是"起作用的那一项"→ **封顶到预算的 85%** | `MINIMUM_CONTEXT_LENGTH = 64_000` `agent/model_metadata.py:318`；`_MIN_CTX_TRIGGER_RATIO` |
+
+> `The floor must not consume output headroom: cap at 85% when it is the binding term. Near-minimum
+> windows otherwise trigger at ~98%, and providers that silently clip over-window prompts (ollama)
+> never raise the overflow backstop, so the session wedges. An explicit threshold_percent above 85%
+> is user intent; not capped.` — `:2397-2400`
+
+算出来是什么样：
+
+| 窗口 | 百分比 | 阈值 | 哪一步在起作用 |
+|---|---|---|---|
+| **128K** | 0.5 → **0.75** | **96,000** | ② 抬升 |
+| **64K** | 0.5 → **0.75** | **54,400** | ③ 地板起作用 → 被 85% 封顶（否则 64,000 = 整个窗口） |
+| **200K** | 0.5 → **0.75** | **150,000** | ② 抬升（⚠️ 官方文档写 100,000 是错的，见附录 C） |
+
+**触发之前还有一道闸**：粗估过线**不算数**，要等一次真实读数。
+
+```python
+def should_defer_preflight_to_real_usage(self, rough_tokens: int) -> bool:
+    """True when a whole-context ROUGH estimate over threshold must wait ONE request for the
+    provider's real usage. Callers skip this for usage-anchored figures (real prompt count +
+    delta of what was appended since), which never defer. A rough figure defers right after a
+    local or native compaction (the last real reading is stale — the latch) and on any
+    transcript the anchor does not cover (first request, rewind/edit-resend, reloaded history):
+    the next response re-anchors it. It never defers once the provider has proven it omits
+    usage, or the estimate would be the only signal and compression could never fire (#2153);
+    the overflow handler compacts reactively in every case."""            # :2579-2588
+```
+
+补一句最常见的误解：**"等一轮"等的是本轮本来就要发的那个请求**（跳过这次压缩、让请求照发），
+不是额外发探针请求；`agent/usage_anchor.py` 是**纯本地**的（import 只有 `hashlib/json/logging/typing`，永不 HTTP）。
+
+### 0.3 压什么：一次压缩的四个阶段
+
+入口 `def compress(...)` `:4738`（`force` = 手动 `/compress`；`bypass_cooldown` = provider 已证实的溢出，**#100661**）。
+
+> `"""Summarize the middle turns: prune tool results and blank echoes (survives an abort), protect
+> head and a token-budget tail, summarize, clean orphaned tool pairs."""` — `:4743-4744`
+
+| 阶段 | 做什么 | 出网 | 关键源码 |
+|---|---|---|---|
+| **① 剪** | 长工具结果换代称标记；同内容 md5 去重（只留最新） | ❌ | 去重 `:2753-2790` |
+| **② 定边界** | **头**：系统提示词 + **会衰减**的额外行；**尾**：token 预算 **∩** 条数地板 | ❌ | `_effective_protect_first_n:4029`、`_MAX_TAIL_MESSAGE_FLOOR = 8` `:972` |
+| **③ 摘要** | 拼提示词 → **一次 LLM 调用** | ✅ **唯一出网** | `_generate_summary:3407`、`_build_summary_prompt:3464`、`_call_summary_llm:3332` |
+| **④ 组装** | 加 SYSTEM_NOTE、挑摘要角色、清孤立工具配对 | ❌ | `sanitize_tool_pairs:3975` |
+
+两条容易看漏的设计：
+
+- **头部保护会衰减**：`"""protect_first_n, decayed to 0 once the session has been compressed so early
+  turns don't fossilize."""` — `:4030`（**#11996**）。注意"衰减到只剩系统提示词"≠"什么都不留"。
+- **尾部两个判据都要**：token 预算管"够不够长"，**条数地板**管"够不够宽"—— 一次笨重的工具批
+  （消息多、token 还不多）只按 token 算会被整批保住，中间段就无物可压。
+- **结束标记**：组装时在摘要末尾加 `_SUMMARY_END_MARKER` `:357`，逐字是
+  `--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---` —— 告诉模型
+  "上面那段是资料、不是用户刚说的话"。
+
+### 0.4 缓存：为什么"神圣"到只让压缩破一次
+
+顶层 `AGENTS.md` 的原话：
+
+> `Per-conversation prompt caching is sacred. ... Anything that mutates past context, swaps toolsets,
+> reloads memories, or rebuilds the system prompt mid-conversation invalidates that cache and
+> multiplies the user's cost. We do not do it; the ONE exception is context compression.`
+
+落地在 `agent/prompt_caching.py`：
+
+| 函数 | 干什么 | 行 |
+|---|---|---|
+| `build_prompt_cache_plan` | 为一次请求造"隔离的缓存段" | `:243` |
+| `apply_anthropic_cache_control` | 插标记（断点 ≤ 4） | `:273` |
+| `strip_anthropic_cache_control` | **先剥旧的再插**（幂等的前提） | `:156` |
+| `_completed_transaction_endpoint_indexes` | 断点只打在**已完成的事务边界**上 | `:206` |
+
+### 0.5 出错了怎么办：三种阻挡器，各有解除条件
+
+摘要**只有一次**调用（`_call_summary_llm:3332`），失败分类与退避：
+
+| 情况 | 判定 | 退避 |
+|---|---|---|
+| **卡住** | 超过 `compression.context_timeout_seconds`（默认 **120s**） | `_TIMEOUT_COOLDOWN_LADDER = (60, 300, 900)` `:630` |
+| **失败** | JSON 解不开 / 流提前关 / 空内容 / 被截断 | 30 或 60s (`:3637-3642`) |
+| **先做的事** | 回退主模型**重试一次**，不成才装冷却 | `:3600`（docstring：*"retry once on the main model (returning its result) or arm a cooldown (None)."*） |
+
+冷却期间 `_generate_summary` 开头直接 `return None`：**压缩照常做，但没有摘要 → 中间段被丢掉**
+（静默降级）；换来的是"坏掉的摘要后端不会每轮都被重试"（**#11529**，日志
+*"Skipping context summary during cooldown (%.0fs remaining)"*，**#100661**）。
+
+三种阻挡器都从 `_compression_block_reason()` `:2613` 出来，由 `_automatic_compression_blocked_locally()`
+`:2647` 负责拦（标签逐字 `"summary LLM in cooldown"` / `"structural no-op backoff"`）：
+
+| 阻挡器 | 何时挂上 | 怎么解除 |
+|---|---|---|
+| `cooldown` | 这一次摘要调用失败/超时 | 时间到，或被三条"证据变了"的例外打断 |
+| `structural_backoff`（300s） | 压完**结构上等于没变** | 一次真正完成边界的压缩（*"a completed boundary proves compressibility"*） |
+| `ineffective`（断路器） | 压完真实计数**仍 ≥ 阈值** | 读数掉到阈值以下即清零；挡满 `_ANTI_THRASH_RECOVERY_SECONDS = 300` 放一次**试用探针**（不会永久锁死） |
+
+粒度：**会话级 + 持久化**（写进会话行，扛重启）；**换模型/provider 立刻清** ——
+`"""Cooldowns are scoped to the failed model/provider; a switch gets an immediate attempt."""` `:2325`。
+
+### 0.6 网关侧：两轮之间的兜底压缩
+
+```python
+_needs_compress = _approx_tokens >= _compress_token_threshold or _msg_count >= hs.hard_msg_limit
+```
+`gateway/run_turn.py:692` —— 条件一 **85%**（docstring：*"0.85 是高于 agent 压缩器 0.50 的安全网 /
+a safety net for sessions that grew between turns"*），条件二注释原话：
+
+> `Hard safety valve… breaking the disconnect → no token data → no compression spiral. 5000 clears
+> 1M+ sessions.`
+
+**两级动作**（这是关键区分）：
+
+| 动作 | 改存储？ | 干什么 |
+|---|---|---|
+| **真压缩** | ✅ | 软归档旧轮（`in_place`）或轮转会话 id（`rotation`） |
+| **只截载荷** | ❌ | `_bound_hygiene_payload` `:1313` 把载荷截到 5000 条 |
+
+> `"""...with one INFO line when the cut is real. Below the limit this is the identity — no
+> allocation, no behaviour change."""` `:1314-1315` + 日志逐字 `the stored transcript is unchanged` `:1320`
+
+一条硬规矩：**历史读不出来就拒发这条消息** ——
+`"""An unreadable store is not an empty conversation: stop before the agent invents continuity
+from []"""`。它宁可不答，也不让 agent 从空历史里编故事。
+
+### 0.7 串起来：一轮的完整时间线
+
+```text
+[消息到达]
+   │
+   ├─ 网关：history 拿得到吗？拿不到 → 拒发这条消息
+   │   需要压？（≈tokens ≥ 85%  或  条数 ≥ 5000）
+   │        ├─ 压（真压缩，改存储）→ 淘汰缓存的 agent → 下一轮重建系统提示词
+   │        └─ 不压 → 只截载荷（存储不变）
+   ▼
+[agent 跑这一轮]
+   ├─ 发请求前：粗估超阈值？
+   │        └─ 是 且 没有真实读数 → 「等这一轮的真实 usage」（跳过本次压缩，请求照发）
+   ├─ 拿到响应 usage → 写进锚点（usage_anchor，纯本地）
+   ├─ should_compress？（真实读数 ≥ 阈值 且 没有阻挡器）
+   │        └─ compress()：① 剪  ② 定边界  ③ 摘要（一次 LLM；失败 → 冷却 60/300/900）
+   │                                                    ④ 组装（SYSTEM_NOTE / 角色 / 配对）
+   └─ 发下一轮请求：缓存计划（先剥后插、断点 ≤ 4、只打已完成事务边界）
+```
+
+**读完这一节的验收**：不看后面的差异表，能说清"阈值为什么是三步""唯一出网的是哪一步"
+"缓存为什么只让压缩破一次""失败了会怎样"—— 然后从 §〇 开始看 mini 差在哪。
+
+---
+
 
 ## 〇、差异一览表（先看这张）
 
