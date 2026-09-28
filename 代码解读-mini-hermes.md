@@ -1022,6 +1022,10 @@ if threading.current_thread() is not threading.main_thread():
                                 （⚠️ 这里故意不调 text_callback，见 9.7）
 ⑧  run_agent.py:252           run_conversation 统一汇报 → text_callback (:253)
 ⑨  cli.py:135                 one_shot 拿到结果 → hermes_state.save_session (:143)
+                              ⚠️ **第 6 章起这段已作废**：`save_session()` 连整个 JSON 版一起删了，
+                                 改成 agent 在回合里**逐条 append_message** 落 SQLite
+                                 （`run_agent._persist_message`，见《源码讲解-06》§七）。
+                                 本走读是第 2 章末的快照，不再回头改。
 ⑩  cli.py:80                  _on_text 已经把答复打出来了
 ```
 
