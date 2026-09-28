@@ -45,11 +45,11 @@ RED = "\033[31m"
 RESET = "\033[0m"
 
 BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（第 4 章：Tools Runtime）{RESET}
-{DIM}命令：/exit 退出 · /new 开新会话 · /prompt 看三层提示词 · /todo 看任务清单 · /tools 看已注册工具 · /budget 看迭代预算 · Ctrl-C 中断当前 turn{RESET}
+{DIM}命令：/exit 退出 · /new 开新会话 · /sessions 看历史会话 · /search 词 全文检索 · /prompt 看三层提示词 · /todo 看任务清单 · /tools 看已注册工具 · /budget 看迭代预算 · Ctrl-C 中断当前 turn{RESET}
 """
 
 
-def session_saved_message(saved: Path | None) -> str:
+def session_saved_message(db_path: Path | None, message_count: int) -> str:
     """退出时那句"会话已存"。**根据事实说话**，不宣布没发生过的事。
 
     ★ 这一句原来有两个毛病，根因是同一个：**把打印当成了断言。**
@@ -57,20 +57,24 @@ def session_saved_message(saved: Path | None) -> str:
     ① **路径写死**成 `~/.mini-hermes/sessions/{id}.json`。
        `MINI_HOME` 是可以被重定向的（测试 / E2E / CI 都这么干），
        重定向之后这句提示会把用户**指到一个不存在的文件上**——比不打印还坏。
-       修法：用 `save_session()` **实际返回的路径**（而不是自己再猜一遍），
-       显示时走 `display_path()`（在 home 底下缩成 `~/...`）。
+       修法：用**实际的库路径**（`SessionDB.db_path`，来自唯一的路径来源
+       `state_db_path()`），显示时走 `display_path()`（在 home 底下缩成 `~/...`）。
 
     ② **无条件说"已存"**。用户开起来直接 `/exit`（一轮都没跑）时，
-       连 `sessions/` 目录都不存在，它照样说"会话已存：xxx.json"。
-       修法：先看路径在不在（`exists()`），没有就说没有。
+       旧版连目录都不存在却照样说"会话已存"。
+       修法：先看**事实** —— 库文件在不在 + 这个会话真有几条消息。
 
     📌 **通用教训：日志/提示里的每句话都应该是"观察到的事实"，不是"预期的结论"。**
     预期和事实一旦分叉，提示就从"帮助"变成"误导"，而且**没有任何症状**——
-    程序一切正常，只是用户按你给的路径去找文件却找不到。
+    程序一切正常，只是用户按你给的路径去找却发现什么都没有。
+
+    （第 6 章只换了下半句的实现：现在"有没有内容"问的是库里的 `message_count`，
+      不再是"那个 JSON 文件在不在"。）
     """
-    if saved is not None and saved.exists():
-        return f"{DIM}会话已存：{display_path(saved)}{RESET}"
-    return f"{DIM}本次没有对话内容，未存盘{RESET}"
+    if db_path is None or not Path(db_path).exists() or message_count <= 0:
+        return f"{DIM}本次没有对话内容，未存盘{RESET}"
+    return (f"{DIM}会话已写入 {display_path(Path(db_path))}"
+            f"（{message_count} 条消息 · `mini --resume` 可继续）{RESET}")
 
 
 class MiniCLI:
@@ -80,18 +84,36 @@ class MiniCLI:
                  platform: str = "cli"):
         spec = resolve_provider(provider, model)
         self.quiet = quiet
+        # ══════════════════════════════════════════════════════════════
+        # 第 6 章：会话存储从"一会话一个 JSON 文件"换成"一个 SQLite 库"
+        # ══════════════════════════════════════════════════════════════
+        self.db = hermes_state.SessionDB()
         self.session_id = hermes_state.new_session_id()
         self.history: List[Dict[str, Any]] = []
-        # 上一次真正落盘的路径（由 save_session 返回）。退出时据此"观察"而不是"断言"。
-        self.last_save_path: Path | None = None
         self._turn_started = 0.0
+        self._resumed_from: str | None = None
 
         if resume:
-            saved = hermes_state.latest_session()
-            if saved:
-                self.session_id = saved["session_id"]
-                self.history = saved.get("messages", [])
-                self._say(f"{DIM}已恢复会话 {self.session_id}（{len(self.history)} 条消息）{RESET}")
+            previous = self.db.latest_session_id()
+            if previous:
+                self.session_id = previous
+                # ★ 取的是"线上形状"的历史（role/content/tool_calls…），不是库里的原始行。
+                #   `include_ancestors=True`：上下文压缩触发**会话轮转**时，
+                #   历史会散在一条血缘链上（parent_session_id），只读最后一段会丢前面。
+                self.history = self.db.get_messages_as_conversation(
+                    previous, include_ancestors=True)
+                self._resumed_from = previous
+                self._say(f"{DIM}已恢复会话 {previous}"
+                          f"（{len(self.history)} 条消息，来自 {display_path(self.db.db_path)}）{RESET}")
+            else:
+                self._say(f"{DIM}没有可恢复的会话{RESET}")
+
+        # ★ 会话行**先建出来**（此刻还是一行"空壳"：模型已知、提示词还没有）。
+        #   这不是省事，是真实版的选择 —— `_insert_session_row` 的 docstring 逐字：
+        #     "the gateway creates a bare row before create_session carries the real model/prompt"
+        #   后面的 upsert 只补空缺（COALESCE），所以"补"永远不会冲掉"已有的"。
+        self.db.create_session(self.session_id, "cli", model=spec["model"],
+                               model_config={k: spec.get(k) for k in ("provider", "api_mode")})
 
         self.agent = AIAgent(
             spec,
@@ -107,6 +129,8 @@ class MiniCLI:
             # ---- 第 5 章：上下文压缩 ----
             # ★ 压缩阈值 = context_length × threshold，所以窗口必须传进来。
             context_length=spec.get("context_length"),
+            # ---- 第 6 章：会话库（agent 在回合里**逐条追加**落盘）----
+            session_db=self.db,
             # ---- 第 3 章：提示词装配 ----
             session_id=self.session_id,
             platform=platform,
@@ -201,13 +225,57 @@ class MiniCLI:
         """
         result = self.agent.run_conversation(prompt, conversation_history=self.history)
         self.history = result["messages"]
-        # ★ 记下保存器**实际返回的路径**，而不是让退出提示自己再猜一遍。
-        #   原来那句提示写死了 "~/.mini-hermes/sessions/{id}.json"，
-        #   于是 MINI_HOME 重定向时它会把用户指到一个不存在的文件上。
-        self.last_save_path = hermes_state.save_session(
-            self.session_id, self.history, {"usage": result["usage"], "iterations": result["iterations_used"]}
-        )
+        self._check_resumed_prompt()
+        # ★ 第 6 章：这里**不再整份重写**。消息已经在回合里逐条追加进库了
+        #   （`AIAgent._persist_message`）—— 重写是 O(整个会话) 字节，追加是 O(1) 行。
+        #   这里只补两样**会话级**的东西：用量计数 + 系统提示词的哈希。
+        self._sync_session_meta(result)
         return result
+
+    def _sync_session_meta(self, result: Dict[str, Any]) -> None:
+        """把会话级的元数据补进库（用量计数 + 系统提示词哈希）。
+
+        ★ 为什么这里用 `create_session()` 就够了 —— 它其实是 **upsert**：
+          `ON CONFLICT DO UPDATE` 里只列了要"谁先写谁赢"的列（COALESCE 保留旧值），
+          所以"第一轮之后才补提示词"这件事不会覆盖任何已有值。
+          这正是真实版那句 docstring 说的场景：
+            "the gateway creates a bare row before create_session carries the real model/prompt"
+        """
+        usage = result.get("usage") or {}
+        self.db.record_usage(
+            self.session_id,
+            input_tokens=usage.get("prompt_tokens") or 0,
+            output_tokens=usage.get("completion_tokens") or 0,
+            api_calls=result.get("iterations_used") or 0,
+        )
+        prompt = getattr(self.agent, "_cached_system_prompt", None)
+        if prompt:
+            self.db.create_session(self.session_id, "cli", system_prompt=prompt)
+
+    def _check_resumed_prompt(self) -> None:
+        """恢复的会话：把"**存盘时的**系统提示词"和"现在拼出来的"比一比。
+
+        ★ 这是第 3 章欠下的那笔账（当时写在 `_ensure_system_message` 的注释里：
+          "mini 还没做这个校验——写进第 6 章的清单了"）。真实版对应
+          `_stored_prompt_matches_runtime()`，用运行时环境块的边界当锚点。
+
+        ★ 为什么要**说出来**而不是静默处理：提示词变了 = 人格 / 环境 / 工具说明
+          变了（SOUL.md 改过、AGENTS.md 改过、cwd 变了…）。mini 的做法是
+          **重建一份新的**（真实版是沿用存盘的并给出警告）——
+          所以"它变了"这件事用户必须知道：他以为"它还记得我们上次的约定"，
+          实际上人格已经换了。
+        """
+        if not self._resumed_from:
+            return
+        self._resumed_from = None            # 只查一次
+        stored = self.db.get_stored_system_prompt(self.session_id)
+        current = getattr(self.agent, "_cached_system_prompt", None)
+        if stored and current and stored != current:
+            self._on_status("注意：这个会话的**系统提示词**和存盘时不一样了"
+                            f"（存盘 {len(stored):,} 字符 → 现在 {len(current):,} 字符）。"
+                            "恢复出来的会话用的是**新**那一份（mini 的行为）；"
+                            "对应的后果是：SOUL.md / AGENTS.md / 工作区这期间改过的话，"
+                            "历史里的约定可能已经失效。")
 
     def repl(self) -> None:
         print(BANNER)
@@ -225,7 +293,9 @@ class MiniCLI:
             if user == "/new":
                 self.session_id = hermes_state.new_session_id()
                 self.history = []
-                self.last_save_path = None      # 新会话，旧路径作废
+                self._resumed_from = None
+                # 新会话 = 新的一行（此刻还是空壳，模型等后面补）—— 与启动时同一套动作。
+                self.db.create_session(self.session_id, "cli")
                 self.agent.budget = self.agent.budget.__class__(self.agent.max_turns)
                 # ★ 新会话 = 提示词重建的时机之一（对应 Hermes 的 invalidate_system_prompt）。
                 #   如果忘了这一步会怎样：新会话还在用旧会话的系统提示词，
@@ -278,6 +348,35 @@ class MiniCLI:
                 #   同一件事实写两处就会漂，所以现在只有一处。
                 print(f"{DIM}{toolsets.describe_toolsets()}{RESET}")
                 continue
+            if user == "/sessions":
+                # 第 6 章新增：看一眼库里有什么（预览 = 第一条用户消息前 63 字符）。
+                rows = self.db.list_sessions(limit=10)
+                if not rows:
+                    print(f"{DIM}库里还没有会话{RESET}")
+                else:
+                    print(f"{DIM}最近 {len(rows)} 个会话（库：{display_path(self.db.db_path)}）：{RESET}")
+                    for r in rows:
+                        mark = "●" if r["id"] == self.session_id else " "
+                        title = r["title"] or "（无标题）"
+                        print(f"{DIM} {mark} {r['id']}  {title}  消息 {r['message_count']:>3}"
+                              f"  预览 {r['preview'][:40]!r}{RESET}")
+                continue
+            if user == "/search" or user.startswith("/search "):
+                # 第 6 章新增：FTS5 全文检索（这也是"抄 FTS5"的**消费者** ——
+                # 抄一个没有消费者的能力等于给自己留个假承诺）。
+                query = user[len("/search"):].strip()
+                if not query:
+                    print(f"{DIM}用法：/search 词{RESET}")
+                    continue
+                hits = self.db.search_messages(query, limit=8)
+                if not hits:
+                    print(f"{DIM}没搜到 {query!r}{RESET}")
+                else:
+                    print(f"{DIM}命中 {len(hits)} 条（走的是 {hits[0]['route']} 那条路）：{RESET}")
+                    for h in hits:
+                        who = h["title"] or h["session_id"][-6:]
+                        print(f"{DIM}  [{who}] {h['role']}: {h['snippet'][:90]}{RESET}")
+                continue
             if user == "/budget":
                 print(f"{DIM}迭代预算 {self.agent.budget.used}/{self.agent.budget.max_total}{RESET}")
                 continue
@@ -301,5 +400,6 @@ class MiniCLI:
                 print(f"\n{YELLOW}(已中断){RESET}")
             print()
 
-        p = self.last_save_path
-        print(session_saved_message(p))
+        count = self.db.count_messages(self.session_id)
+        print(session_saved_message(self.db.db_path, count))
+        self.db.close()

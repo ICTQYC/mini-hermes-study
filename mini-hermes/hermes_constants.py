@@ -22,10 +22,14 @@ def get_mini_home() -> Path:
     return home
 
 
-def sessions_dir() -> Path:
-    d = get_mini_home() / "sessions"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def state_db_path() -> Path:
+    """会话数据库路径（**唯一来源**，对应 Hermes 的 `get_hermes_home() / "state.db"`）。
+
+    ★ 为什么路径必须只有一个来源：库是"按 home 隔离"的边界（Hermes 里一个 profile
+      一个库）。一旦别处硬编码 `~/.mini-hermes/state.db`，测试重定向 `MINI_HOME` 时
+      那条路径就会**悄悄指向用户的真实库** —— 不报错，只是写错了地方。
+    """
+    return get_mini_home() / "state.db"
 
 
 def display_path(p: Path) -> str:

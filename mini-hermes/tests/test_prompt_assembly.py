@@ -1051,28 +1051,34 @@ def test_exit_message_reports_real_path() -> None:
          `MINI_HOME` 是可以被重定向的（测试 / E2E / CI 都这么干），
          重定向之后这句提示会把用户**指到一个不存在的文件上**。
       ② **无条件说"已存"**。开了就 `/exit`（一轮都没跑）时，
-         连 `sessions/` 目录都不存在，它照样报一个文件名。
+         旧版连目录都不存在，它照样报一个文件名。
+         （第 6 章起换成 SQLite：判据是"库文件在不在 + 这个会话 `message_count` > 0"）
 
     📌 这类 bug 的共同特征：**没有任何症状**。程序一切正常，
     只是用户按你给的路径去找文件却找不到。
     """
     from cli import session_saved_message
 
-    # ① 纯函数层：没存就必须说实话
-    check("没有保存路径 → 说「未存盘」", "未存盘" in session_saved_message(None))
+    # ① 纯函数层：没存就必须说实话（第 6 章起：问的是"库在不在 + 会话真有几条消息"）
+    check("没有库 → 说「未存盘」", "未存盘" in session_saved_message(None, 0))
     check(
-        "路径不存在 → 也说「未存盘」（不能光看有没有赋值）",
-        "未存盘" in session_saved_message(Path("/tmp/mini_真的不存在_xyz/s.json")),
+        "库文件不存在 → 也说「未存盘」（不能光看有没有赋值）",
+        "未存盘" in session_saved_message(Path("/tmp/mini_真的不存在_xyz/state.db"), 3),
+    )
+    check(
+        "库在，但这个会话一条消息都没有 → 还是「未存盘」",
+        "未存盘" in session_saved_message(Path(__file__), 0),
     )
 
-    # ② 真存了 → 报出来的路径必须能直接拿去打开
+    # ② 真有内容 → 报出来的路径必须能直接拿去打开
     d = Path(tempfile.mkdtemp(prefix="mini_exit_"))
-    f = d / "s.json"
-    f.write_text("{}", encoding="utf-8")
-    msg = session_saved_message(f)
-    check("真存了 → 报「会话已存」", "会话已存" in msg, msg)
-    shown = msg.replace("\x1b[2m", "").replace("\x1b[0m", "").split("：", 1)[1].strip()
-    check("去掉 ANSI 后就是真实路径", shown == str(f), f"{shown!r} != {str(f)!r}")
+    db_file = d / "state.db"
+    db_file.write_bytes(b"")                 # 内容不重要，要的是"这个文件真的在"
+    msg = session_saved_message(db_file, 7)
+    check("真写了 → 报出路径 + 条数", "会话已写入" in msg and "7 条消息" in msg, msg)
+    shown = msg.split("会话已写入", 1)[1].split("（", 1)[0]
+    shown = shown.replace("\x1b[2m", "").replace("\x1b[0m", "").strip()
+    check("去掉 ANSI 后就是真实路径", shown == str(db_file), f"{shown!r} != {str(db_file)!r}")
     check("而且那个文件真的在", Path(shown).exists())
 
     # ③ 端到端：真起一次 CLI，只喂 /exit —— 零成本，不调 API

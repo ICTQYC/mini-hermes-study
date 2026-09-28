@@ -1,0 +1,223 @@
+"""会话行的读写 + 系统提示词去重（对应 Hermes 的 `hermes_state_sessions.py`）。
+
+★ 抄的第一个决策：**upsert 永不覆盖先写者**。
+  真实版 docstring（`hermes_state_sessions.py:284-285`）逐字：
+
+      Upsert a session row, never overwriting what an earlier writer set (the gateway
+      creates a bare row before create_session carries the real model/prompt)
+
+  为什么会有"先写一行空壳"这件事：会话是在**知道要跑**的时候就被建出来的，
+  但那时模型/提示词/父会话还可能没定。与其等齐了再插，不如先插一行、后面补 ——
+  前提就是"补的时候不许把已有值冲掉"。SQLite 的做法很省事：
+  `ON CONFLICT DO UPDATE SET` 里**只列要保留的列**，没列到的列自动保留旧值。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+import time
+from typing import Any, Dict, List, Optional
+
+# upsert 时要"谁先写谁赢"的列（对应真实版 `_UPSERT_KEEP_EXISTING_SQL` 的列清单）
+_KEEP_EXISTING_COLS = ("model", "model_config", "system_prompt_hash",
+                       "parent_session_id", "title", "started_at")
+
+
+class SessionSessionsMixin:
+    """给 `SessionDB` 用的会话部分。"""
+
+    _conn: sqlite3.Connection
+
+    # ── 系统提示词去重（真实版 `hermes_state.py:489-497`）────────────────
+    def _store_system_prompt(self, conn: sqlite3.Connection,
+                             system_prompt: Optional[str]) -> Optional[str]:
+        """把提示词存进去重表，返回 sha256 哈希（同一份提示词只存一次）。
+
+        ★ 为什么值得单开一张表：系统提示词是**每轮都发、每个会话都一样**的大文本
+          （真实 Hermes 那份有几万字符）。会话行里再存一份 = 同样的字节存 N 遍。
+        """
+        if system_prompt is None:
+            return None
+        prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
+        conn.execute(
+            "INSERT OR IGNORE INTO system_prompts (hash, prompt) VALUES (?, ?)",
+            (prompt_hash, system_prompt),
+        )
+        return prompt_hash
+
+    # ── 建 / 结束 / 重开 ───────────────────────────────────────────────
+    def create_session(self, session_id: str, source: str, *,
+                       model: Optional[str] = None,
+                       model_config: Optional[Any] = None,
+                       system_prompt: Optional[str] = None,
+                       parent_session_id: Optional[str] = None,
+                       title: Optional[str] = None,
+                       started_at: Optional[float] = None) -> str:
+        """建会话（已存在则**只补空缺**，不覆盖已有值）。"""
+        keep = ",\n                       ".join(
+            f"{c} = COALESCE(sessions.{c}, excluded.{c})" for c in _KEEP_EXISTING_COLS
+        )
+        sql = f"""
+            INSERT INTO sessions (id, source, model, model_config, system_prompt_hash,
+                                  parent_session_id, started_at, title)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                {keep}
+        """
+
+        def _do(conn: sqlite3.Connection) -> str:
+            conn.execute(sql, (
+                session_id, source, model,
+                json.dumps(model_config, ensure_ascii=False) if isinstance(model_config, dict) else model_config,
+                self._store_system_prompt(conn, system_prompt),
+                parent_session_id,
+                float(started_at if started_at is not None else time.time()),
+                title,
+            ))
+            return session_id
+
+        return self._execute_write(_do)
+
+    def end_session(self, session_id: str, end_reason: str) -> None:
+        """结束会话（真实版 `hermes_state_sessions.py:442`）。"""
+        self._execute_write(lambda conn: conn.execute(
+            "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?",
+            (time.time(), end_reason, session_id),
+        ))
+
+    def reopen_session(self, session_id: str) -> None:
+        """重开会话：把 ended_at / end_reason 清掉（真实版 `:458`）。"""
+        self._execute_write(lambda conn: conn.execute(
+            "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+            (session_id,),
+        ))
+
+    # ── 读 ─────────────────────────────────────────────────────────────
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def latest_session_id(self) -> Optional[str]:
+        """最近一个**有消息**的会话（给 `--resume` 用）。
+
+        ★ 为什么排除"没有消息的会话"：会话行是在跑之前就建出来的（见模块 docstring），
+          所以库里会躺着一些空壳。恢复时挑到空壳，用户会以为"历史丢了"。
+        """
+        row = self._conn.execute(
+            "SELECT id FROM sessions WHERE message_count > 0 "
+            "ORDER BY started_at DESC, rowid DESC LIMIT 1"
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def list_sessions(self, limit: int = 10, source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """最近会话 + 预览（预览 = 这个会话**第一条用户消息**的前 63 个字符）。
+
+        预览那条子查询抄自官方文档的"Recent Sessions with Preview"示例 SQL：
+        取不到就退回 `started_at` 当"最后活动时间"。
+        """
+        sql = """
+            SELECT s.id, s.source, s.title, s.started_at, s.message_count,
+                   COALESCE(
+                       (SELECT SUBSTR(m.content, 1, 63) FROM messages m
+                         WHERE m.session_id = s.id AND m.role = 'user'
+                           AND m.content IS NOT NULL AND m.active = 1
+                         ORDER BY m.timestamp, m.id LIMIT 1),
+                       ''
+                   ) AS preview,
+                   COALESCE(
+                       (SELECT MAX(m2.timestamp) FROM messages m2 WHERE m2.session_id = s.id),
+                       s.started_at
+                   ) AS last_active
+              FROM sessions s
+             WHERE (? IS NULL OR s.source = ?)
+             ORDER BY s.started_at DESC, s.rowid DESC
+             LIMIT ?
+        """
+        rows = self._conn.execute(sql, (source, source, int(limit))).fetchall()
+        return [dict(r) for r in rows]
+
+    def session_lineage(self, session_id: str) -> List[str]:
+        """血缘：从最早的祖先到 `session_id` 本身（含两端）。
+
+        ★ 为什么需要它：上下文压缩触发**会话轮转**时，新会话会把老会话设成父亲。
+          于是"这个会话的历史"其实是**一条链**上的历史 —— 只读最后一段会丢掉前面。
+        （对应官方文档的 "Session Lineage" 递归查询）
+        """
+        rows = self._conn.execute(
+            """
+            WITH RECURSIVE lineage AS (
+                SELECT id, parent_session_id, started_at FROM sessions WHERE id = ?
+                UNION ALL
+                SELECT s.id, s.parent_session_id, s.started_at
+                  FROM sessions s JOIN lineage l ON s.id = l.parent_session_id
+            )
+            SELECT id FROM lineage ORDER BY started_at
+            """,
+            (session_id,),
+        ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    # ── 用量计数（mini 的 `meta.usage` 落到会话行上）──────────────────────
+    def record_usage(self, session_id: str, *, input_tokens: int = 0,
+                     output_tokens: int = 0, api_calls: int = 0) -> None:
+        self._execute_write(lambda conn: conn.execute(
+            "UPDATE sessions SET input_tokens = input_tokens + ?,"
+            " output_tokens = output_tokens + ?,"
+            " api_call_count = api_call_count + ? WHERE id = ?",
+            (int(input_tokens), int(output_tokens), int(api_calls), session_id),
+        ))
+
+    def get_stored_system_prompt(self, session_id: str) -> Optional[str]:
+        """取这个会话**存盘时的**系统提示词正文（经 `system_prompt_hash` 连过去）。
+
+        用途：`--resume` 时和"刚拼出来的那份"比一比 —— 提示词在两次运行之间
+        变过的话，恢复出来的会话其实换了一个人格/环境（`SOUL.md` / `AGENTS.md`
+        可能改了），这件事必须**说出来**，而不是让用户自己发现。
+        （真实版对应 `_stored_prompt_matches_runtime()`，用运行时环境块的边界当锚点。）
+        """
+        row = self._conn.execute(
+            "SELECT sp.prompt FROM sessions s JOIN system_prompts sp"
+            " ON sp.hash = s.system_prompt_hash WHERE s.id = ?",
+            (session_id,),
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    # ── 标题（真实版 `hermes_state_titles.py`）──────────────────────────
+    def set_session_title(self, session_id: str, title: str) -> bool:
+        """设标题。非 NULL 标题之间必须唯一 —— 撞了返回 False，不抛。
+
+        ★ 唯一性由**部分索引**保证（`WHERE title IS NOT NULL`）：
+          这样"没有标题"的会话可以有无数个，而一旦起了名就不能重。
+        """
+        try:
+            self._execute_write(lambda conn: conn.execute(
+                "UPDATE sessions SET title = ? WHERE id = ?", (title, session_id)))
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def resolve_session_by_title(self, title: str) -> Optional[str]:
+        """按标题找会话（血缘里最新的那个）。"""
+        row = self._conn.execute(
+            "SELECT id FROM sessions WHERE title = ? ORDER BY started_at DESC LIMIT 1",
+            (title,),
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def get_next_title_in_lineage(self, base_title: str) -> str:
+        """血缘里的下一个标题：`Fix Docker Build` → `Fix Docker Build #2` → `#3`…
+
+        （官方文档的例子就是这个：`get_next_title_in_lineage("Fix Docker Build")`）
+        """
+        rows = self._conn.execute(
+            "SELECT title FROM sessions WHERE title = ? OR title LIKE ?",
+            (base_title, f"{base_title} #%"),
+        ).fetchall()
+        seen = {str(r[0]) for r in rows}
+        if base_title not in seen and not any(t.startswith(f"{base_title} #") for t in seen):
+            return base_title                      # 这个名字还没人用 → 就用它
+        n = 2
+        while f"{base_title} #{n}" in seen:
+            n += 1
+        return f"{base_title} #{n}"

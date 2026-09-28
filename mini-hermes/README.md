@@ -14,7 +14,7 @@
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
-| 6 | `session-storage.md` | 🟡 **进行中**（精译已就位；mini 现在还是 JSON，要换 SQLite） | 《中文精译-06-SessionStorage.md》 |
+| 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 13 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
 | 7 | `gateway-internals.md` | ⬜ 待做 | — |
 
 ## 环境 / 依赖
@@ -113,6 +113,8 @@ cd ~/我的项目 && mini
 /prompt  看三层系统提示词（★ 验证"哪块归属哪一层、顺序对不对"用这个）
 /todo    看 agent 的任务清单（★ 跨进程验证"从历史重建"用这个）
 /tools   看工具：**发给模型的** vs **注册了但没发的**（★ 第 4 章：一眼看出是哪道闸门关着）
+/sessions  看最近 10 个会话（带预览）—— 库里有什么，一眼看到（★ 第 6 章）
+/search 词 跨会话全文检索（FTS5；中文走 LIKE 兜底那条路）（★ 第 6 章）
 /budget  看迭代预算用了多少
 Ctrl-C   中断当前 turn
 ```
@@ -151,7 +153,7 @@ SOUL.md            身份（可选）
 MEMORY.md          跨会话记忆（可选）
 USER.md            用户画像（可选）
 config.json        配置（可选）
-sessions/*.json    会话历史（可 --resume）
+state.db           会话库（SQLite，可 --resume；WAL 模式下还有 state.db-wal / -shm）
 logs/errors.log    异常 traceback —— "报了错但没法查"的解药
 .env               密钥（可选，见上文查找顺序）
 ```
@@ -178,6 +180,7 @@ python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
 python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
 python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
 python3 tests/test_compression.py      # 152 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
+python3 tests/test_session_storage.py  # 107 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
 #      find . -name __pycache__ -type d -exec rm -rf {} +
@@ -224,7 +227,12 @@ Hermes 的发布形态也是这个：源码 + 安装脚本，**没有 wheel、�
 run_agent.py              ←  run_agent.py（AIAgent 中枢）
 model_tools.py            ←  model_tools.py（★ 第 4 章：AST 发现 + toolset 解析 + 分发）
 toolsets.py               ←  toolsets.py（★ 第 4 章：哪些工具**暴露**给模型 —— "注册 ≠ 暴露"）
-hermes_state.py           ←  hermes_state.py（会话存储，暂时是 JSON）
+hermes_state.py           ←  hermes_state.py（★ 第 6 章：门面 —— 连接 / 事务 / 写入礼节）
+hermes_state_common.py    ←  hermes_state_common.py（★ 第 6 章：SCHEMA_SQL 与常量，唯一事实来源）
+hermes_state_schema.py    ←  hermes_state_schema.py（★ 第 6 章：建表 / 声明式加列 / 版本门控）
+hermes_state_sessions.py  ←  hermes_state_sessions.py（★ 第 6 章：会话行 upsert / 标题 / 血缘）
+hermes_state_messages.py  ←  hermes_state_messages.py（★ 第 6 章：消息行 / 世代 / 两种读法）
+hermes_state_search.py    ←  hermes_state_search.py（★ 第 6 章：FTS5 + LIKE 兜底 + 查询清洗）
 hermes_constants.py       ←  hermes_constants.py（路径解析）
 cli.py                    ←  cli.py（CLI 壳：界面逻辑，不含 agent 行为逻辑）
 tools/registry.py         ←  tools/registry.py（★ 第 4 章：中央注册表 + check_fn TTL 缓存）
@@ -247,6 +255,8 @@ tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响�
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
 tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
+tests/test_session_storage.py   # 107 条会话存储自测（★ 第 6 章：建库 / 加列 / 世代 / 血缘 /
+                                #            检索 / 写入礼节 / 隔离 —— 都是临时 MINI_HOME）
 tests/test_compression.py       # 152 条压缩与缓存自测（★ 第 5 章：token 记账 / 边界 /
                                 #   四阶段 / 无进展守卫 / 契约 / 缓存标记 / 模型窗口表）
 tests/test_packaging.py         # 18 条发布前自检（零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 /
@@ -282,8 +292,9 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 ## 故意没做的（等对应章节）
 
 流式输出 · **子目录 AGENTS.md 的逐步发现** · **存盘提示词的校验** · 插件段 · 外部记忆 provider ·
-**技能系统与技能索引** · Anthropic/Codex 的 API 模式 · SQLite 会话存储 ·
+**技能系统与技能索引** · Anthropic/Codex 的 API 模式 ·
 网关多平台 · 子 agent
+（~~SQLite 会话存储~~ → 第 6 章已做）
 
 详细清单和"砍掉的代价"见《中文精译-02-AgentLoop.md》和《中文精译-03-PromptAssembly.md》的附录 B。
 
@@ -344,6 +355,33 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > 另外，读源码时**核出上游文档 7 处不一致**（最重的是"默认 50% 触发"——
 > 源码对 <512K 窗口的模型抬到 75%，还要过 64K 地板与 85% 上限），
 > 清单在《源码讲解-05》附录 C。
+
+> 📌 **第 6 章故意没做的，分三类**（对应差距清单 B 批的 10 条）：
+>
+> **归属别章**（消费者还不存在）：
+> - **多 profile**（一 profile 一个库 + `profile_name` 列 + 回填闸门 + IDOR 范围）→ 第 7 章。
+>   代价写明：**支持多 profile 时必须补，否则静默串库**（不报错，只是用了别人的数据）。
+> - **跨进程压缩锁**（`compression_locks` / `session_turn_leases`）：mini 单进程。
+> - **网关的输入归属**（`observed` / `platform_message_id` / `effect_disposition` 与异常写入方仲裁）。
+>
+> **规模型**（抄了没意义）：
+> - **CJK 与子串索引**（`messages_fts_trigram` / `messages_fts_cjk`）：实测 **trigram 救不了
+>   2 字中文词**（要求查询串 ≥3 字符），cjk 需要**编译扩展** → mini 只留 **LIKE 兜底**那条路
+>   （真实版同名机制），并用 `/search` 当它的消费者。
+> - **展示层**（`display_*` 5 列 + 6 个触发器 + 世代去重）：消费者是桌面端。
+> - **计费全套**（11 列 + `session_model_usage` 三表）：mini 只记 input/output token 数。
+> - **CLI 族**（`sessions recover` / `export_all` / `prune_sessions` / 导入限额）。
+>
+> **有意选择（和真实版不一样）**：
+> - **不做 `repair_alternation`**：真实版对脏历史宽容（重放时修一修），mini 的
+>   `_validate_alternation` 直接抛错。判据：真实版面对线上用户的历史，mini 面对开发期 ——
+>   历史上出现 `user;user` 应该**炸给开发者看**，而不是悄悄修。
+> - **不做 `api_content` 字节保真**：需要"临时层注入也要按字节重放"的消费者，mini 没有。
+>
+> 📌 **第 6 章 mini 反过来多做的三件**（真实版没有）：
+> ① **拒绝打开比代码更新的库**（`SchemaTooNewError`）—— 挡住"用旧代码写新库"这类静默破坏；
+> ② `/sessions` 与 `/search` 两个 REPL 命令 —— 给会话列表与 FTS5 一个**真实消费者**；
+> ③ **提示词漂移告警**（`--resume` 时"存盘 vs 现在"的字节比较）—— 第 3 章欠的账。
 
 > 📌 **流式输出排在哪**：官方文档里**没有**聊天文本流式的专章
 > （`streaming-tts.md` 讲的是流式语音合成，不是这个）。

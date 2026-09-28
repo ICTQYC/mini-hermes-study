@@ -45,7 +45,12 @@ PROJECT_MODULES = {
     "model_tools",
     "run_agent",
     "cli",
-    "hermes_state",
+    "hermes_state",            # ← 第 6 章拆成门面 + 兄弟模块（对应 Hermes 的 hermes_state_*.py）
+    "hermes_state_common",
+    "hermes_state_schema",
+    "hermes_state_sessions",
+    "hermes_state_messages",
+    "hermes_state_search",
     "tools",
     "agent",
     "hermes_cli",

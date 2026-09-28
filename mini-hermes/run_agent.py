@@ -162,6 +162,9 @@ class AIAgent:
         # ---- 第 3 章：提示词装配的开关（对应 Hermes agent_init 里那批同名属性）----
         session_id: Optional[str] = None,
         platform: str = "cli",
+        # ---- 第 6 章：会话库（逐条追加落盘）----
+        #   传 None 就完全不做持久化（测试里的绝大多数 agent 就是这样）。
+        session_db: Optional[Any] = None,
         ephemeral_system_prompt: Optional[str] = None,
         context_cwd: Optional[str] = None,
         skip_context_files: bool = False,
@@ -205,6 +208,8 @@ class AIAgent:
         #   时间戳行靠它保持"当天字节稳定"——如果每轮 now()，缓存每轮都断。
         self.session_start = datetime.now()
         self.session_id = session_id or uuid.uuid4().hex[:12]
+        # 第 6 章：会话库句柄（None = 不落盘）。真正的写入点是 _persist_message()。
+        self.session_db = session_db
         self.platform = platform
         # ★ ephemeral_system_prompt 只作用于**本次 API 调用**，不写进历史。
         #   见 _inject_ephemeral_layers。
@@ -267,6 +272,7 @@ class AIAgent:
         # 2. 用户消息进历史
         messages: List[Dict[str, Any]] = list(conversation_history or [])
         messages.append({"role": "user", "content": user_message})
+        self._persist_message(messages[-1])
 
         # 3. 拼/复用系统提示词
         #    ★ build_system_prompt 内部**缓存**在 agent 上，同一会话只拼一次。
@@ -378,6 +384,7 @@ class AIAgent:
             # 9. 解析响应
             assistant_msg, tool_calls = self._parse_response(response)
             messages.append(assistant_msg)
+            self._persist_message(assistant_msg)
 
             if tool_calls:
                 # 有工具调用 → 执行 → 回填 → 回到第 5 步（这就是 loop 的"环"）
@@ -780,6 +787,10 @@ class AIAgent:
                     "content": content,
                 }
             )
+            # ★ tool_name 只进库、**不进这条消息 dict**：这份 dict 会被原样发给
+            #   模型，多带字段在严格 provider 上会 400。（库里分开存（列 tool_name）
+            #   是为了检索：`search_messages` 的 LIKE 兜底要扫它。）
+            self._persist_message(messages[-1], tool_name=p.get("name"))
 
     def _run_one_tool(self, p: Dict[str, Any], task_id: str) -> str:
         name, args = p["name"], p["args"]
@@ -932,6 +943,40 @@ class AIAgent:
         text, _ = self._parse_response(resp)
         return (text.get("content") or "").strip() or None
 
+    def _persist_message(self, msg: Dict[str, Any], *, tool_name: Optional[str] = None) -> None:
+        """把一条消息**追加**进会话库（第 6 章）。
+
+        ★ 为什么是"逐条追加"而不是"整份重写"：重写是 O(整个会话) 字节，
+          追加是 O(1) 一行 —— 长会话里差两三个数量级。这也是 JSON 换 SQLite
+          最直接的收益（旧的 `save_session()` 每轮把整个会话序列化一遍）。
+
+        ★ 为什么 **system 不进消息表**：提示词存在 `system_prompts` 去重表里
+          （会话行只存 sha256），重启时由 agent 重新拼一份当前的。
+          这条差异要写明：真实版会用 `_stored_prompt_matches_runtime()` 判断
+          "存的那份还对不对"，mini 还没有这道校验 → 已记进第 6 章差距清单。
+
+        ★ 落盘失败**不吞**：它不会让回合崩（那是更坏的选择），但会经 status
+          回调浮到用户眼前（"让代价可见"）。
+        """
+        if self.session_db is None or not isinstance(msg, dict):
+            return
+        role = msg.get("role")
+        if role in (None, "system"):
+            return
+        try:
+            self.session_db.append_message(
+                self.session_id, role,
+                content=msg.get("content"),
+                tool_call_id=msg.get("tool_call_id"),
+                tool_calls=msg.get("tool_calls"),
+                tool_name=tool_name or msg.get("tool_name"),
+                finish_reason=msg.get("finish_reason"),
+                reasoning=msg.get("reasoning"),
+                reasoning_content=msg.get("reasoning_content"),
+            )
+        except Exception as exc:                      # noqa: BLE001 —— 见 docstring 第三条
+            self._emit_status(f"⚠️ 会话落盘失败：{type(exc).__name__}: {exc}")
+
     def _preflight_compression(self, messages: List[Dict]) -> None:
         """4. 预检压缩。
 
@@ -950,6 +995,16 @@ class AIAgent:
         before_len = len(messages)
         # ★ **原地**替换（对应原文 §3.2 的 in-place compaction）：
         #   压缩不换会话 id、不改"这段对话的身份"，只把实时消息列表重写一遍。
+        before = [dict(m) for m in messages]
         messages[:] = c.compress(messages, call_llm=self._summary_llm)
+        # ★ 第 6 章接线：压缩 = **原地压缩的落库形式** ——
+        #   老世代整体归档（active=0/compacted=1），压缩后的上下文作为新世代插入。
+        #   于是"同一条消息出现在两个世代里"是**正常现象**（真实版明文警告别当重复删）。
+        if self.session_db is not None and before != messages:
+            try:
+                self.session_db.record_compaction(
+                    self.session_id, [m for m in messages if m.get("role") != "system"])
+            except Exception as exc:                  # noqa: BLE001
+                self._emit_status(f"⚠️ 压缩世代落库失败：{type(exc).__name__}: {exc}")
         if len(messages) == before_len:
             self._emit_status("压缩未改变消息条数（只剪了内容）")
