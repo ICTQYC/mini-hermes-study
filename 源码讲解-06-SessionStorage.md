@@ -173,7 +173,7 @@ agent 回合里产出消息
    ├─ append_message()：一个签名 → 一行 INSERT（形参名=列名）
    │      └─ _execute_write()：BEGIN IMMEDIATE
    │            ├─ 撞锁 → 抖动重试（整块幂等重跑，最多 WRITE_PATIENCE_S）
-   │            └─ 成功 → 每 50 次写做一次 PASSIVE checkpoint
+   │            └─ 成功 → 每 50 次写做一次 PASSIVE checkpoint（PASSIVE 是因为它不阻塞正常读写）
    │      └─ 触发器同步 FTS 索引（外部内容表）
    │      └─ 会话计数 +1（message_count / tool_call_count）
    ▼
@@ -721,37 +721,128 @@ docstring 描述：
 
 ---
 
-## 十三、隔离：库路径的**唯一来源**
+## 十三、隔离：为什么它必须从"库路径"讲起
 
-### 真实 Hermes 怎么做的
+### 隔离要防的是什么（先看"不隔离"会长什么样）
 
-见《中文精译-06》§1：`get_hermes_home()` 是权威解析器，具名 profile 各有各的 `state.db`，
-外加 `profile_name` 列与回填闸门（`#88381`）、`chat_id/thread_id` 给 `/resume` 划范围（IDOR）。
+| 不隔离的后果 | 具体会发生什么 |
+|---|---|
+| **历史串台** | `--resume` 把别的身份/项目的对话恢复出来 → 上下文被污染，甚至**把 A 项目的内容发到 B 项目的平台上** |
+| **密钥串台** | 用 A 的 bot token 去发 B 的消息 → 消息出现在**错误的账号**下，而且是别人可见的 |
+| **权限串台** | 默认 profile 开了 `GATEWAY_ALLOW_ALL_USERS` → 第二个 bot 跟着也开了 → **安全边界静默失效** |
+
+### 真实 Hermes 怎么做的：**三层**，一层比一层软
+
+| 层 | 机制 | 一句话说清 | 锚点 |
+|---|---|---|---|
+| **① 文件层**（最硬） | 一个 profile 一个 home，一个 `state.db` | 隔离是**分家**，不是过滤 —— 压根打开的是**另一个文件** | `get_hermes_home() / "state.db"`；具名 profile 在 `profiles/<名>/` |
+| **② 行层** | `sessions.profile_name` + 回填闸门 | 库万一被搬走/恢复/合并，行上还盖着"我属于谁"的章；**NULL 读作"无主"，不是"默认"** | `hermes_state_sessions.py:289-290`、`#88381` |
+| **③ 入口层** | `chat_id` / `thread_id` 给 `/resume` 划范围 | **知道 session_id ≠ 有权读它**（IDOR） | 同一段注释 `:288-289` |
+
+**① 已经分家了，为什么还要 ②③？** 因为"分家之后"还有这些事会发生：
+
+- 库被**备份 / 恢复 / 导入**到另一个 profile（`hermes sessions recover`、导出再导入）；
+- gateway 轮转时把**并发尾巴整段复制**进子会话（于是同一条消息出现在两个会话里）；
+- 一个进程里握着**好几个库的句柄**（multiplexing），哪次操作该用哪个是**会话属性、不是进程属性**。
+
+### 为什么它难：多对多 + 静默
+
+**多对多**：一个 `hermes serve` 进程可以同时服务多个 profile → "现在该用哪个库"**不能靠进程状态推断**，
+必须显式绑定。
+
+**静默**：不绑定**不报错**。顶层 `AGENTS.md` 的原话：
+
+> `an unbound read is a silent default-profile leak, never an error`
+> （未绑定的读取是**静默的默认 profile 泄漏**，永远不会报错）
+
+两个真实例子：
+
+**例 1 · 子进程丢了 `HERMES_HOME`**
+
+```text
+主进程（profile=coder）启动子进程
+   └─ 忘了传 HERMES_HOME
+        └─ 子进程回落到默认 profile 的 home
+             └─ 它在【默认库】里建了会话、写了消息
+结果：不报错。只是"coder 的历史丢了、默认 profile 里多了点奇怪的东西"。
+```
+
+**例 2 · `#88381`（行层那道闸门存在的理由）**
+
+session key 里**编码了 profile 命名空间**：`agent:<ns>:…`（默认 profile 是 `agent:main:…`）。
+子会话从父亲回填 `profile_name` 时，如果**不校验命名空间**：
+
+```text
+默认 profile 的子会话 fork 自兄弟 profile 的行
+   └─ 回填了兄弟的 profile_name
+        └─ 这条会话被【永久】误标成兄弟 profile 的（durably mislabelled）
+             └─ 之后的统计 / 展示 / 权限全跟着错，而且改不回来
+```
+
+所以真实版的闸门是：**无 key 的行自由继承；两个带 key 的行必须命名空间一致**。
+
+### 判据（带走这三问）
+
+> ① 这个操作**打开了哪个文件**？（来源必须是**解析器**，不是写死的常量）
+> ② 这个值**换一个 profile 会变吗**？（会 → 必须绑定；不会 → 它本来就该共享）
+> ③ 这个操作**失败时是报错，还是悄悄用了默认值**？（悄悄 → 危险）
+
+第 ③ 问最要命：**多 profile 的 bug 几乎从不表现为崩溃，只表现为"数据莫名其妙跑到别处"。**
 
 ### mini 怎么做
 
-只抄**最核心的那一条**：路径只有一个来源 ——
+单 profile，所以只抄了**最核心的那一条**：**路径只有一个来源**。
 
 ```python
 def state_db_path() -> Path:              # hermes_constants.py
     return get_mini_home() / "state.db"   # ← 全项目搜不到第二个 "state.db" 字面量
 ```
 
-`SessionDB()` 默认就用它。测试守着"跟随 `MINI_HOME`"（换一个 home → 换一个库，不会串库）。
+它的价值不在"现在只有一个 profile"，而在于**多 profile 的改动面被压缩到这一个函数**：
+以后要支持多 profile，改的是 `get_mini_home()`（按名字解析）+ 构造时传入，
+而不是满仓库找哪个文件写死了路径。
+
+**实测（两个 home = 两个"profile"）**：
+
+```text
+A 家：库 = /tmp/iso-a/state.db    写了一条「项目代号 猎户座」→ 自己搜到 1 条
+B 家：库 = /tmp/iso-b/state.db    搜「猎户座」 → 0 条
+                                  会话列表     → 空
+                                  拿 A 的会话 id 直接读 → []
+                                  --resume     → None
+两个目录里各有一个 state.db（86,016 字节），互不相通
+```
+
+这份实测也是测试守着的东西：`check("换一个 MINI_HOME → 换一个库（不会串库）", …)`。
 
 ### 为什么多 profile 那一整套不抄
 
-| 真实的机制 | mini | 原因 |
+| 真实的机制 | mini | 原因 / 什么时候必须补 |
 |---|---|---|
-| 一个 profile 一个库 | ❌ | mini 单 profile |
-| `profile_name` 列 + 回填闸门 | ❌ | 同上；代价写下：**支持多 profile 时必须补，否则静默串库** |
-| IDOR 范围（`chat_id/thread_id`） | ❌ | 消费者是网关的 `/resume` |
-| 实盘 guard（测试别碰生产库） | ❌ | mini 的测试全走临时 `MINI_HOME`；代价：别人给 mini 写测试时可能碰到真实库 |
+| 一个 profile 一个库 | ❌ | mini 单 profile；**要第二个身份/第二个平台 bot 时必须补** |
+| `profile_name` 列 + 回填闸门 | ❌ | 有"跨 profile 分叉 / 导入"时补 —— 否则 `#88381` 会重演（而且是**不可逆**的误标） |
+| IDOR 范围（`chat_id/thread_id`） | ❌ | 有网关时补（别人能给你传 session_id） |
+| 实盘 guard（测试别碰生产库） | ❌ | mini 的测试全走临时 `MINI_HOME`；代价：**别人给 mini 写测试时可能碰到真实库** |
 
-**这一节的价值不在"抄了几条"，而在"隔离为什么必须从路径开始讲"** —— 存储是隔离的落点，
-`state.db` 是最大的那个文件。硬编码路径 = 拆掉隔离，而且**不报错**。
+**补法的顺序是死的**（真要做时照这个来）：
 
----
+```text
+① home 解析器支持多 profile（按名字解析，不是写死）
+② SessionDB 构造时绑定自己的 home（不许从全局读）
+③ 行上盖 profile_name + 回填闸门（校验命名空间）
+④ 入口加范围（谁能 resume 谁）
+⑤ 测试用【两个 home 跑 A→B→A】
+   （上游 AGENTS.md 的要求原话："Prove live with two homes (A→B→A) under multiplex,
+     not one temp HERMES_HOME"）
+```
+
+### 收束
+
+**隔离的本质不是"加个过滤条件"，而是"让'这个操作属于谁'这件事必须被显式说出来"。**
+
+文件层负责**分家**，行层负责**搬动之后还认得出自己**，入口层负责**知道 id 也不等于有权读**。
+而这一章之所以必须从"库路径"讲起 —— 存储是隔离的落点，`state.db` 是最大的那个文件；
+硬编码路径 = 拆掉隔离，而且**不报错**。
 
 ## 本章实现时抓出的真问题
 
