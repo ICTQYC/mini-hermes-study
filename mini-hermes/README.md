@@ -15,8 +15,8 @@
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 14 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
-| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试** · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
-| 8 | `gateway-session-lifecycle.md` | 🟡 **精译已就位**（894 行 · 附录 C 核出 **2 处出入 + 1 处自我修正**） | 《中文精译-08-GatewaySessionLifecycle.md》 |
+| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试**（该章交付时点；现为 214 条） · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
+| 8 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-08-GatewaySessionLifecycle.md》《源码讲解-08-GatewaySessionLifecycle.md》 |
 
 ## 章节顺序（官方侧边栏为准）
 
@@ -30,7 +30,7 @@
   7      context-compression-and-caching   ✅ 第 5 章
   8      micro-compaction                  ⬜ 被跳过（第 5 章只讲主线压缩；微压缩是独立支线 406 行）
   9      gateway-internals                 ✅ 第 7 章
- 10      gateway-session-lifecycle         🟡 第 8 章（精译已就位）
+ 10      gateway-session-lifecycle         ✅ 第 8 章（已实现：状态机 / 恢复 / 两层队列 / 缓存 / 巡检）
  11      multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
  12      completion-backlog-delivery       ⬜ 52 行（"投递债"—— 第 7 章差距清单里挂着）
  13      session-storage                   ✅ 第 6 章
@@ -229,8 +229,10 @@ python3 tests/test_prompt_assembly.py  # 155 条：提示词装配（47 个函�
 python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
 python3 tests/test_compression.py      # 152 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
 python3 tests/test_session_storage.py  # 107 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
-python3 tests/test_gateway.py          # 135 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 /
-                                       #        进程身份 PID+指纹 / profile 作用域 A→B→A / profile 入口层）
+python3 tests/test_gateway.py          # 214 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 /
+                                       #   进程身份 / profile 作用域 / 入口层 / ★ 第 8 章：会话生命周期 ·
+                                       #   两层队列 · 缓存与巡检）
+# 全套件：789 条断言 / 0 失败（3.9.6 与 3.13.14 双解释器一致）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
 #      find . -name __pycache__ -type d -exec rm -rf {} +
@@ -296,9 +298,14 @@ agent/usage_anchor.py     ←  agent/usage_anchor.py（★ 第 5 章：真实用
 agent/context_compressor.py ← agent/context_compressor.py（★ 第 5 章：四阶段压缩 + 无进展守卫）
 agent/prompt_caching.py   ←  agent/prompt_caching.py（★ 第 5 章：cache_control 断点 + "为什么不动请求"）
 gateway/run.py            ←  gateway/run.py（★ 第 7 章：门面 —— 装配 mixin / 生命周期 / 单实例）
-gateway/run_inbound.py    ←  gateway/run_inbound.py + run_busy.py（★ 第 7 章：第 2 级守卫 / 命令表 / 忙时策略）
-gateway/run_turn.py       ←  gateway/run_turn.py（★ 第 7 章：绑作用域 → 取历史 → 建 agent → 出站）
-gateway/run_shutdown.py   ←  gateway/run_shutdown.py（★ 第 7 章：结束会话 / 摘身份文件）
+gateway/run_inbound.py    ←  gateway/run_inbound.py（★ 第 7 章：第 2 级守卫 / 命令表 / 忙时策略）
+gateway/run_busy.py       ←  gateway/run_busy.py（★ 第 8 章：**两层队列** 单槽覆盖 + 溢出 FIFO + `_promote_queued_event`）
+gateway/run_turn.py       ←  gateway/run_turn.py（★ 第 7 章：绑作用域 → 建 agent/缓存取 agent → 出站）
+gateway/run_startup.py    ←  gateway/run_startup.py（★ 第 8 章：启动恢复四步 · `.clean_shutdown` 读过即删）
+gateway/run_watchers.py   ←  gateway/run_watchers.py（★ 第 8 章：后台巡检 tick —— 空闲/压力/剪枝，**只放资源不结束对话**）
+gateway/run_shutdown.py   ←  gateway/run_shutdown.py（★ 第 7/8 章：进程收尾；★ 第 8 章更正：**不结束会话**，只对正在跑的标软恢复）
+gateway/session_state.py  ←  gateway/session.py::get_or_create_session（★ 第 8 章：**路由状态机** —— 硬>软>复用，时间永不轮转）
+gateway/agent_cache.py    ←  gateway/run_agent_cache.py + agent_cache_pressure.py（★ 第 8 章：LRU/TTL/保护带 + **三条不许淘汰**）
 gateway/session_keys.py   ←  gateway/session.py（★ 第 7 章：会话键**唯一来源** + main~ 命名空间）
 gateway/authz.py          ←  gateway/authz_mixin.py（★ 第 7 章：授权四层 · 默认拒绝）
 gateway/delivery.py       ←  gateway/delivery.py（★ 第 7 章：直接回复 / 指定目标）
@@ -322,7 +329,7 @@ tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响�
 tests/test_prompt_assembly.py   # 155 条提示词装配自测（不联网）
 tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
-tests/test_gateway.py            # 135 条网关自测（★ 第 7 章：会话键 / 两级守卫 / 授权 / 命令表 /
+tests/test_gateway.py            # 214 条网关自测（★ 第 7 章：会话键 / 两级守卫 / 授权 / 命令表 /
                                 #   交付 / 钩子 / 进程身份（PID+启动时间指纹）/ profile 作用域 A→B→A
                                 #   / 组 14 profile 入口层：create 播种 · id 字母表 · clone 不带记忆 ·
                                 #   解析不静默回落 · 两 profile 物理分家 · 真 CLI 子进程）
@@ -446,8 +453,8 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 >   所以退出码 78 目前**没有消费者**（但语义已定好：**退出码也是接口**）。
 >
 > **等有对应基座再补**：
-> - 网关侧会话维护（85% 兜底压缩）——mini 的压缩在 agent 内部，且**每条消息新建 agent**
->   （没有"缓存 agent 要淘汰"这回事）；
+> - 网关侧会话维护（85% 兜底压缩）——mini 的压缩在 agent 内部（⬜ 仍未做）；
+>   缓存 agent 那半 ★ **第 8 章已补**（`agent_cache.py`：LRU/TTL/保护带 + 三条不许淘汰）；
 > - 跨进程压缩锁、终端作用域（`TERMINAL_*` 整套安装/复位，要有 docker/ssh 后端才谈得上）、
 >   多 profile 的 YAML 桥（`apply_yaml_bridge`）、`command:*` 通配钩子。
 >
@@ -458,6 +465,28 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > 仍缺**终端作用域**（§十四 #9）。
 > 另外两笔：跨进程压缩锁（⬜ 未做）、网关的输入归属（⚠️ 部分：有守卫与授权，
 > 但**没有**把"这条消息是谁写的"记进库 —— 将来做压缩轮转仲裁时必补）。
+
+> 📌 **第 8 章的债（还掉 / 新挂 / 不做）**：
+>
+> **本章还掉的**：
+> - 第 7 章差距 B5 **`_gateway_accepted` 回执** —— 当初不抄的理由是"mini 没有内部队列，
+>   回执没有消费者"；本章做了两层队列 → **理由消失** → 已补（`adapters/base.py`）。
+> - 第 7 章差距 #7 的**缓存 agent 那半**（"每条消息新建 agent"）→ 已补（`agent_cache.py`）。
+> - 第 7 章的两处**语义错**：`shutdown()` 结束所有会话（→ 进程退出不是对话边界）、
+>   `shutdown()` 给所有会话 `touch()`（→ 废掉了恢复的 120 秒窗口）。两处都有断言守着。
+>
+> **本章新挂的**（详见《源码讲解-08》§十三）：
+> - **主动续跑**（恢复第 ④ 步）—— 要先给 `AIAgent` 加"没有用户消息也能起轮"的入口（第 2 章），成本高；
+> - **stall 看门狗**（`HERMES_SESSION_STALL_TIMEOUT`，默认 300s）—— 要先给 agent 加 activity summary；
+> - **老记录剪枝**（`prune_old_entries`）—— 要在存储层做（第 6 章），当前只抄了开关语义 + 诚实记债。
+>
+> **本章不做的**（代价已写）：
+> - 单飞去重 / `sessions.json` 镜像 / `was_auto_reset` 三字段 / PII 脱敏 /
+>   内存压力"每条目估算" / 多平台字段；
+> - **压缩后淘汰 agent 的联动** —— mini 的压缩在 agent 侧、agent 每轮现读历史，
+>   那个 bug **构造不出来**（加了就是死代码）；**什么时候它突然必需**：谁把历史搬进
+>   agent 内存 / 谁给网关补 hygiene 压缩段，谁就得回来补这一句（漏了不报错，
+>   表现为"历史回退"）。
 
 > 📌 **第 6 章故意没做的，分三类**（对应差距清单 B 批的 10 条）：
 >

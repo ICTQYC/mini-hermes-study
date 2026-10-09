@@ -1954,7 +1954,7 @@ if (
 | `~/.mini-hermes/SOUL.md` | ✅ 已支持（含信任分级） | `~/.hermes/SOUL.md` |
 | `~/.mini-hermes/MEMORY.md` / `USER.md` | ✅ 已支持 | 同名 |
 | `~/.mini-hermes/config.json` | ✅ 新增（对应 config.yaml 的两个键） | `~/.hermes/config.yaml` |
-| `tests/test_prompt_assembly.py` | ✅ **154 条**（47 个函数 / 13 组） | — |
+| `tests/test_prompt_assembly.py` | ✅ **155 条**（47 个函数 / 13 组；第 8 章时点） | — |
 
 规模变化（**用同一条命令分别量第 2 章末与第 3 章末**）：
 
@@ -2201,7 +2201,7 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 > 所以如果你在今天的工作区里数出 275，**本文没有过期**，它记的就是这一刻的数。
 
 ```console
-$ python3 tests/test_prompt_assembly.py    # 154 条（47 个测试函数 / 13 组）
+$ python3 tests/test_prompt_assembly.py    # 155 条（47 个测试函数 / 13 组；第 8 章时点）
 $ python3 tests/test_loop_mechanisms.py    # 54 条（第 2 章的 agent loop）
 $ python3 tests/test_packaging.py          # 13 条（发布前自检，含符号链接调用与写死路径扫描）
 ```
