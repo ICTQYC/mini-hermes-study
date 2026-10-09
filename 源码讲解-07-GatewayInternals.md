@@ -861,5 +861,17 @@ pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
 ## 本章提交
 
 ```text
-（见文末 git log：9015f61 精译-07 → 本章代码与文档若干提交 → 标签 ch07-gateway）
+9015f61   第 7 章开工：中文精译-07-GatewayInternals.md（636 行）+ README 进度表
+858d1f2   第 7 章：网关实现 + 源码讲解 + 侧线（多 profile 入口层）
+          ← 标签 ch07-gateway 指这里（本章文档后续修改会让标签往后移）
 ```
+
+**本章的产出清单**（对照上游同名文档的 297 行）：
+
+| 交付物 | 位置 | 规模 |
+|---|---|---|
+| 中文精译 | `中文精译-07-GatewayInternals.md` | 636 行（含附录 A 术语表 24 条 / C 上游出入） |
+| 源码讲解（本篇） | `源码讲解-07-GatewayInternals.md` | 866 行（导言 + 差异表 17 + 逐机制四步 + 真问题 5 + 差距 14） |
+| 实现 | `gateway/` + `agent/secret_scope.py` + `hermes_cli/{commands,profiles,profile_cmd,gateway_cmd}.py` | 新增 2,345 行 |
+| 测试 | `tests/test_gateway.py` | 903 行 / 14 组 / 135 条 |
+| 侧线 | 多 profile 入口层（`-p` / `profile create\|list\|show`） | 含在实现行数里 |
