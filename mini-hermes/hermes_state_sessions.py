@@ -103,6 +103,83 @@ class SessionSessionsMixin:
         row = self._conn.execute(sql, tuple(params)).fetchone()
         return row[0] if row is not None else None
 
+    # ══ 第 8 章：会话生命周期状态（对应真实版 SessionEntry 的那批标志位）══════
+    def route_entry(self, session_key: str) -> Optional[Dict[str, Any]]:
+        """取这个会话键**最近一条**会话行（**不管它是否已结束**）+ 它的生命周期状态。
+
+        ★ 为什么与 `latest_session_id_for_key()` 分开：那个是给"**找回一个还能用的会话**"
+        （`--resume`）用的，会**过滤掉已结束的**；而状态机要的是"**上一次那条是什么状态**" ——
+        已结束本身就是它需要看到的一个事实（结束过 → 该开新的）。
+        两个问题问的不是同一件事，所以两个方法。
+        """
+        row = self._conn.execute(
+            "SELECT id, ended_at, end_reason, suspended, resume_pending, resume_reason,"
+            " is_fresh_reset, updated_at, started_at"
+            " FROM sessions WHERE session_key = ?"
+            " ORDER BY started_at DESC, rowid DESC LIMIT 1", (session_key,)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["open"] = row["ended_at"] is None
+        return out
+
+    def set_route_state(self, session_id: str, *, suspended: Optional[bool] = None,
+                        resume_pending: Optional[bool] = None,
+                        resume_reason: Optional[str] = None,
+                        is_fresh_reset: Optional[bool] = None,
+                        touch_activity: bool = False) -> None:
+        """只更新调用方**给出来的**那些字段（`None` = 不动这一列）。
+
+        ★ 为什么不是"一次写全"：状态位是**按事件分别置位**的（`/stop` 置 suspended、
+        drain 超时置 resume_pending…）。写全的话，每个调用方都得先读一遍再写回去 ——
+        两次之间别的事件插进来，就会**把别人的置位抹掉**（经典的丢更新）。
+        """
+        sets, params = [], []
+        if suspended is not None:
+            sets.append("suspended = ?")
+            params.append(1 if suspended else 0)
+        if resume_pending is not None:
+            sets.append("resume_pending = ?")
+            params.append(1 if resume_pending else 0)
+            sets.append("last_resume_marked_at = ?")
+            params.append(time.time() if resume_pending else None)
+        if resume_reason is not None:
+            sets.append("resume_reason = ?")
+            params.append(resume_reason)
+        if is_fresh_reset is not None:
+            sets.append("is_fresh_reset = ?")
+            params.append(1 if is_fresh_reset else 0)
+        if touch_activity:
+            sets.append("updated_at = ?")
+            params.append(time.time())
+        if not sets:
+            return
+        params.append(session_id)
+        self._execute_write(lambda conn: conn.execute(
+            f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", tuple(params)))
+
+    def recently_active_session_ids(self, max_age_seconds: float = 120.0) -> List[str]:
+        """最近 `max_age_seconds` 秒内活跃过的会话（崩溃恢复的输入）。
+
+        ★ 判据用 `updated_at`，而**不是** `started_at`：一个开了三天、五分钟前还在说话的
+        会话是"活跃"的；一个三天没动过的会话不是 —— 恢复只该管"刚刚在跑的"。
+        `updated_at` 为 NULL（第 8 章之前建的老行）视为不活跃。
+        """
+        cutoff = time.time() - float(max_age_seconds)
+        # ★ 只挑**开着的**会话：已结束的会话不需要"恢复"（真实版靠"遍历内存里的
+        #   entries 索引"天然排除，mini 是查库，所以要显式写出来）。
+        rows = self._conn.execute(
+            "SELECT id FROM sessions WHERE updated_at IS NOT NULL AND updated_at >= ?"
+            " AND ended_at IS NULL"
+            " ORDER BY updated_at DESC", (cutoff,)).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def session_key_for_id(self, session_id: str) -> Optional[str]:
+        """按会话 id 反查它的路由键（启动恢复要"从会话回到键"才能记连续重启计数）。"""
+        row = self._conn.execute("SELECT session_key FROM sessions WHERE id = ?",
+                                 (session_id,)).fetchone()
+        return None if row is None else row[0]
+
     def end_session(self, session_id: str, end_reason: str) -> None:
         """结束会话（真实版 `hermes_state_sessions.py:442`）。"""
         self._execute_write(lambda conn: conn.execute(

@@ -150,13 +150,32 @@ class InboundMixin:
 
     def _cmd_new(self, event, args: str) -> Dict[str, Any]:
         key = event.session_key
-        old = self._session_ids.pop(key, None)
-        if old:
-            self._finalize_session(old, "reset")
-            self.hooks.emit("session:reset", session_key=key, session_id=old)
-        new_id = self._open_session(event)
-        self._reply(event, f"🆕 新会话已开始（{new_id}）。", target=self._explicit_target(event))
-        return {"action": "reset", "session_id": new_id, "previous": old}
+        # ★ 第 8 章：`/new` 是**显式边界** —— 交给状态机走 force_new 那条路
+        #   （它会结束旧会话、开新会话、打上 is_fresh_reset），不再由命令处理器自己"先 pop 再开"。
+        previous = self._session_ids.get(key)
+        spec = self._provider_spec()
+        decision = self._router().reset(
+            key, source=f"gateway:{event.source.platform}",
+            model=spec.get("model"),
+            model_config={k: spec.get(k) for k in ("provider", "api_mode")},
+        )
+        self._session_ids[key] = decision.entry.session_id
+        if previous:
+            # ★ **会话轮转 → 缓存里的 agent 必须立刻放掉**（真实版 `_evict_cached_agent`）。
+            #   两条路都会轮转：① 自动重置（挂起/已结束）走 `_open_session`；
+            #   ② 显式 `/new` 走这里。**两处都得放** —— 漏一处，缓存的 agent 就会把
+            #   新会话的消息写进旧会话的转写本（缓存真正危险的地方）。
+            self._agent_cache.evict(key, reason="session_rotated")
+            # ★ 显式边界要**两边都报**：旧会话的 `session:end` + 新会话的 `session:reset`。
+            #   第 7 章时这一步是"先 end 再开"，第 8 章把决策交给状态机之后，
+            #   钩子仍然由命令处理器发（钩子是"事件通知"，不是"状态决策"）。
+            self._finalize_session(previous, "session_reset")
+            self.hooks.emit("session:reset", session_key=key,
+                            session_id=decision.entry.session_id, previous=previous)
+        self._reply(event, f"🆕 新会话已开始（{decision.entry.session_id}）。",
+                    target=self._explicit_target(event))
+        return {"action": "reset", "session_id": decision.entry.session_id,
+                "previous": previous}
 
     def _cmd_status(self, event, args: str) -> Dict[str, Any]:
         key = event.session_key
@@ -178,17 +197,48 @@ class InboundMixin:
         return {"action": "status"}
 
     def _cmd_queue(self, event, args: str) -> Dict[str, Any]:
+        """`/queue` = 看队列；`/queue <文本>` = **显式排队**（这件也必须做）。
+
+        ★ 两种意图两种结构（第 8 章）：看的是**单槽 + 溢出**两层；
+        带文本入队的那条进**溢出 FIFO**（不合并、按序处理）——
+        而普通消息走的是单槽（后到覆盖先到）。用户想"都要做"就用这个命令。
+        """
         adapter = self.adapters.get(event.source.platform)
-        pending = []
-        if adapter is not None:
-            pending = list(adapter._pending_messages.get(event.session_key, ()))
-        if not pending:
+        if adapter is None:
+            self._reply(event, "（没有适配器，无法读取队列）", target=self._explicit_target(event))
+            return {"action": "queue", "count": 0}
+        queues = self._adapter_queues(adapter)
+        key = event.session_key
+
+        text = (args or "").strip()
+        if text:
+            queued = self._make_event_like(event, text)
+            depth = queues.enqueue_explicit(queued)
+            self._reply(event, f"📥 已排队（第 {depth} 件）：{text[:60]}\n"
+                               f"它会**依次**跑完，不会被后来的消息顶掉。",
+                        target=self._explicit_target(event))
+            return {"action": "queue_enqueue", "count": depth, "text": text}
+
+        depth = queues.depth(key)
+        if depth == 0:
             self._reply(event, "（队列为空）", target=self._explicit_target(event))
             return {"action": "queue", "count": 0}
-        lines = [f"排队中 {len(pending)} 条："]
-        lines += [f"  {i}. {e.text[:60]}" for i, e in enumerate(pending, 1)]
+        lines = [f"排队中 {depth} 件："] + queues.describe(key)
+        lines.append("（「最新」= 单槽，会被后来的普通消息顶掉；「已承诺」= /queue 排的，按序都会跑）")
         self._reply(event, "\n".join(lines), target=self._explicit_target(event))
-        return {"action": "queue", "count": len(pending)}
+        return {"action": "queue", "count": depth}
+
+    def _make_event_like(self, event, text: str):
+        """照原事件造一条"同样是这个人、这个会话"的新事件（`/queue` 入队用）。
+
+        ★ 为什么不是直接改原事件的 text：原事件是**触发这一轮**的那条，
+        已经被 agent 读进去了；改它等于篡改历史。新造一条，归属（会话键/来源）照抄。
+        """
+        from gateway.adapters.base import MessageEvent
+
+        return MessageEvent(text=text, source=event.source, session_key=event.session_key,
+                            message_id=f"{getattr(event, 'message_id', '') or 'msg'}-q",
+                            metadata=dict(getattr(event, "metadata", None) or {}))
 
     def _cmd_sessions(self, event, args: str) -> Dict[str, Any]:
         db = self._db()

@@ -85,7 +85,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     tool_call_count    INTEGER DEFAULT 0,
     api_call_count     INTEGER DEFAULT 0,      -- 这个会话调了几次模型（≈ 迭代次数）
     input_tokens       INTEGER DEFAULT 0,
-    output_tokens      INTEGER DEFAULT 0
+    output_tokens      INTEGER DEFAULT 0,
+    -- ══ 第 8 章：会话生命周期状态（对应真实版 SessionEntry 的那些标志位）══
+    --   真实版把它们放在 `sessions.json` 镜像 + SQLite 两处（`gateway/session.py:756/787`）；
+    --   mini 只有库这一个读者 → **只落库**（差异与代价写在第 8 章差距清单 B4）。
+    updated_at         REAL,                   -- 最后活动时间：资源巡检靠它（真实版 SessionEntry.updated_at）
+    suspended          INTEGER DEFAULT 0,      -- 硬擦除：/stop 或卡死循环 → 下次访问换新会话
+    resume_pending     INTEGER DEFAULT 0,      -- 软恢复：崩溃/drain 超时 → 下次访问**接着**旧会话
+    resume_reason      TEXT,                   -- restart_timeout / shutdown_timeout / restart_interrupted
+    last_resume_marked_at REAL,
+    is_fresh_reset     INTEGER DEFAULT 0       -- /new 之后的第一条消息（要重注入话题/技能）
 );
 
 

@@ -85,8 +85,12 @@ def env(**kv):
 
 
 @contextmanager
-def fake_agent(gate: threading.Event | None = None):
-    """把 AIAgent 换成假的（不联网）。gate 设了就在 run_conversation 里阻塞。"""
+def fake_agent(gate: threading.Event | None = None, calls: list | None = None):
+    """把 AIAgent 换成假的（不联网）。gate 设了就在 run_conversation 里阻塞。
+
+    `calls` 给了就把每条消息的文本**按顺序**记下来（第 8 章测队列顺序要用：
+    `_last_results` 只留最后一条，看不出"先跑哪个后跑哪个"）。
+    """
     import run_agent
 
     class _Fake:
@@ -95,6 +99,8 @@ def fake_agent(gate: threading.Event | None = None):
             self.interrupted = False
 
         def run_conversation(self, text, **kw):
+            if calls is not None:
+                calls.append(text)
             if gate is not None:
                 gate.wait(timeout=8)
             if self.interrupted:
@@ -375,7 +381,9 @@ def test_session_ownership_and_reset():
             _, res2 = _feed(runner, "/new", key)
             sid2 = res2["session_id"]
             check("/new 开了新会话", sid2 != sid, f"{sid} vs {sid2}")
-            check("/new 结束了旧会话", runner._db().get_session(sid)["end_reason"] == "reset")
+            # ★ 第 8 章把原因串对齐真实版：`/new` 的结束原因是 `session_reset`
+            #   （真实版 `_finish_route_transition(..., end_reason=decision.reset_reason or "session_reset")`）
+            check("/new 结束了旧会话", runner._db().get_session(sid)["end_reason"] == "session_reset")
             check("★ /new 之后按键找回的是**新**会话（否则用户一重置就回到旧对话）",
                   runner._db().latest_session_id_for_key(key) == sid2)
 
@@ -859,6 +867,413 @@ def test_profile_cli_end_to_end():
 
 
 # ══════════════════════════════════════════════════════════════════════════════ #
+# ══════════════════════════════════════════════════════════════════════════════ #
+# 第 8 章：会话生命周期（状态机 / 显式边界 / 重启恢复 / 卡死循环）
+def test_lifecycle_priority_and_hard_wins():
+    """优先级：软(待恢复) → 复用；硬(挂起) → 换新；硬永远赢过软；跑完才清标记。"""
+    with temp_home() as home:
+        with fake_agent():
+            runner, src, key = _runner(home)
+            db, router = runner._db(), runner._router()
+            _, res = _feed(runner, "一", key)
+            sid1 = res["session_id"]
+
+            # ── 软恢复：保留归属 ──
+            router.mark_resume_pending(sid1, "shutdown_timeout")
+            d = router.route(key, source="gateway:console")
+            check("软(待恢复) → 复用**同一个**会话",
+                  d.action == "reused" and d.entry.session_id == sid1)
+            check("★ 读到**不清**标记（清了的话「读了之后又崩」就永远恢复不上）",
+                  bool(db.get_session(sid1)["resume_pending"]))
+            check("decision 说得出为什么复用",
+                  any("resume_pending" in n for n in d.notes), str(d.notes))
+
+            # ── 硬擦除：赢 ──
+            router.suspend(key)
+            d2 = router.route(key, source="gateway:console")
+            check("★ 硬(挂起) 赢过 软(待恢复)：换新会话",
+                  d2.action == "auto_reset" and d2.entry.session_id != sid1)
+            check("旧会话结束原因 = suspended", db.get_session(sid1)["end_reason"] == "suspended")
+            check("新会话带 is_fresh_reset（真实版据此重注入话题/技能）",
+                  bool(db.get_session(d2.entry.session_id)["is_fresh_reset"]))
+
+            # ── 软标记不许覆盖硬擦除（**先硬后软**才是这条规则）──
+            router.suspend(key)
+            router.mark_resume_pending(d2.entry.session_id, "restart_interrupted")
+            check("★ 软标记**不许覆盖**硬擦除（用户的明确意图不能被一次意外撤回）",
+                  bool(db.get_session(d2.entry.session_id)["suspended"]) and
+                  not bool(db.get_session(d2.entry.session_id)["resume_pending"]))
+
+            # ── 跑完一轮 → 一次性标记清掉（用真 runner 走完整路径）──
+            _, res3 = _feed(runner, "二", key)
+            sid3 = res3["session_id"]
+            check("换过会话之后，这一轮跑完不带 resume_pending",
+                  not bool(db.get_session(sid3)["resume_pending"]))
+            check("★ is_fresh_reset 被**第一条消息消费掉**（真实版逐字：Consume is_fresh_reset "
+                  "so it doesn't leak onto later messages in the same session）",
+                  not bool(db.get_session(sid3)["is_fresh_reset"]))
+            runner.shutdown()
+
+
+def test_explicit_boundary_never_time_based():
+    """时间/重启永不轮转；能轮转的只有显式边界（且动作枚举里没有"第四种"）。"""
+    with temp_home() as home:
+        with fake_agent():
+            runner, src, key = _runner(home)
+            db = runner._db()
+            _, res = _feed(runner, "一", key)
+            sid = res["session_id"]
+
+            # 把活动时间倒拨 30 天 + 重启一遍
+            db._conn.execute("UPDATE sessions SET started_at = 0, updated_at = 0 WHERE id = ?",
+                             (sid,))
+            db._conn.commit()
+            runner.shutdown()
+            runner2, _, key2 = _runner(home)
+            # ★ 这条必须放在 route() **之前**：route() 命中复用时会 touch（刷新活动时间），
+            #   那之后就看不出"关闭有没有刷过"了。
+            check("（前提）关闭**没有**把 updated_at 刷新成'刚刚活动'"
+                  "（否则恢复扫描的 120 秒窗口就没意义了）",
+                  (db.get_session(sid)["updated_at"] or 0) == 0,
+                  str(db.get_session(sid)["updated_at"]))
+            d = runner2._router().route(key2, source="gateway:console")
+            check("★ 30 天不活动 + 重启 → 仍复用同一会话（时间永不轮转）",
+                  d.action == "reused" and d.entry.session_id == sid)
+
+            # 结构断言：动作枚举里只有三种出口，没有"按时间轮转"那一种
+            import re
+            from pathlib import Path as _Path
+            mod = (_Path(__file__).resolve().parent.parent / "gateway" / "session_state.py"
+                   ).read_text(encoding="utf-8")
+            actions = set(re.findall(r'action="([a-z_]+)"', mod))
+            actions |= set(re.findall(r'else "([a-z_]+)"', mod))     # 三元表达式里的那一支
+            check("状态机的出口只有 created/reused/auto_reset（没有基于时间的第四种）",
+                  actions == {"created", "reused", "auto_reset"}, str(actions))
+            runner2.shutdown()
+
+
+def test_restart_recovery_marker_and_sweep():
+    """恢复：干净退出跳过整段 · 崩溃只标"开着的、最近活跃的" · 计数 +1。"""
+    with temp_home() as home:
+        with fake_agent():
+            import hermes_state
+            from gateway import status as gw_status
+            from gateway.run import GatewayRunner
+
+            runner, src, key = _runner(home)
+            db = runner._db()
+            _, res = _feed(runner, "一", key)
+            sid = res["session_id"]
+
+            # 造一个"刚刚活动过、但已经结束"的会话：恢复**不该**碰它
+            dead = hermes_state.new_session_id()
+            db.create_session(dead, "gateway:console", session_key=key + ":dead")
+            runner._router().touch(dead)
+            db.end_session(dead, "session_reset")
+
+            runner.shutdown()
+            check("优雅关闭写了 .clean_shutdown 标记",
+                  gw_status.clean_shutdown_marker(home).exists())
+            check("★ 关闭**不结束**会话（进程退出不是对话边界）",
+                  db.get_session(sid)["ended_at"] is None)
+
+            r2 = GatewayRunner(home=home, echo=False)
+            rec2 = r2._recover_sessions()
+            check("干净退出 → 跳过恢复（一个会话都不碰）",
+                  rec2["clean_shutdown"] is True and rec2["resume_pending"] == [])
+            check("……标记已被消费（它只说明「上一次」）",
+                  not gw_status.clean_shutdown_marker(home).exists())
+
+            gw_status.clean_shutdown_marker(home).unlink(missing_ok=True)   # 模拟崩溃
+            r3 = GatewayRunner(home=home, echo=False)
+            rec3 = r3._recover_sessions()
+            check("脏启动 → 把「开着的、最近活跃的」会话标成待恢复",
+                  rec3["resume_pending"] == [sid], str(rec3["resume_pending"]))
+            check("★ 已结束的会话**不在**恢复名单里（结束过就是结束过）",
+                  dead not in rec3["resume_pending"])
+            check("库里 resume_pending 置位 + 原因写清",
+                  bool(db.get_session(sid)["resume_pending"]) and
+                  db.get_session(sid)["resume_reason"] == "restart_interrupted")
+            check("连续重启计数 +1（供卡死升级用）",
+                  gw_status.read_stuck_loop_counts(home) == {key: 1},
+                  str(gw_status.read_stuck_loop_counts(home)))
+            runner.shutdown()
+
+
+def test_stuck_loop_escalation_and_completion_reset():
+    """卡死循环：阈值判定 · 越线挂起 + 计数清零 · 会话跑完 → 自己那条清零。"""
+    with temp_home() as home:
+        with fake_agent():
+            from gateway import status as gw_status
+            from gateway.run import GatewayRunner
+
+            runner, src, key = _runner(home)
+            db, router = runner._db(), runner._router()
+            _, res = _feed(runner, "一", key)
+            sid = res["session_id"]
+
+            # ── ① 阈值判定：偶发重启不该被当成卡死 ──
+            check("2 次不够阈值 → 不挂起", router.suspend_stuck_loop_sessions({key: 2}) == [])
+            check("……且不碰库（会话照旧开着）", not bool(db.get_session(sid)["suspended"]))
+            check("3 次越线 → 挂起该键", router.suspend_stuck_loop_sessions({key: 3}) == [key])
+            check("库里 suspended 置位", bool(db.get_session(sid)["suspended"]))
+
+            # ── ② 启动恢复那条**完整**路径：读文件 → 越线 → 挂起 + 清文件 ──
+            #    （★ 这条同时锁住第 6 个真 bug：升级不该依赖"本次扫描标了谁"）
+            gw_status.write_stuck_loop_counts(home, {key: 3})
+            gw_status.clean_shutdown_marker(home).unlink(missing_ok=True)
+            r4 = GatewayRunner(home=home, echo=False)
+            rec4 = r4._recover_sessions()
+            check("★ 启动恢复：计数越线 → 挂起",
+                  rec4["suspended"] == [key], str(rec4["suspended"]))
+            check("★ 挂起后计数清零（真实版逐字：「counters start fresh after suspension」）",
+                  gw_status.read_stuck_loop_counts(home) == {})
+
+            # ── ③ 会话跑完 → 它自己那条计数清零（不是"只加不减"）──
+            gw_status.write_stuck_loop_counts(home, {key: 2})
+            _, res2 = _feed(runner, "二", key)          # 该键此前已被挂起 → 这轮换新会话
+            check("会话跑完 → 它的连续重启计数清零",
+                  gw_status.read_stuck_loop_counts(home) == {},
+                  str(gw_status.read_stuck_loop_counts(home)))
+            check("……新会话是干净的（不是「读到就清」，是「跑完才清」）",
+                  not bool(db.get_session(res2["session_id"])["resume_pending"]))
+            runner.shutdown()
+
+
+def test_busy_slot_overwrites_and_notifies():
+    """单槽：普通消息**后到覆盖先到**（"我改主意了"），被顶掉的那条要通知用户。"""
+    gate = threading.Event()
+    calls: list = []
+    with temp_home() as home:
+        with fake_agent(gate, calls):
+            runner, src, key = _runner(home)
+            adapter = runner.adapters["console"]
+            check("第一条：开始跑（占住这个会话）", runner.feed("第一条") == "started")
+            check("忙时第二条：排队（不是丢）", runner.feed("第二条") == "queued")
+            check("★ 忙时第三条：**覆盖**第二条 —— 单槽，不是 FIFO",
+                  runner.feed("第三条") == "queued")
+            check("深度 = 1（普通消息只占单槽）", adapter.pending_count(key) == 1,
+                  str(adapter.pending_count(key)))
+            check("槽里是**最新**那条", getattr(adapter.queues.slot_event(key), "text", None)
+                  == "第三条")
+            check("★ 被顶掉的第二条**收到通知**（静默丢用户写的字比拒绝更糟）",
+                  any("顶掉" in t for t in adapter.outbox()), str(adapter.outbox()[-1:]))
+            check("通知里给了正确的替代动作（`/queue`）",
+                  any("/queue" in t for t in adapter.outbox()))
+
+            gate.set()
+            check("放开后跑完（队列被消费干净）", adapter.wait_idle(key, timeout=30)
+                  and adapter.pending_count(key) == 0)
+            check("★ 跑掉的是**最新**那条：被顶掉的第二条不跑",
+                  calls == ["第一条", "第三条"], str(calls))
+            runner.shutdown()
+
+
+def test_explicit_queue_never_merges_and_runs_in_order():
+    """`/queue` 排的是**承诺**：不合并、按序、一件都不少；且优先于单槽。"""
+    gate = threading.Event()
+    calls: list = []
+    with temp_home() as home:
+        with fake_agent(gate, calls):
+            runner, src, key = _runner(home)
+            adapter = runner.adapters["console"]
+            check("起一轮（占住会话）", runner.feed("A") == "started")
+
+            # 忙时发命令：走内联（第 1 级只把它交给第 2 级）
+            runner.feed("/queue 第二件")
+            res = adapter.last_result(key)
+            check("显式排队立刻有回执（第 N 件）",
+                  res.get("action") == "queue_enqueue" and res.get("count") == 1, str(res))
+            runner.feed("/queue 第三件")
+            check("★ 显式排队**不合并**（深度 2）", adapter.pending_count(key) == 2,
+                  str(adapter.pending_count(key)))
+
+            runner.feed("/queue")                     # 只看一眼
+            res2 = adapter.last_result(key)
+            check("看队列：说得出两层、深度对", res2.get("action") == "queue"
+                  and res2.get("count") == 2, str(res2))
+            check("runner 的 `_queue_depth` 与适配器一致（真实版同名方法）",
+                  runner._queue_depth(key, adapter=adapter) == 2)
+
+            runner.feed("第四件（普通）")
+            check("总深度 = 溢出 2 + 单槽 1", adapter.pending_count(key) == 3,
+                  str(adapter.pending_count(key)))
+
+            gate.set()
+            ok = adapter.wait_idle(key, timeout=30)
+            check("★ 按序跑完：**先已承诺的两件，最后才是最新的那条**",
+                  ok and calls == ["A", "第二件", "第三件", "第四件（普通）"], str(calls))
+            check("跑完深度归零", adapter.pending_count(key) == 0)
+            runner.shutdown()
+
+
+def test_gateway_accepted_receipt():
+    """`_gateway_accepted`：**网关接受**那一刻置位（真实版 `run_busy.py:55` 逐字同名）。"""
+    gate = threading.Event()
+    with temp_home() as home:
+        with fake_agent(gate):
+            runner, src, key = _runner(home)
+            adapter = runner.adapters["console"]
+            runner.feed("一")
+            runner.feed("二")
+            slot = adapter.queues.slot_event(key)
+            check("★ 排队事件带上了回执（接受 ≠ 调用成功，这里才是'接受'）",
+                  getattr(slot, "_gateway_accepted", False) is True)
+            check("回执与队列深度对得上（每条被接受的事件都有）",
+                  adapter.pending_count(key) == 1)
+            gate.set()
+            adapter.wait_idle(key, timeout=30)
+            runner.shutdown()
+
+
+def test_agent_cache_lifecycle_and_three_protections():
+    """缓存 agent：命中 · 会话轮转必淘汰 · 三条"不许淘汰" · TTL 只放资源不结束对话。"""
+    with temp_home() as home:
+        with fake_agent():
+            runner, src, key = _runner(home)
+            cache = runner._agent_cache
+            _, res = _feed(runner, "一", key)
+            sid = res["session_id"]
+            check("跑完一轮 → 缓存里有这个会话", cache.get(key) is not None)
+            check("这一轮的 agent 与 session_id 绑定",
+                  cache.entry(key).session_id == sid)
+            check("★ 跑完就地解除保护（跑着的 / 没落盘的）",
+                  not cache.entry(key).busy and not cache.entry(key).pending_flush)
+
+            _, res2 = _feed(runner, "二", key)
+            check("同一会话再来一轮 → **命中**（不新建 agent）",
+                  cache.hits == 1 and cache.misses == 1, str(cache.stats()))
+            check("……会话没换（时间/轮次都不轮转）", res2["session_id"] == sid)
+
+            # ★ 会话轮转 → 必须淘汰（否则新消息会写进旧会话）
+            _, res3 = _feed(runner, "/new", key)
+            check("★ `/new` 之后该键被淘汰了（真实版 `_evict_cached_agent`）",
+                  cache.get(key) is None, str(cache.stats()))
+            check("淘汰原因记了 session_rotated",
+                  ("session_rotated" in [r for _, r in cache.evictions]))
+            check("★ 轮转淘汰**不受三条保护拦截**（它是正确性要求，不是资源决策）",
+                  cache.get(key) is None and cache.stats()["protected"] >= 0)
+            check("新会话 id 与旧的不同", res3["session_id"] != sid)
+
+            # ── 三条保护（★ 先跑一轮把缓存填上，否则这些断言全在空集上"通过"）──
+            _, res4 = _feed(runner, "三", key)
+            sid_new = res4["session_id"]
+            check("（前提）新会话跑了一轮 → 缓存里有新的 agent",
+                  cache.get(key) is not None and cache.entry(key).session_id == sid_new)
+
+            # ── ★ "没落盘的不许淘汰"：**被打断的那一轮**必须保留标记 ──
+            #   （真实版判据 `transcript_persistence_caught_up`：没落盘的 agent 不许淘汰。
+            #    被打断的回合转写本可能是半截的 —— 宁可多留一个 agent，也不丢一轮对话。）
+            #   ★ 先把这个键淘汰：否则这一轮会**复用**先前缓存的 agent（它属于上一个
+            #     `fake_agent()` 实例，不带闸门）—— 那一轮会瞬间跑完，根本来不及打断。
+            #    这条"测得准"的前提本身就是"缓存真的在复用"的证据。
+            cache.evict(key, reason="force")
+            gate2 = threading.Event()
+            with fake_agent(gate2):
+                runner.feed("一条会被打断的")
+                time.sleep(0.2)
+                runner._interrupt_running_agent(key)
+                gate2.set()
+                adapter2 = runner.adapters["console"]
+                adapter2.wait_idle(key, timeout=30)
+            check("★ 被打断的那一轮**保留**'未落盘'标记（下次成功跑完才清）",
+                  cache.entry(key).pending_flush is True, str(cache.stats()))
+            check("……而「正在跑」的标记已经放开（那一轮确实结束了）",
+                  cache.entry(key).busy is False)
+            cache.mark_pending_flush(key, False)          # 还给后面几条用例一个干净的起点
+
+            cache.mark_busy(key, True)
+            future = time.monotonic() + 10 ** 6
+            check("① 正在跑的：TTL 清扫**不动**它",
+                  cache.sweep_idle(now=future) == [] and cache.get(key) is not None)
+            cache.mark_busy(key, False)
+            cache.mark_pending_flush(key, True)
+            check("② 没落盘的：TTL 清扫**不动**它",
+                  cache.sweep_idle(now=future) == [] and cache.get(key) is not None)
+            cache.mark_pending_flush(key, False)
+            check("③ 最近 N 个（保护带）：TTL 清扫也不动它",
+                  cache.sweep_idle(now=future) == [] and cache.get(key) is not None
+                  if cache.protect_recent > 0 else True)
+            # 把保护带让开（protect_recent=0）后，TTL 才生效
+            cache.protect_recent = 0
+            dropped = cache.sweep_idle(now=future)
+            check("★ 三条保护都解除后，TTL 才放它", dropped == [key], str(dropped))
+            check("★ 放 agent **不是**结束对话（库里那行还开着）",
+                  runner._db().get_session(sid_new)["ended_at"] is None)
+
+            # ── 容量上限：按 LRU 放 ──
+            #   ★ 断言要**紧**：max_size=1 时插两条，结果必须正好 1 条
+            #     （写 `<= 2` 的话，"完全不淘汰"也能通过 —— 反向验证抓过这条）。
+            cache.max_size = 1
+            cache.get_or_create("other:key", "sid-other", lambda: object())
+            cache.get_or_create("third:key", "sid-third", lambda: object())
+            check("超过上限 → 按 LRU 放掉最旧的（容量不是硬失败）",
+                  len(cache._entries) == 1, str(cache.stats()))
+            check("放掉的原因里有 lru_cap",
+                  any(r == "lru_cap" for _, r in cache.evictions))
+
+            # ── 内存压力：过线才动手，且跳过受保护的 ──
+            cache.max_size = 128
+            before = len(cache._entries)
+            cache.mark_busy("other:key", True)
+            under = cache.sweep_under_pressure(rss_mb=1.0, high_mb=2048.0)
+            check("没过线 → 一个都不放", under == [] and len(cache._entries) == before)
+            over = cache.sweep_under_pressure(rss_mb=99999.0, high_mb=2048.0)
+            check("过线 → 放掉（且跳过正在跑的）",
+                  "other:key" not in over, str(over))
+            runner.shutdown()
+
+
+def test_housekeeping_tick_prune_switch_and_thread():
+    """巡检 tick：三件事各司其职 · 剪枝开关语义 · 线程真的在跑 · 不结束任何对话。"""
+    with temp_home() as home:
+        with fake_agent():
+            runner, src, key = _runner(home)
+            _, res = _feed(runner, "一", key)
+            sid = res["session_id"]
+
+            receipt = runner._session_housekeeping_tick(rss_mb=1.0)
+            check("收据四件套齐全",
+                  set(receipt) == {"idle_evicted", "pressure_evicted", "rss_mb", "pruned"},
+                  str(receipt))
+            check("① 空闲清扫被调用了（结果是列表）", isinstance(receipt["idle_evicted"], list))
+            check("内存没过线 → ② 不动手", receipt["pressure_evicted"] == [])
+            check("③ 剪枝默认**关**（session_store_max_age_days=0）",
+                  receipt["pruned"].startswith("跳过"), str(receipt["pruned"]))
+
+            # 打开开关 → 只记账、不动数据（mini 存储层没有删除路径）
+            # ★ 显式传 `now`：让"剪枝节流"与机器 uptime 无关（否则这个用例的结果
+            #   取决于"这台机器开机多久了"—— 反向验证会变成偶发）。
+            runner.session_store_max_age_days = 30
+            r2 = runner._session_housekeeping_tick(now=100.0, rss_mb=1.0)
+            check("★ 开关打开 → 尝试一次并**诚实记债**（没删任何东西）",
+                  r2["pruned"].startswith("未执行"), str(r2["pruned"]))
+            check("……债记在 `_turn_errors` 里", any("prune" in e for e in runner._turn_errors))
+            r3 = runner._session_housekeeping_tick(now=101.0, rss_mb=1.0)
+            check("剪枝是**每小时一次**，不是每个 tick",
+                  r3["pruned"].startswith("跳过"), str(r3["pruned"]))
+
+            # ★ 巡检**不结束对话**（第 8 章的不变量在资源路径上同样成立）
+            check("巡检过后：会话还开着",
+                  runner._db().get_session(sid)["ended_at"] is None)
+            check("……而且按键找回的还是同一个会话",
+                  runner._db().latest_session_id_for_key(key) == sid)
+
+            # 线程：真起得来、真停得掉
+            runner._start_housekeeping(interval=0.05, first_delay=0.0)
+            deadline = time.time() + 3
+            while time.time() < deadline and not runner.housekeeping_log():
+                time.sleep(0.02)
+            check("★ 巡检线程真的在跑（日志里有 tick）", bool(runner.housekeeping_log()),
+                  str(runner.housekeeping_log()[:1]))
+            runner._stop_housekeeping()
+            n_after_stop = len(runner.housekeeping_log())
+            time.sleep(0.2)
+            check("停掉之后不再 tick（收尾不会留野线程）",
+                  len(runner.housekeeping_log()) == n_after_stop)
+            runner.shutdown()
+
+
 GROUPS = [
     ("1. 会话键", "唯一来源 · 布局 · 退路", [test_session_key_is_single_source]),
     ("2. 命名空间", "默认 main / 真名 main → main~", [test_namespace_and_main_tilde]),
@@ -878,6 +1293,15 @@ GROUPS = [
       test_profile_clone_keeps_config_not_memory,
       test_profile_resolve_never_silently_falls_back,
       test_two_profiles_share_nothing, test_profile_cli_end_to_end]),
+    ("15. 会话生命周期（★ 第 8 章）", "硬>软 · 时间不轮转 · 恢复标记与扫描 · 卡死升级 + 计数",
+     [test_lifecycle_priority_and_hard_wins, test_explicit_boundary_never_time_based,
+      test_restart_recovery_marker_and_sweep, test_stuck_loop_escalation_and_completion_reset]),
+    ("16. 两层队列（★ 第 8 章）", "单槽覆盖 + 通知 · 溢出 FIFO 不合并 · 先承诺后最新 · 回执",
+     [test_busy_slot_overwrites_and_notifies, test_explicit_queue_never_merges_and_runs_in_order,
+      test_gateway_accepted_receipt]),
+    ("17. 缓存与巡检（★ 第 8 章）", "命中/轮转必淘汰 · 三条不许淘汰 · 容量 LRU · 压力过线 · tick 与剪枝开关",
+     [test_agent_cache_lifecycle_and_three_protections,
+      test_housekeeping_tick_prune_switch_and_thread]),
 ]
 
 

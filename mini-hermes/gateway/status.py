@@ -42,6 +42,102 @@ GATEWAY_FATAL_CONFIG_EXIT_CODE = 78
 PID_FILENAME = "gateway.pid"
 STATE_FILENAME = "gateway_state.json"
 
+# ══ 第 8 章：重启恢复用的两个标记文件 ══════════════════════════════════════
+# 名字**照抄真实版**（这次源码里核过，不是文档写的那个）：
+CLEAN_SHUTDOWN_MARKER = ".clean_shutdown"     # gateway/run_shutdown.py:1889 优雅关闭末尾 touch
+STUCK_LOOP_FILE = ".restart_failure_counts"   # gateway/run.py:3969 逐字（不是 restart_counts.json）
+
+
+def clean_shutdown_marker(home: Path) -> Path:
+    return Path(home) / CLEAN_SHUTDOWN_MARKER
+
+
+def mark_clean_shutdown(home: Path) -> Path:
+    """优雅关闭的**末尾**写这个标记。
+
+    ★ 它存在的理由：没有它，每次启动都要做"脏退出的恢复" —— 而干净重启（`hermes update`、
+    `restart`）的会话会被当成"被打断的"，于是用户看到莫名其妙的"继续中"。
+    **一个"上次是不是干净退出"的标记，决定要不要做恢复。**
+    """
+    path = clean_shutdown_marker(home)
+    path.write_text("clean\n", encoding="utf-8")
+    return path
+
+
+def consume_clean_shutdown(home: Path) -> bool:
+    """启动时读这个标记并**删掉**它，返回"上次是不是干净退出"。"""
+    path = clean_shutdown_marker(home)
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return True
+    return False
+
+
+def stuck_loop_counts_path(home: Path) -> Path:
+    """连续重启计数文件（对应真实版 `_stuck_loop_counts_path()`）。"""
+    return Path(home) / STUCK_LOOP_FILE
+
+
+def read_stuck_loop_counts(home: Path) -> Dict[str, int]:
+    """读 `{会话键: 连续重启次数}`。读不出来就当空（**不做 exists 预检**，
+    照真实版 `_read_json_counts` 的注释：*"or None when the file is missing/unreadable
+    (no exists() pre-check needed)"*）。"""
+    try:
+        raw = json.loads(stuck_loop_counts_path(home).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for k, v in raw.items():
+        try:
+            out[str(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def write_stuck_loop_counts(home: Path, counts: Dict[str, int]) -> Path:
+    path = stuck_loop_counts_path(home)
+    path.write_text(json.dumps(counts, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def bump_stuck_loop_counts(home: Path, session_keys) -> Dict[str, int]:
+    """把给定会话键的计数各 +1（启动时对"跨这次重启还活着"的会话调用）。"""
+    counts = read_stuck_loop_counts(home)
+    for key in session_keys:
+        counts[str(key)] = int(counts.get(str(key), 0)) + 1
+    write_stuck_loop_counts(home, counts)
+    return counts
+
+
+def clear_stuck_loop_counts(home: Path) -> None:
+    """清空计数文件（**挂起之后**做：*"counters start fresh after suspension"*）。"""
+    try:
+        stuck_loop_counts_path(home).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def clear_one_stuck_loop_count(home: Path, session_key: str) -> None:
+    """会话**跑完之后**清掉它自己的计数（真实版 `_clear_restart_failure_count`）。
+
+    ★ 为什么不是"只加不减"：一个会话只要成功跑完一轮，就说明它不卡了 ——
+    计数该归零。不归零的话，历史上攒够 3 次就再也说不清"是最近卡的还是三天前卡的"。
+    """
+    counts = read_stuck_loop_counts(home)
+    if str(session_key) not in counts:
+        return
+    counts.pop(str(session_key), None)
+    if counts:
+        write_stuck_loop_counts(home, counts)
+    else:
+        clear_stuck_loop_counts(home)
+
 
 def pid_file(home: Path) -> Path:
     return Path(home) / PID_FILENAME

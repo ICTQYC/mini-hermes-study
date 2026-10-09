@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,22 +22,27 @@ from typing import Any, Dict, List, Optional
 from agent.secret_scope import set_multiplex_active
 from gateway import status as gw_status
 from gateway.adapters.console import ConsoleAdapter
+from gateway.agent_cache import AgentCache
 from gateway.authz import GatewayAuthz
 from gateway.delivery import Delivery
 from gateway.hooks import HookRegistry
+from gateway.run_busy import BusyMixin
 from gateway.run_inbound import InboundMixin
 from gateway.run_shutdown import ShutdownMixin
+from gateway.run_startup import StartupMixin
 from gateway.run_turn import TurnMixin
+from gateway.run_watchers import SESSION_STORE_MAX_AGE_DAYS_DEFAULT, WatchersMixin
 from hermes_constants import get_mini_home
 from hermes_cli.profiles import profiles_to_serve, profiles_root
 
 
-class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin):
+class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMixin, WatchersMixin):
     def __init__(self, *, home: Optional[Path] = None, provider: str = "deepseek",
                  model: Optional[str] = None, profile: Optional[str] = None,
                  multiplex: bool = False, max_turns: int = 200, debug: bool = False,
                  authz: Optional[GatewayAuthz] = None, adapters: Optional[List[Any]] = None,
-                 approval_timeout: float = 60.0, echo: bool = True):
+                 approval_timeout: float = 60.0, echo: bool = True,
+                 memory_high_mb: Optional[float] = None):
         self.home = Path(home) if home else get_mini_home()
         self.profile = profile
         self.multiplex = multiplex
@@ -59,12 +65,21 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin):
         for a in adapters:
             a._on_message = self._handle_message
             a._on_interrupt = self._interrupt_running_agent
+            a._on_overwrite = self._notify_overwrite
             a._session_key_fn = self._key_for_source
             self.adapters[a.name] = a
         self.delivery = Delivery(self.adapters)
 
         self._session_ids: Dict[str, str] = {}
         self._dbs: Dict[str, Any] = {}
+        self._routers: Dict[str, Any] = {}          # 第 8 章：每个库一个路由状态机
+        # ── 第 8 章：代理缓存 + 后台巡检 ──
+        self._agent_cache = AgentCache(memory_high_mb=memory_high_mb)
+        self._housekeeping_thread: Optional[threading.Thread] = None
+        self._housekeeping_stop: Optional[threading.Event] = None
+        self._housekeeping_log: List[Dict[str, Any]] = []
+        self._last_prune_at: Optional[float] = None   # None = 从没剪过（别用 0.0：那是开机时刻）
+        self.session_store_max_age_days = SESSION_STORE_MAX_AGE_DAYS_DEFAULT
         self._running_agents: Dict[str, Any] = {}
         self._events_by_key: Dict[str, Any] = {}
         self._spec: Optional[Dict[str, Any]] = None
@@ -161,6 +176,16 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin):
         gw_status.write_runtime_status(self.home, "running", pid=self.pid,
                                       profile=self.profile, multiplex=self.multiplex)
 
+        # ── 第 8 章：启动恢复（真实版 gateway/run_startup.py 的四步）──
+        #    ★ 顺序要求：在"身份文件写好之后"（恢复要用 home）、"适配器连上之前"
+        #      （否则入站消息会在恢复中途进来）。真实版还额外"恢复期间先排队入站"，
+        #      mini 因为恢复本身不跑回合（只标状态），所以不需要那道排队。
+        recovery = self._recover_sessions()
+
+        # ── 第 8 章：后台巡检线程（真实版 gateway/run_watchers.py 的会话维护）──
+        #    先等 60 秒再开工（真实版同）：刚起来这会儿正在做恢复、连适配器，别抢缓存锁。
+        self._start_housekeeping()
+
         # ── 多路复用：一个进程服务多个 profile，密钥读取转 fail-closed ──
         set_multiplex_active(self.multiplex)
         self.served_homes = profiles_to_serve(self.multiplex)
@@ -181,6 +206,7 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin):
             f"  钩子     {loaded or '（无）'}\n"
             f"  多路复用 {'开' if self.multiplex else '关'}"
             + (f"（服务 {len(self.served_homes)} 个 home）" if self.multiplex else "")
+            + ("\n  " + "\n  ".join(self._recovery_banner(recovery)) if recovery else "")
         )
         return 0
 

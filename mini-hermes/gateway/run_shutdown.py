@@ -15,15 +15,19 @@ class ShutdownMixin:
     def _finalize_session(self, session_id: str, reason: str) -> None:
         """结束一个会话：写结束原因 + 发 `session:end` 钩子。
 
+        ★ 只有**真正的对话边界**才配用它：`/new` `/reset`、硬擦除、压缩轮转。
+        **进程退出不算边界**（第 8 章更正）—— 关闭/重启只对正在跑的会话打软恢复标记。
+
         ★ 为什么"结束会话"必须和"清理资源"分开（真实版的 flush 生命周期）：
 
         | 情况 | 会不会终结会话 |
         |---|---|
         | 显式对话边界（`/new`） | ✅ 会 |
         | 空闲时间、每日边界、内存压力 | ❌ **不会** |
-        | 进程退出 | ✅ 会（reason=gateway_stop） |
+        | 进程退出 / 重启 | ❌ **不会**（只对正在跑的会话打"待恢复"标记） |
 
-        把"资源紧张"当成"对话结束"，用户就会发现自己的对话被**悄悄重置**了。
+        把"资源紧张"或"进程要重启了"当成"对话结束"，用户就会发现自己的对话被**悄悄重置**了 ——
+        第 8 章那条不变量（时间永不轮转）在进程生命周期上同样成立。
         """
         if not session_id:
             return
@@ -35,10 +39,43 @@ class ShutdownMixin:
 
     def shutdown(self, *, reason: str = "gateway_stop",
                  exit_code: int = 0) -> None:
-        """进程级收尾：结束所有已知会话 → 摘掉身份文件 → 状态置 stopped。"""
-        for key, sid in list(self._session_ids.items()):
-            self._finalize_session(sid, reason)
-            self._session_ids.pop(key, None)
+        """进程级收尾。
+
+        ★ **第 8 章的更正**：进程退出**不是对话边界** —— 所以这里**不再**结束任何会话。
+        真实版在关闭/重启的 drain 路径里只做一件事（`gateway/run_shutdown.py:786-795`）：
+
+        ```python
+        reason = "restart_timeout" if self._restart_requested else "shutdown_timeout"
+        await self.async_session_store.mark_resume_pending(_sk, reason)
+        ```
+
+        而且只对**正在跑**的会话标这一下（`_mark_running_sessions_resume_pending`）。
+        其余会话什么都不做 —— 它们保持 open，下次启动时按普通复用接着用。
+        （第 7 章这里对每个会话写了 `end_session("gateway_stop")`：那会让"重启之后对话还在"
+        这条承诺直接失效 —— 每次重启都等于给所有用户开了新会话。已按真实版语义改掉。）
+        """
+        # ★ 第 8 章：进程收尾 —— 停巡检线程 + 把缓存 agent 全放掉。
+        #   **这不是结束对话**：转写本在库里，放掉 agent 只是把 RAM 还回去
+        #   （真实版同：缓存淘汰从来不写 `ended_at`）。
+        self._stop_housekeeping()
+        self._agent_cache.clear()
+
+        # ★ 只标记"被打断的那一轮"（正在跑的会话）→ 软恢复
+        for key in list(self._running_agents):
+            sid = self._session_ids.get(key)
+            if sid:
+                try:
+                    self._router().mark_resume_pending(sid, "shutdown_timeout")
+                except Exception as exc:
+                    self._turn_errors.append(f"mark_resume_pending: {exc!r}")
+
+        # ★ **不 touch**（第 8 章更正）：`updated_at` 表达的是"**用户活动**"，
+        #   不是"进程活动"。原来这里给每个会话 touch 一下，后果是：
+        #   任何一次优雅关闭之后，网关知道的**所有**会话都变成"刚刚活跃"——
+        #   于是崩溃恢复的"最近 120 秒"窗口形同虚设（下次脏启动会把它们全标成待恢复，
+        #   哪怕用户上一次说话是几小时前）。真实版关闭路径里也**没有** touch，
+        #   它只对**正在跑**的会话打一个 `resume_pending`（上面那段）。
+        self._session_ids.clear()
 
         for adapter in self.adapters.values():
             try:
@@ -50,6 +87,11 @@ class ShutdownMixin:
         try:
             if self.pid:
                 gw_status.write_runtime_status(self.home, "stopped", pid=self.pid)
+            # ★ 第 8 章：**优雅关闭的末尾**写下"干净退出"标记 ——
+            #   下次启动据此跳过崩溃恢复（否则每次 `restart` 都会被当成被打断的）。
+            #   只在退出码 0 时写：启动失败（78）不是"干净退出"。
+            if exit_code == 0:
+                gw_status.mark_clean_shutdown(self.home)
             # ★ 只删**自己写的**身份文件（真实版 `live_gateway_pid_for_home` 的
             #   "Never unlinks home's identity files" 是给读方定的规矩：
             #   读方不清理，写方才清理）。

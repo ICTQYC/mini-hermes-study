@@ -12,8 +12,11 @@
 真实版（`platforms/base.py:1884-1885` / `:3583-3616`）的答案是**三件套**：
 
     _active_sessions   这个会话有没有主？（guard Event）
-    _pending_messages  忙的时候消息去哪（排队，不是丢）
+    _pending_messages  忙的时候消息去哪（★ 第 8 章起 = **单槽**：后到覆盖先到）
     _session_tasks     谁是主？主死了怎么办（★ **owner task + 陈旧检测**）
+
+★ 第 8 章另加**第四件**：溢出 FIFO（用户显式 `/queue` 的，一件都不能少）。
+  单槽 + 溢出组成两层队列，见 `gateway/run_busy.py`。
 
 ★ 最后那件最容易被漏掉：进程是长驻的，一次崩溃/超时会让 guard 永远挂着，
   那个会话就**永久卡死**。所以真实版有一个 `_session_task_is_stale()`
@@ -28,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from gateway.session_keys import SessionSource
+from gateway.run_busy import SessionQueues
 
 
 @dataclass
@@ -65,7 +69,8 @@ class BasePlatformAdapter:
         self._session_key_fn = session_key_fn
         # ---- 第 1 级守卫三件套 ----
         self._active_sessions: Dict[str, threading.Event] = {}
-        self._pending_messages: Dict[str, List[MessageEvent]] = {}
+        self.queues = SessionQueues()               # 第 8 章：单槽（覆盖）+ 溢出 FIFO（不合并）
+        self._on_overwrite: Optional[Callable[[str, MessageEvent], None]] = None
         self._session_tasks: Dict[str, threading.Thread] = {}
         # 忙时通知 agent 中断（真实版是 asyncio.Event，mini 用同语义的线程事件）
         self._interrupt_events: Dict[str, threading.Event] = {}
@@ -121,17 +126,27 @@ class BasePlatformAdapter:
             self._note(f"[守卫1] {key} 忙 → 命令 {resolved[0]!r} 内联交第 2 级")
             return self._dispatch_inline(event)
 
-        # ② **普通消息**：排队（不是丢），并通知正在跑的 agent 打断 ——
+        # ② **普通消息**：进**单槽**（后到覆盖先到）+ 通知正在跑的 agent 打断 ——
         #    这样用户新发的话能尽快被处理，而不是等旧回合跑完。
-        #    ★ 注意这里**不给用户回话**：用户不需要知道"排队"这件事，
-        #      要查看队列有 `/queue`。真实版 guard 1 也是这个形状。
-        self._pending_messages.setdefault(key, []).append(event)
+        #    ★ 第 8 章改动：第 7 章这里是 `list` + `append`（普通消息也 FIFO 排队）——
+        #      那等于"我改主意了"这个意图表达不出来（发十条就挨个跑十条）。
+        #      真实版 `run_busy.py:71` 是**赋值**：`adapter._pending_messages[key] = ...`，
+        #      单槽、后到覆盖先到。
+        #    ★ 覆盖掉的那条**必须告诉用户**（那是他写的字，静默丢比拒绝更糟）。
+        overwritten = self.queues.keep_latest(event)
+        # ★ 回执（真实版 `run_busy.py:55` 逐字同名）：标上"网关已经接受它了"，
+        #   交付层据此**不重复**回执 —— "调用 ≠ 接受"，这是接受的那一刻。
+        setattr(event, "_gateway_accepted", True)
         ev = self._interrupt_events.get(key)
         if ev is not None:
             ev.set()
         if self._on_interrupt is not None:
             self._on_interrupt(key)
-        self._note(f"[守卫1] {key} 忙 → 排队（队列 {len(self._pending_messages[key])} 条）")
+        if overwritten is not None and self._on_overwrite is not None:
+            self._on_overwrite(key, overwritten)
+        self._note(f"[守卫1] {key} 忙 → 进单槽"
+                   + ("（覆盖了上一条排队消息）" if overwritten is not None else "")
+                   + f"（深度 {self.queues.depth(key)}）")
         return "queued"
 
     def _start_processing(self, event: MessageEvent) -> str:
@@ -165,18 +180,18 @@ class BasePlatformAdapter:
         return "inline"
 
     def _drain_pending(self, key: str) -> None:
-        """一轮结束后，把排队的消息**按顺序**放出来（只放第一条，其余继续排）。
+        """一轮结束后，把队列里的**下一条**放出来。
+
+        ★ 顺序（真实版 `_promote_queued_event`）：**先溢出 FIFO**（用户显式 `/queue` 的，
+        一件都不能少）**再单槽**（最新的那条普通消息）。见 `gateway/run_busy.py`。
 
         ★ 为什么只放一条：一次只跑一轮。放出去的那条跑完会再 drain 一次 ——
         这样"排队"是**队列**而不是"一次性批量"。
         """
-        pending = self._pending_messages.get(key)
-        if not pending:
+        nxt = self.queues.promote(key)
+        if nxt is None:
             return
-        nxt = pending.pop(0)
-        if not pending:
-            self._pending_messages.pop(key, None)
-        self._note(f"[守卫1] {key} 空闲 → 放出排队消息（剩 {len(pending)} 条）")
+        self._note(f"[守卫1] {key} 空闲 → 放出排队消息（剩 {self.queues.depth(key)} 条）")
         self.handle_message(nxt)
 
     def _dispatch_inline_reply(self, event: MessageEvent) -> str:
@@ -205,7 +220,8 @@ class BasePlatformAdapter:
         return session_key in self._active_sessions
 
     def pending_count(self, session_key: str) -> int:
-        return len(self._pending_messages.get(session_key, ()))
+        """队列深度 = 单槽（0/1）+ 溢出（真实版 `_queue_depth` 同算法）。"""
+        return self.queues.depth(session_key)
 
     # ------------------------------------------------------------------ #
     # 观察面（★ mini 侧新增：真实版靠事件回调/轮询状态。
