@@ -1,0 +1,220 @@
+"""入站处理：授权 → 命令分发 → 忙时拦截（对应 Hermes 的 `gateway/run_inbound.py`）。
+
+这是网关真正的"咽喉"：所有平台的入站都从这里过。
+
+流程（照真实版）：
+
+    1. 算会话键（**唯一来源** build_session_key）
+    2. 授权（默认拒绝）
+    3. 解析斜杠命令 → **表驱动**分发（没有 if 链）
+    4. 如果 agent 在跑 → 按 busy_policy 处置（内联 / 拒绝）
+    5. 都不是 → 跑一轮
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from gateway.session_keys import build_session_key
+from hermes_cli.commands import GATEWAY_COMMANDS, busy_policy_for, resolve_command
+
+
+class InboundMixin:
+    """网关的入站阶段。"""
+
+    # ------------------------------------------------------------------ #
+    # 唯一入口
+    # ------------------------------------------------------------------ #
+    def _handle_message(self, event) -> Optional[Dict[str, Any]]:
+        # 1. 会话键：**所有地方都从这一个函数拿**（不许手拼）。
+        #    正常情况下适配器（第 1 级守卫）已经算好了；这里只是兜底复用。
+        event.session_key = event.session_key or self._key_for_source(event.source)
+
+        # 2. 授权（默认拒绝）
+        if not self.authz.is_authorized(event.source):
+            self._reply(event, f"⛔ 未授权：{self.authz.explain(event.source)}",
+                        target=self._explicit_target(event))
+            self.hooks.emit("command", command="(denied)", session_key=event.session_key)
+            return {"action": "denied"}
+
+        resolved = resolve_command(event.text)
+        key = event.session_key
+
+        # 3. **忙时处置优先于命令分发**：
+        #    ★ 顺序很关键。真实版的形状是"忙时有一条自己的可执行命令白名单
+        #      （`_IDLE_COMMANDS` / `_PLAIN_COMMANDS`），不在白名单里的命令
+        #      **只在空闲路径分发**"。
+        #      如果反过来（先按命令表分发、再查忙不忙），`/sessions` 这种
+        #      `busy_policy=reject` 的命令就会在 agent 跑着的时候照样执行 ——
+        #      改一个正在被使用的会话的元数据，正是忙时策略要防的事。
+        running = self._running_agents.get(key)
+        if running is not None:
+            return self._dispatch_busy(event, resolved)
+
+        # 4. 空闲路径：斜杠命令 → 查表分发
+        if resolved:
+            name, args = resolved
+            handler = self._command_handler_table().get(name)
+            if handler is not None:
+                self.hooks.emit("command", command=name, session_key=key, args=args)
+                return handler(event, args)
+
+        # 5. 跑一轮
+        return self._run_turn_for_event(event)
+
+    # ------------------------------------------------------------------ #
+    # 表驱动分发
+    # ------------------------------------------------------------------ #
+    def _command_handler_table(self) -> Dict[str, Any]:
+        """命令名 → 处理器（真实版 `_command_handler_table()` 的形状）。
+
+        ★ 这里的关键是：**没有 `if cmd == "stop" ... elif cmd == "new" ...`**。
+        加一个命令 = 在 `GATEWAY_COMMANDS` 加一条声明 + 在这里的表里加一行；
+        分发逻辑一个字不改。
+        """
+        return {
+            "new": self._cmd_new,
+            "stop": self._cmd_stop,
+            "status": self._cmd_status,
+            "help": self._cmd_help,
+            "approve": self._cmd_approve,
+            "deny": self._cmd_deny,
+            "queue": self._cmd_queue,
+            "sessions": self._cmd_sessions,
+        }
+
+    # ------------------------------------------------------------------ #
+    # 忙时处置（第 2 级守卫）
+    # ------------------------------------------------------------------ #
+    def _dispatch_busy(self, event, resolved) -> Dict[str, Any]:
+        """agent 在跑，命令或消息该怎么处置。
+
+        ★ 与第 1 级的分工：第 1 级只知道"这个会话忙"，**在适配器里**就挡下了；
+        第 2 级知道**这个命令是什么**，所以能按 `busy_policy` 精细处置。
+        两级都必要：只有第 1 级 → 无法区分命令；只有第 2 级 → 消息已经在后台排队了。
+        """
+        key = event.session_key
+        if resolved is None:
+            # ★ 到这里为止（普通消息）**不该发生**：第 1 级守卫已经把它排队了，
+            #   而排队时会通知 runner 去打断正在跑的那一轮 ——
+            #   用户不发命令时不会看到"已排队"这种回话，他只会看到自己那条消息
+            #   稍后被处理（要查看队列用 `/queue`）。
+            return {"action": "queued"}
+
+        name, args = resolved
+        policy = busy_policy_for(name)
+        agent = self._running_agents.get(key)
+
+        if policy == "interrupt_then_dispatch":
+            if agent is not None:
+                agent.interrupt()
+                self._interrupted.append(key)
+            handler = self._command_handler_table().get(name)
+            return handler(event, args) if handler else {"action": "interrupted"}
+
+        if policy == "dispatch":
+            # 忙时也得能执行的命令（/approve /deny /status /help /queue）
+            handler = self._command_handler_table().get(name)
+            if handler is not None:
+                return handler(event, args)
+            return {"action": "dispatched"}
+
+        # policy == "reject"（默认）：**必须把拒绝说出口**，否则用户以为命令生效了
+        self._busy_rejections.append((key, name))
+        self._reply(event,
+                    f"⏳ Agent 正在跑 —— `/{name}` 不能在回合中间执行。"
+                    f"（`/stop` 可以打断）",
+                    target=self._explicit_target(event))
+        return {"action": "busy_rejected", "command": name}
+
+    # ------------------------------------------------------------------ #
+    # 命令处理器（每个都小到一句话能说清）
+    # ------------------------------------------------------------------ #
+    def _cmd_help(self, event, args: str) -> Dict[str, Any]:
+        lines = ["可用命令（网关侧）："]
+        for d in sorted(GATEWAY_COMMANDS, key=lambda c: c.name):
+            al = f"（别名：{'、'.join(d.aliases)}）" if d.aliases else ""
+            lines.append(f"  /{d.name:<9} {d.description}{al}  [忙时：{d.busy_policy}]")
+        self._reply(event, "\n".join(lines), target=self._explicit_target(event))
+        return {"action": "help"}
+
+    def _cmd_stop(self, event, args: str) -> Dict[str, Any]:
+        key = event.session_key
+        agent = self._running_agents.get(key)
+        if agent is None:
+            self._reply(event, "（没有正在跑的回合）", target=self._explicit_target(event))
+            return {"action": "stop_noop"}
+        agent.interrupt()
+        self._interrupted.append(key)
+        self._reply(event, "⏹ 已请求打断。", target=self._explicit_target(event))
+        return {"action": "interrupted"}
+
+    def _cmd_new(self, event, args: str) -> Dict[str, Any]:
+        key = event.session_key
+        old = self._session_ids.pop(key, None)
+        if old:
+            self._finalize_session(old, "reset")
+            self.hooks.emit("session:reset", session_key=key, session_id=old)
+        new_id = self._open_session(event)
+        self._reply(event, f"🆕 新会话已开始（{new_id}）。", target=self._explicit_target(event))
+        return {"action": "reset", "session_id": new_id, "previous": old}
+
+    def _cmd_status(self, event, args: str) -> Dict[str, Any]:
+        key = event.session_key
+        sid = self._session_ids.get(key) or "(尚未开始)"
+        adapter = self.adapters.get(event.source.platform)
+        busy = bool(adapter and adapter.is_busy(key))
+        pend = adapter.pending_count(key) if adapter else 0
+        db = self._db()
+        n = db.count_messages(sid) if isinstance(sid, str) and not sid.startswith("(") else 0
+        text = "\n".join([
+            f"会话键   {key}",
+            f"会话 id  {sid}",
+            f"消息数   {n}",
+            f"agent    {'正在跑' if key in self._running_agents else '空闲'}",
+            f"排队     {pend} 条",
+            f"网关 pid {self.pid or '(未启动)'}  home={self.home}",
+        ])
+        self._reply(event, text, target=self._explicit_target(event))
+        return {"action": "status"}
+
+    def _cmd_queue(self, event, args: str) -> Dict[str, Any]:
+        adapter = self.adapters.get(event.source.platform)
+        pending = []
+        if adapter is not None:
+            pending = list(adapter._pending_messages.get(event.session_key, ()))
+        if not pending:
+            self._reply(event, "（队列为空）", target=self._explicit_target(event))
+            return {"action": "queue", "count": 0}
+        lines = [f"排队中 {len(pending)} 条："]
+        lines += [f"  {i}. {e.text[:60]}" for i, e in enumerate(pending, 1)]
+        self._reply(event, "\n".join(lines), target=self._explicit_target(event))
+        return {"action": "queue", "count": len(pending)}
+
+    def _cmd_sessions(self, event, args: str) -> Dict[str, Any]:
+        db = self._db()
+        rows = db.list_sessions(limit=10, source=f"gateway:{event.source.platform}")
+        if not rows:
+            self._reply(event, "（还没有会话）", target=self._explicit_target(event))
+            return {"action": "sessions", "count": 0}
+        lines = ["最近会话："]
+        for r in rows:
+            mark = "●" if r.get("id") == self._session_ids.get(event.session_key) else " "
+            lines.append(f" {mark} {r.get('id')}  {r.get('session_key') or '-'}  "
+                         f"{r.get('message_count') or 0} 条  {r.get('end_reason') or ''}")
+        self._reply(event, "\n".join(lines), target=self._explicit_target(event))
+        return {"action": "sessions", "count": len(rows)}
+
+    def _cmd_approve(self, event, args: str) -> Dict[str, Any]:
+        return self._resolve_approval(event, approved=True)
+
+    def _cmd_deny(self, event, args: str) -> Dict[str, Any]:
+        return self._resolve_approval(event, approved=False)
+
+    # ------------------------------------------------------------------ #
+    def _reply(self, event, text: str, *, target: Optional[str] = None) -> None:
+        self.delivery.deliver(event.source, text, target=target)
+
+    def _explicit_target(self, event) -> Optional[str]:
+        """来源里带了显式投递目标就用它（对应真实版的"指定目标投递"）。"""
+        t = event.metadata.get("deliver_to")
+        return str(t) if t else None

@@ -53,15 +53,21 @@ class SessionSessionsMixin:
                        system_prompt: Optional[str] = None,
                        parent_session_id: Optional[str] = None,
                        title: Optional[str] = None,
+                       session_key: Optional[str] = None,
                        started_at: Optional[float] = None) -> str:
-        """建会话（已存在则**只补空缺**，不覆盖已有值）。"""
+        """建会话（已存在则**只补空缺**，不覆盖已有值）。
+
+        `session_key`（第 7 章）：网关的路由键。为什么落库而不是只放内存——
+        因为**网关会重启**，而"同一个聊天对应同一个会话"这件事必须活过重启。
+        cli 会话不传（保持 NULL）。
+        """
         keep = ",\n                       ".join(
             f"{c} = COALESCE(sessions.{c}, excluded.{c})" for c in _KEEP_EXISTING_COLS
         )
         sql = f"""
             INSERT INTO sessions (id, source, model, model_config, system_prompt_hash,
-                                  parent_session_id, started_at, title)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                  parent_session_id, started_at, title, session_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 {keep}
         """
@@ -74,10 +80,28 @@ class SessionSessionsMixin:
                 parent_session_id,
                 float(started_at if started_at is not None else time.time()),
                 title,
+                session_key,
             ))
             return session_id
 
         return self._execute_write(_do)
+
+    def latest_session_id_for_key(self, session_key: str, *,
+                                  source: Optional[str] = None) -> Optional[str]:
+        """按路由键找回**当前**会话（只找没结束的，时间倒序第一条）。
+
+        ★ 为什么必须排除已结束的：`/new` 结束掉的会话如果还被"找回"，
+        用户就会发现自己重置之后又回到了旧对话里 ——
+        这是"重启连续性"这个功能最容易做错的地方。
+        """
+        sql = ("SELECT id FROM sessions WHERE session_key = ? AND ended_at IS NULL")
+        params: List[Any] = [session_key]
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+        sql += " ORDER BY started_at DESC LIMIT 1"
+        row = self._conn.execute(sql, tuple(params)).fetchone()
+        return row[0] if row is not None else None
 
     def end_session(self, session_id: str, end_reason: str) -> None:
         """结束会话（真实版 `hermes_state_sessions.py:442`）。"""
@@ -117,7 +141,8 @@ class SessionSessionsMixin:
         取不到就退回 `started_at` 当"最后活动时间"。
         """
         sql = """
-            SELECT s.id, s.source, s.title, s.started_at, s.message_count,
+            SELECT s.id, s.source, s.session_key, s.title, s.started_at, s.message_count,
+                   s.end_reason,
                    COALESCE(
                        (SELECT SUBSTR(m.content, 1, 63) FROM messages m
                          WHERE m.session_id = s.id AND m.role = 'user'

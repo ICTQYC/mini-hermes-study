@@ -9,6 +9,9 @@
     python3 -m hermes_cli.main --max-turns 8      # 改迭代预算
     python3 -m hermes_cli.main --list-toolsets    # 看 toolset（**不需要密钥**）
     python3 -m hermes_cli.main --doctor           # 网络/连通性体检（**不需要密钥**）
+    python3 -m hermes_cli.main gateway run        # 第 7 章：跑网关（前台）
+    python3 -m hermes_cli.main -p lab -q "问题"   # 第 7 章：用名为 lab 的 profile
+    python3 -m hermes_cli.main profile list       # 第 7 章：有哪些 profile
 
 ★ 纪律：**只读的查询类参数必须在构造 MiniCLI 之前处理**。
   构造 agent 需要 API key（`MiniCLI.__init__` 会去解析 provider），
@@ -46,7 +49,13 @@ def _run_doctor() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mini-hermes", description="从零手写的 agent loop")
     parser.add_argument("-q", "--query", help="单次提问后退出（不进 REPL）")
-    parser.add_argument("-p", "--provider", default="deepseek", help="provider 名（默认 deepseek）")
+    # ★ `-p/--profile`（第 7 章侧线）：**与真实版对齐** —— 真实版里 `-p` 就是 `--profile`
+    #   （`hermes_cli/_parser.py:16`：PRE_ARGPARSE_INHERITED_FLAGS 里就有 ("-p", True)）。
+    #   以前 mini 把 `-p` 当 provider 的短参数用了，这是一处已知的分歧，这里改回来；
+    #   provider 保留长参数 `--provider`（不设短参数比设错短参数好）。
+    parser.add_argument("-p", "--profile", default=None,
+                        help="用哪个 profile（= 哪套 home/凭据/会话库）。不写就是默认 profile")
+    parser.add_argument("--provider", default="deepseek", help="provider 名（默认 deepseek）")
     parser.add_argument("-m", "--model", default=None, help="模型名（默认取 provider 的默认模型）")
     parser.add_argument("--max-turns", type=int, default=500, help="最多迭代多少次（默认 500）")
     parser.add_argument("--resume", action="store_true", help="恢复最近一次会话")
@@ -71,7 +80,40 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="跑网络体检（环境→DNS→逐地址连通性→分层计时→真实调用）后退出。不需要 API 密钥",
     )
+    # ★ 第 7 章：`gateway` 子命令（对应 `hermes gateway …`）。
+    #   它**必须在构造 MiniCLI 之前**处理 —— 网关自己要建 agent，不需要先建一个。
+    from hermes_cli.gateway_cmd import add_gateway_parser
+    from hermes_cli.profile_cmd import add_profile_parser
+
+    sub = parser.add_subparsers(dest="command")
+    add_gateway_parser(sub)
+    add_profile_parser(sub)
+
     args = parser.parse_args(argv)
+
+    # ---- 子命令：不建 MiniCLI，直接跑 ----
+    if getattr(args, "command", None) in ("gateway", "profile"):
+        return int(args.func(args))
+
+    # ---- `-p/--profile`：**在一切取路径的代码之前**把它钉住 ----
+    # ★ 两个顺序要求，都在这一小段里：
+    #   ① 必须在构造 MiniCLI **之前**（MiniCLI 一构造就会解析 provider、建会话库）；
+    #   ② 必须在 `--doctor` / `--list-toolsets` 之前 ——
+    #      `mini -p lab --doctor` 问的是"**lab 这个 profile** 的网络通不通"。
+    #   ★ 为什么是设环境变量而不是调作用域 API：CLI 里"这个进程就是那个 profile"
+    #     （真实版的说法：hermes 进程的**启动 profile**）。作用域（contextvar）
+    #     是给"一个进程服务多个 profile"用的，不是给"换一个 profile 启动"用的。
+    if args.profile:
+        from hermes_cli.profiles import ProfileError, resolve_profile_home
+        from hermes_constants import display_path
+
+        try:
+            home = resolve_profile_home(args.profile)
+        except ProfileError as exc:
+            print(f"[配置错误] {exc}", file=sys.stderr)
+            return 2
+        os.environ["MINI_HOME"] = str(home)
+        print(f"ⓘ profile {args.profile!r} → home={display_path(home)}", file=sys.stderr)
 
     # ---- 只读的查询类参数：**在构造 MiniCLI 之前**处理 ----
     # 它们问的是"这套代码里有什么""我的网络通不通"，与密钥无关。

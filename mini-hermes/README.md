@@ -15,7 +15,7 @@
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 13 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
-| 7 | `gateway-internals.md` | 🟡 **进行中**（精译已就位） | 《中文精译-07-GatewayInternals.md》 |
+| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试** · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 13 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
 
 ## 环境 / 依赖
 
@@ -123,7 +123,9 @@ Ctrl-C   中断当前 turn
 
 ```text
 -q "问题"          单次提问（失败时退出码非 0）
--p/--provider 名   provider（默认 deepseek）
+-p/--profile 名    用哪个 profile（= 哪套 home/凭据/会话库）。**与真实版对齐**：真实版 `-p` 就是 --profile
+                   不写 = 默认 profile（行为与以前一个字节不差）
+--provider 名      provider（默认 deepseek）。★ 以前它是 `-p`，第 7 章侧线把它让给了 profile
 -m/--model 名      模型名（默认取 provider 的默认模型）
 --max-turns N      迭代预算（默认 500）
 --resume           恢复最近一次会话
@@ -133,7 +135,29 @@ Ctrl-C   中断当前 turn
 --platform cli     cli 或 tui（决定平台提示）
 --list-toolsets    列出所有 toolset（名字 / 说明 / 工具 / 在不在默认捆里）后退出 —— **不需要密钥**
 --doctor           跑网络体检后退出 —— **不需要密钥**
+
+子命令（第 7 章）：
+gateway run|status|stop|hooks    跑/看/停网关（`gateway run` 前台阻塞；不需要密钥就能 status）
+profile create|list|show         管 profile（`profile create lab --clone` 从默认 profile 起步）
 ```
+
+**多 profile（第 7 章侧线）—— 一个 profile 就是一套 home**：
+
+```bash
+./mini profile create lab --clone   # 开一个实验 profile：复制默认的配置与身份（.env / SOUL.md）
+                                    #   **不复制记忆**（MEMORY.md 是"经历过什么"，不是配置）
+./mini -p lab                       # 之后一切都在 lab 自己的家里跑（会话库/日志/钩子/密钥都分开）
+./mini profile list                 # 有哪些 profile
+./mini profile show lab             # lab 家里有什么、几个会话
+```
+
+三件要知道的事：
+
+- **`-p` 与真实版对齐**（真实版 `-p` 就是 `--profile`）；provider 现在只有长参数 `--provider`。
+- **不存在的 profile 会报错，不会静默用默认 profile** —— 静默回落意味着"你以为在沙箱里乱来，
+  实际在主 profile 上乱来"，而且不报错。
+- **profile 之间不共享记忆与凭据**（物理分家：两个 `state.db`、两个 `.env`），
+  所以"我记得你昨天说…"在另一个 profile 里会断 —— 这是设计，不是 bug。
 
 **查 toolset（第 4 章那道"注册 ≠ 暴露"的闸门）**：
 
@@ -181,6 +205,8 @@ python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函�
 python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
 python3 tests/test_compression.py      # 152 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
 python3 tests/test_session_storage.py  # 107 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
+python3 tests/test_gateway.py          # 135 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 /
+                                       #        进程身份 PID+指纹 / profile 作用域 A→B→A / profile 入口层）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
 #      find . -name __pycache__ -type d -exec rm -rf {} +
@@ -245,6 +271,23 @@ agent/context_engine.py   ←  agent/context_engine.py（★ 第 5 章：上下�
 agent/usage_anchor.py     ←  agent/usage_anchor.py（★ 第 5 章：真实用量锚点 + 只估算增量）
 agent/context_compressor.py ← agent/context_compressor.py（★ 第 5 章：四阶段压缩 + 无进展守卫）
 agent/prompt_caching.py   ←  agent/prompt_caching.py（★ 第 5 章：cache_control 断点 + "为什么不动请求"）
+gateway/run.py            ←  gateway/run.py（★ 第 7 章：门面 —— 装配 mixin / 生命周期 / 单实例）
+gateway/run_inbound.py    ←  gateway/run_inbound.py + run_busy.py（★ 第 7 章：第 2 级守卫 / 命令表 / 忙时策略）
+gateway/run_turn.py       ←  gateway/run_turn.py（★ 第 7 章：绑作用域 → 取历史 → 建 agent → 出站）
+gateway/run_shutdown.py   ←  gateway/run_shutdown.py（★ 第 7 章：结束会话 / 摘身份文件）
+gateway/session_keys.py   ←  gateway/session.py（★ 第 7 章：会话键**唯一来源** + main~ 命名空间）
+gateway/authz.py          ←  gateway/authz_mixin.py（★ 第 7 章：授权四层 · 默认拒绝）
+gateway/delivery.py       ←  gateway/delivery.py（★ 第 7 章：直接回复 / 指定目标）
+gateway/hooks.py          ←  gateway/hooks.py（★ 第 7 章：生命周期钩子 · 路径调用时解析）
+gateway/status.py         ←  gateway/status.py（★ 第 7 章：PID + 启动时间指纹 + gateway_state.json + 退出码 78）
+gateway/profile_scope.py  ←  gateway/run.py::_profile_runtime_scope 等（★ 第 7 章：profile 作用域绑定）
+gateway/adapters/base.py  ←  gateway/platforms/base.py（★ 第 7 章：**第 1 级守卫**三件套 + 陈旧自愈）
+gateway/adapters/console.py ← plugins/platforms/<name>/adapter.py（★ 第 7 章：一个真能跑的适配器）
+agent/secret_scope.py     ←  agent/secret_scope.py（★ 第 7 章：密钥作用域 + 多路复用 fail-closed）
+hermes_cli/commands.py    ←  hermes_cli/commands.py（★ 第 7 章：CommandDef / busy_policy / 表驱动分发）
+hermes_cli/profiles.py    ←  hermes_cli/profiles.py（★ 第 7 章：profiles_to_serve · **HOME 锚定**）
+hermes_cli/gateway_cmd.py ←  hermes_cli/gateway*.py（★ 第 7 章：`./mini gateway run|status|stop|hooks`）
+hermes_cli/profile_cmd.py ←  hermes_cli/profiles.py 的 CLI 侧（★ 第 7 章侧线：`mini profile create|list|show`）
 hermes_cli/main.py        ←  hermes_cli/main.py（命令行入口）
 hermes_cli/runtime_provider.py ← hermes_cli/runtime_provider.py
 doctor.py                 ←  （mini 特有）分层体检：环境→DNS→逐地址连通性→计时→真实调用
@@ -255,6 +298,12 @@ tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响�
 tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
 tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
+tests/test_gateway.py            # 135 条网关自测（★ 第 7 章：会话键 / 两级守卫 / 授权 / 命令表 /
+                                #   交付 / 钩子 / 进程身份（PID+启动时间指纹）/ profile 作用域 A→B→A
+                                #   / 组 14 profile 入口层：create 播种 · id 字母表 · clone 不带记忆 ·
+                                #   解析不静默回落 · 两 profile 物理分家 · 真 CLI 子进程）
+                                #   ★ 单实例那组**必须跨进程**测（同进程里"第二个网关"的 pid 就是自己）
+                                #   ★ profile 那组必须连 `Path.home` 一起钉（profile 根是 HOME 锚定的）
 tests/test_session_storage.py   # 107 条会话存储自测（★ 第 6 章：建库 / 加列 / 世代 / 血缘 /
                                 #            检索 / 写入礼节 / 隔离 —— 都是临时 MINI_HOME）
 tests/test_compression.py       # 152 条压缩与缓存自测（★ 第 5 章：token 记账 / 边界 /
@@ -355,6 +404,36 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > 另外，读源码时**核出上游文档 7 处不一致**（最重的是"默认 50% 触发"——
 > 源码对 <512K 窗口的模型抬到 75%，还要过 64K 地板与 85% 上限），
 > 清单在《源码讲解-05》附录 C。
+
+> 📌 **第 7 章（网关）没做的 13 条** —— 完整版（每条带"什么时候必须补"）见
+> 《源码讲解-07-GatewayInternals.md》§十四。这里只留三类形状：
+>
+> **规模/SDK 类**（零依赖框架做不了）：
+> - 22 个平台适配器 + `plugin.yaml` + `register_deferred` 延迟加载 → mini 只有 1 个 console 适配器
+>   （**但接口形状照抄**：connect/disconnect/send + handle_message），全部机制靠它真能端到端跑。
+> - relay/connector 契约（出站 WebSocket 通用适配器）——需要 connector 端。
+>
+> **需要消费者才成立**（没有消费者就不该先建机制）：
+> - 私聊配对 / `dm_policy` 四态（单用户单平台，配对的消费者不存在）；
+> - 主频道投递 / 跨平台投递（需要 cron 这类后台产出 + 多平台）；
+> - `delivery_obligations`（投递债记账）→ 代价写清楚：**网关崩在"确认消息已发、回答未到"之间，
+>   那笔确认会无声消失**（进程内状态）；
+> - 监督者映射（systemd `RestartPreventExitStatus=78` / s6 finish→125 / launchd …）→ mini 不装服务，
+>   所以退出码 78 目前**没有消费者**（但语义已定好：**退出码也是接口**）。
+>
+> **等有对应基座再补**：
+> - 网关侧会话维护（85% 兜底压缩）——mini 的压缩在 agent 内部，且**每条消息新建 agent**
+>   （没有"缓存 agent 要淘汰"这回事）；
+> - 跨进程压缩锁、终端作用域（`TERMINAL_*` 整套安装/复位，要有 docker/ssh 后端才谈得上）、
+>   多 profile 的 YAML 桥（`apply_yaml_bridge`）、`command:*` 通配钩子。
+>
+> **第 7 章还掉的三笔债**：**多 profile 多库**（第 6 章差距清单 #1，⚠️ 当时写的是
+> "支持多 profile 时必须补，否则静默串库"）→ ✅ 本章还了：
+> `profile_runtime_scope`（home contextvar + 密钥作用域，**不改 `os.environ`**）
+> + `_db()` 走 `get_mini_home()` + `profiles_to_serve(multiplex)` + **A→B→A 测试**。
+> 仍缺**终端作用域**（§十四 #9）。
+> 另外两笔：跨进程压缩锁（⬜ 未做）、网关的输入归属（⚠️ 部分：有守卫与授权，
+> 但**没有**把"这条消息是谁写的"记进库 —— 将来做压缩轮转仲裁时必补）。
 
 > 📌 **第 6 章故意没做的，分三类**（对应差距清单 B 批的 10 条）：
 >

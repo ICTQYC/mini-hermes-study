@@ -54,6 +54,7 @@ PROJECT_MODULES = {
     "tools",
     "agent",
     "hermes_cli",
+    "gateway",                 # ← 第 7 章新增（对应 Hermes 的 gateway/：门面 + run_*.py 兄弟）
     "toolsets",          # ← 第 4 章新增（对应 Hermes 的 toolsets.py）
 }
 
@@ -257,7 +258,14 @@ def test_launcher_via_symlink() -> None:
 
 # 默认值只许在这一个地方定义（`Path.home() / ".mini-hermes"`）。
 # 其余任何地方要用路径都得走 get_mini_home() / display_mini_home() / display_path()。
-ALLOWED_HOME_LITERALS = {"hermes_constants.py"}
+#
+# 第 7 章加进来的第二处例外 `hermes_cli/profiles.py`，理由是**语义不同**：
+#   它取的不是"当前运行时 home"，而是**所有 profile 的父目录** —— 那是
+#   **HOME 锚定**的常量（`Path.home()/.mini-hermes/profiles`），**故意不看 MINI_HOME**。
+#   真实版 Hermes 的 `_get_profiles_root()` 是同一条锚定，且在 AGENTS.md 里
+#   明确写着 *"intentional, not a bug"*：不锚在真实 home 上，
+#   `hermes -p x profile list` 就永远只能看见一个 profile。
+ALLOWED_HOME_LITERALS = {"hermes_constants.py", "hermes_cli/profiles.py"}
 
 
 def message_source_files() -> list[Path]:

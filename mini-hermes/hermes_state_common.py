@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS system_prompts (
 CREATE TABLE IF NOT EXISTS sessions (
     id                 TEXT PRIMARY KEY,
     source             TEXT NOT NULL,          -- cli / tui …（平台来源标记）
+    session_key        TEXT,                   -- 网关的路由键（build_session_key 产出；cli 会话为 NULL）
+                                               --   ↑ 真实版 `hermes_state_common.py:338` 同列，
+                                               --     第 7 章加：网关重启后要能按"同一个聊天"找回会话
     model              TEXT,
     model_config       TEXT,                   -- JSON 字符串
     system_prompt_hash TEXT REFERENCES system_prompts(hash),
@@ -134,6 +137,9 @@ POST_RECONCILE_SQL = """
 --   因为表已经是老的、索引却按新列建。顺序错了 = 老用户直接起不来。
 -- ══════════════════════════════════════════════════════════════════════
 CREATE INDEX IF NOT EXISTS idx_sessions_source  ON sessions(source);
+-- ★ 第 7 章：按"路由键 + 时间倒序"找回一个聊天的当前会话
+--   （真实版 `hermes_state_common.py:659` 是同形状的索引）
+CREATE INDEX IF NOT EXISTS idx_sessions_session_key ON sessions(session_key, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent  ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 

@@ -4,18 +4,45 @@
 """
 from __future__ import annotations
 
+import contextvars
 import os
 from pathlib import Path
 from typing import Tuple
 
 APP_NAME = "mini-hermes"
 
+# ★ profile 作用域：进程级"当前 home"的覆盖层（对应 Hermes 的
+#   `hermes_constants.set_hermes_home_override`）。
+#   用 **contextvar** 而不是改 os.environ：一个进程服务多 profile 时，
+#   并发跑的两个回合必须各自看到自己的 home；写 os.environ 会互相打架，
+#   而且**子进程会继承**上一个 profile 的值。
+_HOME_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar(
+    "mini_home_override", default=None)
+
+
+def set_mini_home_override(path) -> object:
+    """绑定当前执行上下文的最小 home（返回 token，交给 reset 用）。"""
+    return _HOME_OVERRIDE.set(str(path))
+
+
+def reset_mini_home_override(token) -> None:
+    _HOME_OVERRIDE.reset(token)
+
+
+def current_home_override():
+    return _HOME_OVERRIDE.get()
+
 
 def get_mini_home() -> Path:
     """minihome 目录（对应 Hermes 的 get_hermes_home()）。
 
-    优先读环境变量 MINI_HOME，方便测试时重定向到临时目录。
+    解析顺序：**作用域覆盖（contextvar）** → 环境变量 MINI_HOME → ``~/.mini-hermes``。
+    测试用 MINI_HOME 重定向；一个进程服务多 profile 时由作用域绑定决定
+    （见 `gateway/profile_scope.py::profile_runtime_scope`）。
     """
+    override = _HOME_OVERRIDE.get()
+    if override:
+        return Path(override)
     env = os.environ.get("MINI_HOME")
     home = Path(env).expanduser() if env else Path.home() / ".mini-hermes"
     home.mkdir(parents=True, exist_ok=True)
