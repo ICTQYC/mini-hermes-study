@@ -16,6 +16,30 @@
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 14 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
 | 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试** · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
+| 8 | `gateway-session-lifecycle.md` | 🟡 **精译已就位**（894 行 · 附录 C 核出 **2 处出入 + 1 处自我修正**） | 《中文精译-08-GatewaySessionLifecycle.md》 |
+
+## 章节顺序（官方侧边栏为准）
+
+第 8 章以前我们按"主线优先"自己排；**第 8 章起按官方 Developer Guide 侧边栏的顺序走**
+（`website/sidebars.ts` 里 developer-guide 那一段就是官方推荐阅读序）：
+
+```text
+官方位次  页面                              我们的进度
+  5      agent-loop                        ✅ 第 2 章
+  6      prompt-assembly                   ✅ 第 3 章
+  7      context-compression-and-caching   ✅ 第 5 章
+  8      micro-compaction                  ⬜ 被跳过（第 5 章只讲主线压缩；微压缩是独立支线 406 行）
+  9      gateway-internals                 ✅ 第 7 章
+ 10      gateway-session-lifecycle         🟡 第 8 章（精译已就位）
+ 11      multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
+ 12      completion-backlog-delivery       ⬜ 52 行（"投递债"—— 第 7 章差距清单里挂着）
+ 13      session-storage                   ✅ 第 6 章
+ 14      state-db-recovery                 ⬜ 107 行（与第 6 章配对）
+ 15      provider-runtime                  ⬜
+ 36      tools-runtime                     ✅ 第 4 章
+```
+
+（"插件 / 技能 / 工具群"那一族在官方序里是 17~35、40+ 位，仓库里的占位仍写着"第 10 章"。）
 
 ## 环境 / 依赖
 
