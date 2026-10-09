@@ -14,8 +14,8 @@
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
-| 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 13 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
-| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试** · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 13 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
+| 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 14 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
+| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试** · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
 
 ## 环境 / 依赖
 
@@ -201,7 +201,7 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 python3 tests/test_packaging.py        # 18 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描 /
                                        #        命令行旗标契约（宣传的 `mini --旗标` 必须真的存在）
 python3 tests/test_loop_mechanisms.py  # 54 条：agent loop 的机制
-python3 tests/test_prompt_assembly.py  # 154 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
+python3 tests/test_prompt_assembly.py  # 155 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
 python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
 python3 tests/test_compression.py      # 152 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
 python3 tests/test_session_storage.py  # 107 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
@@ -295,7 +295,7 @@ doctor.py                 ←  （mini 特有）分层体检：环境→DNS→�
 依赖链：tools/registry.py ← tools/*.py ← model_tools.py ← run_agent.py ← cli.py
 
 tests/test_loop_mechanisms.py   # 54 条机制自测（不联网，假 API 响应驱动）
-tests/test_prompt_assembly.py   # 154 条提示词装配自测（不联网）
+tests/test_prompt_assembly.py   # 155 条提示词装配自测（不联网）
 tests/test_tools_runtime.py     # 89 条工具运行时自测（★ 第 4 章：AST 发现 / toolset 闸门 /
                                 #   check_fn 抖动保护 / 结果契约 / 端到端）
 tests/test_gateway.py            # 135 条网关自测（★ 第 7 章：会话键 / 两级守卫 / 授权 / 命令表 /
@@ -405,7 +405,7 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > 源码对 <512K 窗口的模型抬到 75%，还要过 64K 地板与 85% 上限），
 > 清单在《源码讲解-05》附录 C。
 
-> 📌 **第 7 章（网关）没做的 13 条** —— 完整版（每条带"什么时候必须补"）见
+> 📌 **第 7 章（网关）没做的 14 条** —— 完整版（每条带"什么时候必须补"）见
 > 《源码讲解-07-GatewayInternals.md》§十四。这里只留三类形状：
 >
 > **规模/SDK 类**（零依赖框架做不了）：

@@ -24,7 +24,7 @@
 | 本章规模 | `gateway/` **160 个 .py / 86,785 行** | 全项目代码 **8,200 → 10,615 行**（本章新增文件 2,030 行 + 改动既有 +70 行 + **侧线 profile 入口层 +315 行**，见下表） |
 | 平台适配器 | `plugins/platforms/` **22 个**平台 | `gateway/adapters/` **1 个**（console） |
 | 存储 | `state.db`（第 6 章） | 同（本章加 `session_key` 列） |
-| 测试 | ~39k 条 | 新增 `tests/test_gateway.py` **693 行 / 13 组 / 99 条断言** |
+| 测试 | ~39k 条 | 新增 `tests/test_gateway.py` **903 行 / 14 组 / 135 条断言** |
 
 **本章 mini 新增/改动**（`wc -l` 实测）：
 
@@ -40,7 +40,7 @@ gateway/profile_scope.py       74
 hermes_cli/commands.py         93      agent/secret_scope.py          91
 hermes_cli/profiles.py         56      tests/test_gateway.py         693
 hermes_cli/gateway_cmd.py     124
-──────────────────  新增代码 2,030 行 + 新增测试 693 行  ──────────────────
+──────────────────  新增代码 2,030 行 + 新增测试 903 行  ──────────────────
 
 侧线（多 profile 入口层）：
 hermes_cli/profile_cmd.py     112      hermes_cli/profiles.py  56 → 225（+169）
@@ -154,7 +154,7 @@ tests/test_gateway.py   693 → 903（+210：组 14）
 
 ---
 
-## §〇 差异表（16 条 · 「mini 版」列 = 当前代码）
+## §〇 差异表（17 条 · 「mini 版」列 = 当前代码）
 
 | # | 真实 Hermes | mini 版 | 性质 | 值得改 |
 |---|---|---|---|---|
@@ -910,7 +910,7 @@ pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
 
 | 交付物 | 位置 | 规模 |
 |---|---|---|
-| 中文精译 | `中文精译-07-GatewayInternals.md` | 636 行（含附录 A 术语表 24 条 / C 上游出入） |
+| 中文精译 | `中文精译-07-GatewayInternals.md` | 636 行（含附录 A 术语表 25 条 / C 上游出入 1 处） |
 | 源码讲解（本篇） | `源码讲解-07-GatewayInternals.md` | 917 行（导言 + 差异表 17 + 逐机制四步 + 真问题 5 + 差距 14） |
 | 实现 | `gateway/` + `agent/secret_scope.py` + `hermes_cli/{commands,profiles,profile_cmd,gateway_cmd}.py` | 新增 2,345 行 |
 | 测试 | `tests/test_gateway.py` | 903 行 / 14 组 / 135 条 |
