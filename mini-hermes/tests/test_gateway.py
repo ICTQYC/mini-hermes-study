@@ -1488,6 +1488,155 @@ def test_secret_whitelist_and_dotenv_boundary():
             os.environ.pop("MINI_T_LEAK", None)
 
 
+def test_per_profile_adapters_and_servable_boundary():
+    """★ 第 9 章 A6：每个被服务的 profile 一个适配器 + **服务集合的边界**。
+
+    边界是这一组最值钱的部分：`profiles_root()` 是 **HOME 锚定**的，所以一旦
+    `MINI_HOME` 指到别处（测试/演示/子进程），照抄真实版的 `profiles_to_serve(True)`
+    会让进程去替**用户真实的家**建适配器 —— 实测踩过（测试进程连上了用户真实的
+    `default` 与 `lab`）。真实版的道理其实一样：多路复用是"默认 profile 的网关"的职能。
+    """
+    from hermes_cli import profiles as prof
+    from gateway.run import GatewayRunner
+    from gateway.authz import GatewayAuthz
+    from gateway.multiplex_mode import resolve_multiplex_mode
+
+    with temp_profiles_home() as default_home:
+        lab_home = prof.profiles_root() / "lab"
+        lab_home.mkdir(parents=True, exist_ok=True)
+        (lab_home / ".env").write_text("DEEPSEEK_API_KEY=sk-fake-lab\n", encoding="utf-8")
+
+        with fake_agent():
+            runner = GatewayRunner(home=default_home, echo=False)
+            runner.authz = GatewayAuthz(platform_allow_all=True)
+            assert runner.start() == 0, "网关应当起得来"
+            try:
+                check("预检：2 个 profile、没有别的网关 → 多路复用开",
+                      runner.multiplex is True, str(runner.multiplex_decision))
+                check("lab 有自己的适配器（不再按适配器名分键）",
+                      (runner._profile_adapters.get("lab") or {}).get("console") is not None,
+                      str(list(runner._profile_adapters)))
+                lab_adapter = runner._profile_adapters["lab"]["console"]
+                check("lab 适配器的 owner_profile = 'lab'",
+                      lab_adapter._owner_profile == "lab", str(lab_adapter._owner_profile))
+                check("活动适配器的 owner = None（默认 profile 的 bot）",
+                      runner.adapters["console"]._owner_profile is None)
+                check("服务名单 = default + lab",
+                      runner.served_profile_names() == ["default", "lab"],
+                      str(runner.served_profile_names()))
+                check("★ 服务集合的边界：只在本机默认家才服务别人",
+                      runner.servable_homes() == [default_home, lab_home],
+                      str(runner.servable_homes()))
+                check("适配器日志说清了服务几个（跳过/失败要能查）",
+                      any("服务 2 个 home" in line for line in runner.adapters_log()),
+                      str(runner.adapters_log()))
+
+                # ★ 边界 ②：`MINI_HOME` 指到别处时**一个次级 profile 都不服务**
+                #   （这是防"替用户真实的家建适配器"的那一层）
+                other = GatewayRunner(home=default_home / "somewhere-else", echo=False)
+                other.multiplex = True
+                check("★ home 不是默认家 → servable_homes 只有自己",
+                      other.servable_homes() == [default_home / "somewhere-else"],
+                      str(other.servable_homes()))
+                check("★ 同一情形下预检直接拦下（理由点名「不是本机默认家」）",
+                      "不是本机默认家" in str(
+                          resolve_multiplex_mode(None, home=default_home / "somewhere-else")),
+                      str(resolve_multiplex_mode(None, home=default_home / "somewhere-else")))
+            finally:
+                runner.shutdown()
+
+
+def test_per_bot_lane_and_profile_feed():
+    """★ 第 9 章 A8 + A5：per-bot lane（两个 bot 不共享会话线）与 `@<profile>` 端到端。
+
+    这一组同时守住那件"从第 9 章起才真的开始拦人"的事：**凭据读取走作用域**
+    —— 修之前 `resolve_provider` 直读 `os.environ`，lab 的回合会报
+    "环境变量为空"，哪怕它自己的 `.env` 里明明有 key（实测踩过）。
+    """
+    from hermes_cli import profiles as prof
+    from gateway.run import GatewayRunner
+    from gateway.authz import GatewayAuthz
+    from gateway.session_keys import SessionSource, build_session_key, bot_profile_key
+
+    with temp_profiles_home() as default_home:
+        lab_home = prof.profiles_root() / "lab"
+        lab_home.mkdir(parents=True, exist_ok=True)
+        (lab_home / ".env").write_text("DEEPSEEK_API_KEY=sk-fake-lab\n", encoding="utf-8")
+        # ★ 多路复用的一个**真实后果**：每个被服务的 profile 都得**自带凭据** ——
+        #   作用域里的未命中**不许回落进程环境**（否则 A 的回合会用 B 的 key）。
+        #   所以默认家也得有自己的 key，否则它自己的回合就起不来（实测踩过）。
+        (default_home / ".env").write_text("DEEPSEEK_API_KEY=sk-fake-default\n", encoding="utf-8")
+
+        # ── ① 两个 bot 在同一个聊天里 = 两个键（lane 不串）──
+        src_default = SessionSource(platform="console", chat_id="console-1", user_id="local")
+        src_lab = SessionSource(platform="console", chat_id="console-1", user_id="local",
+                                profile="lab")
+        check("默认 bot 的键 = main:…（与历史逐字节一致）",
+              build_session_key(src_default, profile=None) == "main:console:dm:console-1")
+        check("lab bot 的键 = lab:…（没有共享 lane）",
+              build_session_key(src_lab, profile="lab") == "lab:console:dm:console-1")
+        check("★ 两个键**不相等**（第 8 章的单槽覆盖不会互相顶掉）",
+              build_session_key(src_default, profile=None) != build_session_key(src_lab, profile="lab"))
+        check("bot_profile_key 归一：default ↔ None",
+              bot_profile_key("default") is None and bot_profile_key("lab") == "lab")
+
+        with fake_agent():
+            runner = GatewayRunner(home=default_home, echo=False)
+            runner.authz = GatewayAuthz(platform_allow_all=True)
+            assert runner.start() == 0
+            try:
+                lab_adapter = runner._profile_adapters["lab"]["console"]
+                # ── ② `@lab` 走 lab 的适配器，回合落在 lab 的家 ──
+                check("profile_feed('lab', …) 认得出", runner.profile_feed("lab", "你好 lab") is True)
+                lab_adapter.wait_idle("lab:console:dm:lab-console", timeout=20)
+                check("★ lab 的适配器自己跑过一轮（凭据走作用域才可能成功）",
+                      lab_adapter.last_result("lab:console:dm:lab-console") is not None,
+                      str(lab_adapter.last_result("lab:console:dm:lab-console")))
+                check("未知 profile → False（调用方必须报错，不许静默丢）",
+                      runner.profile_feed("ghost", "x") is False)
+                check("★ lab 那一轮**实际跑在 lab 的家**（回合体的作用域也对，不只是会话行）",
+                      runner._turn_homes.get("lab:console:dm:lab-console") == str(lab_home),
+                      str(runner._turn_homes))
+
+                lab_sessions = runner._db_for(lab_home).list_sessions()
+                default_sessions = runner._db_for(default_home).list_sessions()
+                lab_ids = {s.get("id") for s in lab_sessions}
+                default_ids = {s.get("id") for s in default_sessions}
+                check("★ 会话行落在 **lab 的 state.db**（作用域真的换了家）",
+                      len(lab_sessions) == 1 and not default_ids,
+                      f"lab={len(lab_sessions)} default={len(default_sessions)}")
+
+                # ── ③ 默认 bot 照旧落在默认家 ──
+                runner.adapters["console"].feed("你好默认")
+                runner.adapters["console"].wait_idle("main:console:dm:console-1", timeout=20)
+                default_ids2 = {s.get("id") for s in runner._db_for(default_home).list_sessions()}
+                check("默认 bot 的回合落在默认家（两家不串）",
+                      len(default_ids2) == 1 and not (lab_ids & default_ids2),
+                      f"default={default_ids2}")
+
+                # ── ④ 凭据确实按 profile 解析（A9 的真正消费者 + 一份 spec 不许发给所有人）──
+                from gateway.profile_scope import profile_runtime_scope
+
+                try:
+                    with profile_runtime_scope(lab_home, hydrate_secrets=False):
+                        lab_spec = runner._provider_spec()
+                except Exception as exc:               # noqa: BLE001
+                    # ★ 解析失败也要落成**一条失败的断言**（带原因），不许让异常直接打断整组：
+                    #   否则"凭据没走作用域"这种真问题会以"抛异常"收场，看不出是哪条机制坏的。
+                    lab_spec = {"error": repr(exc)}
+                check("★ lab 的 provider 密钥来自它自己的 .env（不是默认 profile 的）",
+                      lab_spec.get("api_key") == "sk-fake-lab", str(lab_spec))
+                try:
+                    with profile_runtime_scope(default_home):
+                        default_spec = runner._provider_spec()
+                except Exception as exc:               # noqa: BLE001
+                    default_spec = {"error": repr(exc)}
+                check("★ 默认 profile 的 spec 是另一份（spec 缓存按 home 分键）",
+                      default_spec is not lab_spec, "两份 spec 必须是不同对象")
+            finally:
+                runner.shutdown()
+
+
 GROUPS = [
     ("1. 会话键", "唯一来源 · 布局 · 退路", [test_session_key_is_single_source]),
     ("2. 命名空间", "默认 main / 真名 main → main~", [test_namespace_and_main_tilde]),
@@ -1520,6 +1669,10 @@ GROUPS = [
      [test_multiplex_mode_three_states_and_preflight]),
     ("19. 密钥白名单与 dotenv 边界（★ 第 9 章）", "白名单豁免进程键 · 凭据不进名单 · 有覆盖就跳过加载",
      [test_secret_whitelist_and_dotenv_boundary]),
+    ("20. 每 profile 适配器与服务集合边界（★ 第 9 章 A6）", "每个 profile 一个适配器 · owner 标注 · 服务集合不许越出本机默认家",
+     [test_per_profile_adapters_and_servable_boundary]),
+    ("21. per-bot lane 与 `@profile`（★ 第 9 章 A8+A5）", "两 bot 两个键 · 回合落在自己的家 · 凭据按 profile 解析（一份 spec 不许通用）",
+     [test_per_bot_lane_and_profile_feed]),
 ]
 
 

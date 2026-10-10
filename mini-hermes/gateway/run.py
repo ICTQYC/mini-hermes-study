@@ -34,9 +34,10 @@ from gateway.run_turn import TurnMixin
 from gateway.run_watchers import SESSION_STORE_MAX_AGE_DAYS_DEFAULT, WatchersMixin
 from hermes_constants import get_mini_home
 from hermes_cli.profiles import profiles_to_serve, profiles_root
+from gateway.run_adapters import AdaptersMixin
 
 
-class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMixin, WatchersMixin):
+class GatewayRunner(AdaptersMixin, InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMixin, WatchersMixin):
     def __init__(self, *, home: Optional[Path] = None, provider: str = "deepseek",
                  model: Optional[str] = None, profile: Optional[str] = None,
                  multiplex: Optional[bool] = None, max_turns: int = 200, debug: bool = False,
@@ -65,6 +66,7 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
             adapters = [ConsoleAdapter(on_message=self._handle_message,
                                        on_interrupt=self._interrupt_running_agent,
                                        session_key_fn=self._key_for_source,
+                                       profile_feed=self.profile_feed,
                                        echo=echo)]
         for a in adapters:
             a._on_message = self._handle_message
@@ -73,6 +75,15 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
             a._session_key_fn = self._key_for_source
             self.adapters[a.name] = a
         self.delivery = Delivery(self.adapters)
+
+        # ★ 第 9 章 A6：**次级 profile 的适配器**（每 profile 一份，默认为空）
+        #   真实版 `run.py:288` 逐字注释：*"Non-default profiles' adapters by profile then
+        #   platform (multiplex only). Empty in single-profile gateways."*
+        self._profile_adapters: Dict[str, Dict[str, Any]] = {}
+        # 适配器启动的观察面（跳过/失败**要说出来** —— 静默的死信道是最坏的形态）
+        self._adapters_log: List[str] = []
+        # 这次真的服务了谁（写进状态文件，A12）
+        self._served_profiles: List[str] = []
 
         self._session_ids: Dict[str, str] = {}
         self._dbs: Dict[str, Any] = {}
@@ -99,16 +110,29 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
         self.pid: Optional[int] = None
         self._pid = None
         self.served_homes: List[Path] = [self.home]
+        # ★ 第 9 章：provider spec **按 home 分键**（一份缓存发给所有 profile = 用错凭据）
+        self._specs: Dict[str, Dict[str, Any]] = {}
+        # 观测面：每轮的会话键 → 这一轮实际跑的 home（作用域对不对只能从这看）
+        self._turn_homes: Dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
     # 依赖（延迟解析，避免 import 期就把 profile 的路径钉死）
     # ------------------------------------------------------------------ #
     def _provider_spec(self) -> Dict[str, Any]:
-        if self._spec is None:
+        """provider 解析结果（**按当前作用域的家**缓存）。
+
+        ★ 第 9 章 A5 的一条推论：**缓存不能跨 profile 共享**。
+        第 7/8 章这里缓存的是**一份** spec（`self._spec`）—— 单 profile 时没问题，
+        多路复用下却是"把默认 profile 的密钥/base_url/模型发给所有人"（静默用错凭据）。
+        真实版的 `runtime_provider` 也是每 profile 各解析一次（它的凭据解析链就带作用域）。
+        """
+        key = str(get_mini_home())
+        if key not in self._specs:
             from hermes_cli.runtime_provider import resolve_provider
 
-            self._spec = resolve_provider(self.provider, self.model)
-        return self._spec
+            self._specs[key] = resolve_provider(self.provider, self.model)
+            self._spec = self._specs[key]        # 兼容旧字段（观测面）
+        return self._specs[key]
 
     def _db(self):
         """当前作用域下的会话库。
@@ -142,7 +166,9 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
         """
         from gateway.session_keys import build_session_key
 
-        return build_session_key(source, profile=self.profile)
+        # ★ 第 9 章 A8：命名空间取"**这条消息属于谁**"（适配器在入站口盖的章），
+        #   没有章才退回进程启动时的 profile 名。
+        return build_session_key(source, profile=source.profile or self.profile)
 
     def _interrupt_running_agent(self, session_key: str) -> None:
         agent = self._running_agents.get(session_key)
@@ -184,7 +210,7 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
                                             record_multiplex_decision,
                                             resolve_multiplex_mode)
 
-        self.multiplex_decision = resolve_multiplex_mode(self.multiplex)
+        self.multiplex_decision = resolve_multiplex_mode(self.multiplex, home=self.home)
         self.multiplex = self.multiplex_decision.enabled
         # ★ 这几栏要**跟着每一次状态写**（`write_runtime_status` 是全量写，不带就被抹掉）
         self._multiplex_status_fields = multiplex_status_fields(self.multiplex_decision)
@@ -213,7 +239,7 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
 
         # ── 多路复用：服务集合 + 裁决落盘 ──
         #   fail-closed 开关已在裁决处打开；这里只做两件"读到谁、记下谁"的事。
-        self.served_homes = profiles_to_serve(self.multiplex)
+        self.served_homes = self.servable_homes()
         record_multiplex_decision(self.home, self.multiplex_decision)
 
         # ── 钩子：**在调用时**解析当前 home 的 hooks 目录 ──
@@ -221,8 +247,27 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
         self.hooks.emit("gateway:startup", home=str(self.home), pid=self.pid,
                         multiplex=self.multiplex)
 
-        for a in self.adapters.values():
-            a.connect()
+        # ★ A6：活动 profile 的适配器连接 —— **fail-soft**（真实版 run_adapters.py 的纪律：
+        #   一个平台连不上只跳过它，不许把整个网关带走；跳过必须说出来）。
+        for name, a in self.adapters.items():
+            try:
+                a.connect()
+            except Exception as exc:          # noqa: BLE001
+                self._adapter_note(f"平台 '{name}' 连接失败 —— 跳过（{exc!r}）")
+
+        # ★ A6：**每 profile 适配器**（多路复用开时把次级 profile 的 bot 也拉起来）
+        self._start_secondary_profile_adapters()
+
+        # ★ `@<profile> 文本` 这条语法**只在多路复用开着时**可用（真实版的共享 bot 判别项）。
+        #   提示语要在**裁决之后**才能定 —— 所以这里统一设置，而不是构造时传。
+        note = (f"（多路复用开：`@<profile> 文本` = 这条消息是那个 profile 的 bot 收到的；"
+                f"服务 {len(self.served_homes)} 个 home）" if self.multiplex else "")
+        for a in list(self.adapters.values()) + [
+                x for m in self._profile_adapters.values() for x in m.values()]:
+            try:
+                a.multiplex_note = note
+            except Exception:                 # noqa: BLE001
+                pass
 
         self._banner(
             f"网关已启动  pid={self.pid}  home={self.home}\n"

@@ -25,9 +25,29 @@ class InboundMixin:
     # 唯一入口
     # ------------------------------------------------------------------ #
     def _handle_message(self, event) -> Optional[Dict[str, Any]]:
+        """入站唯一入口：**先决定这条消息属于哪个 profile，再在那个 profile 的作用域里处理**。
+
+        ★ A5（第 9 章）：作用域绑的是"profile 的**活动**"，不是"进程启动时那个 profile"。
+        真实版的 `_profile_runtime_scope` 有 30+ 个调用点（适配器连接、入站预处理、
+        回合、slash 命令、通知…），这里是最关键的那一处：**整条入站路径**。
+        没有它，次级 profile 的消息会读/写**活动 profile** 的配置、密钥与会话库。
+        """
+        from gateway.profile_scope import profile_runtime_scope
+
         # 1. 会话键：**所有地方都从这一个函数拿**（不许手拼）。
         #    正常情况下适配器（第 1 级守卫）已经算好了；这里只是兜底复用。
         event.session_key = event.session_key or self._key_for_source(event.source)
+
+        home = self._profile_home_for_source(event.source) or self.home
+        # ★ 一律进作用域 —— **活动 profile 也进**。真实版就是这么做的（每一处缝都套）：
+        #   嵌套同名作用域是无害的，但"只在次级 profile 才套"会留下一个真实的洞：
+        #   这条路径上有**在回合之前**读凭据的地方（`_open_session` 要 provider spec），
+        #   而 fail-closed 会当场抛 `UnscopedSecretError`（实测踩过）。
+        with profile_runtime_scope(home):
+            return self._handle_message_inner(event)
+
+    def _handle_message_inner(self, event) -> Optional[Dict[str, Any]]:
+        key = event.session_key
 
         # 2. 授权（默认拒绝）
         if not self.authz.is_authorized(event.source):

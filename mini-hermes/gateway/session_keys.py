@@ -35,11 +35,33 @@ class SessionSource:
     chat_type: str = "dm"              # "dm" | "group" | "thread"
     user_id: str = ""                  # 发送者
     thread_id: str = ""                # 话题/线程
+    # ★ 第 9 章新增：这条消息**归哪个 profile**（网关在入站口盖的章）。
+    #   真实版 `SessionSource.profile` 的 mini 版 —— 它有两个来源，顺序固定：
+    #   ① 路由表命中（`profile_routing.match_profile_route`，第 9 章 A7）；
+    #   ② 没命中 → 收到它的那个 **bot 自己的 profile**（A8：适配器的 `_owner_profile`）。
+    #   为什么必须存在：会话键、锁、缓存全按 profile 分桶 —— 没有这个章，
+    #   "一个进程里两个 bot"会算出**同一个键**，于是互相排队、互相覆盖。
+    profile: Optional[str] = None
     metadata: Dict[str, object] = field(default_factory=dict)
 
     def describe(self) -> str:
         who = self.user_id or "?"
         return f"{self.platform}/{self.chat_type}/{self.chat_id} (user={who})"
+
+
+def bot_profile_key(name: Optional[str]) -> Optional[str]:
+    """把 profile 名归一成"bot 归属"键：默认 profile ↔ `None`（其余原样）。
+
+    真实版逐字（`gateway/profile_routing.py:101-104`）：
+
+        ``None`` for the default profile, else the profile name (mirrors ``set_owner_profile``).
+
+    ★ 为什么要有这一层：判等时**不能出现两个写法**（`None` / `"default"`）——
+      否则"默认 profile 的 bot"与"没标注的 bot"会被判成不同，路由的 `bot_profile`
+      判别项就失效了。真实版因此让会话键、适配器 owner、路由三处**共用同一个归一函数**。
+    """
+    key = (name or "").strip()
+    return None if not key or key == "default" else key
 
 
 def session_key_namespace(profile: Optional[str]) -> str:

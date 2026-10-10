@@ -116,9 +116,16 @@ PROVIDERS: Tuple[Dict[str, Any], ...] = (
 
 
 def active_provider() -> Optional[Dict[str, Any]]:
-    """哪个供应商可用 —— **只看 key 在不在，不出网**。"""
+    """哪个供应商可用 —— **只看 key 在不在，不出网**。
+
+    ★ 第 9 章：key 走 `get_secret`（作用域优先）—— 否则多路复用下
+      "次级 profile 的回合"会拿**启动 profile** 的搜索 key 去搜（静默用错凭据），
+      或反过来：自己 `.env` 里配了 key 却报"没有可用的搜索 key"。
+    """
+    from agent.secret_scope import get_secret
+
     for spec in PROVIDERS:
-        if os.environ.get(spec["key_env"], "").strip():
+        if (get_secret(spec["key_env"], "") or "").strip():
             return spec
     return None
 
@@ -167,7 +174,9 @@ def web_search_tool(query: str, max_results: int = 5) -> str:
         names = " 或 ".join(s["key_env"] for s in PROVIDERS)
         return tool_error(f"没有可用的搜索 key（{names} 至少配一个）")
 
-    key = os.environ[spec["key_env"]].strip()
+    from agent.secret_scope import get_secret
+
+    key = (get_secret(spec["key_env"], "") or "").strip()
     req = spec["build"](key, query, n)
     try:
         with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:

@@ -72,8 +72,16 @@ class TurnMixin:
         key = event.session_key
         sid = self._session_ids.get(key) or self._open_session(event)
 
-        # ★ 作用域绑定：整个回合（含所有工具调用、子进程）都在这个 profile 上跑
-        with profile_runtime_scope(self.home):
+        # ★ 作用域绑定：整个回合（含所有工具调用、子进程）都在**这条消息所属的** profile 上跑。
+        #   A5 修正（第 9 章）：第 7/8 章这里写的是 `self.home`（**启动**那个 profile）——
+        #   多路复用下那会把次级 profile 的回合**绑回活动 profile**，覆盖掉外层入站作用域。
+        home = self._profile_home_for_source(event.source) or self.home
+        # ★ 观测面：这一轮**实际跑在哪个 home**。
+        #   为什么必须单独记：会话行是 `_open_session` 在**外层**作用域里写的，
+        #   所以"回合体的作用域对不对"从库的内容上**看不出来** —— 实测踩过
+        #   （把回合作用域改回 `self.home`，测试照样全绿）。第 9 章的验收靠这一栏。
+        self._turn_homes[event.session_key] = str(home)
+        with profile_runtime_scope(home):
             db = self._db()
             spec = self._provider_spec()
 

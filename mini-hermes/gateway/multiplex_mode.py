@@ -134,6 +134,7 @@ def implicit_multiplex_blocker(
     served: Optional[Sequence[Path]] = None,
     active: Optional[str] = None,
     own_pid: Optional[int] = None,
+    home: Optional[Path] = None,
 ) -> Optional[str]:
     """返回"不能按默认开启"的原因串；`None` = 可以开。
 
@@ -161,6 +162,17 @@ def implicit_multiplex_blocker(
         return (f"这是 profile '{active}' 自己的网关；只有默认 profile 的网关做多路复用"
                 f"（用默认 profile 起网关，或显式 --multiplex 强制开启）")
 
+    # 检查 1b（★ mini 版扩展，真实版没有这一条）：
+    #   **本进程的 home 不是本机默认家** → 只服务自己。
+    #   真实版同一条道理（第 ① 条）：多路复用是"默认 profile 的网关"的职能。
+    #   mini 额外必须防一件事：`MINI_HOME` 指到临时目录时（测试 / 演示 / `MINI_HOME=/tmp/x`），
+    #   **HOME 锚定**的 `profiles/` 里装的是**用户真实的** profile —— 顺手服务它们
+    #   就等于往用户的家写东西（实测踩过：测试进程替用户的 default + lab 建了适配器）。
+    if home is not None:
+        if str(Path(home).resolve()) != str(Path(default_home()).resolve()):
+            return (f"本进程的 home（{home}）不是本机默认家（{default_home()}）——"
+                    f"只有本机默认家的网关做多路复用（子进程/临时 home 请显式 --no-multiplex）")
+
     # 检查 2
     homes = list(served) if served is not None else profiles_to_serve(multiplex=True)
     if len(homes) < 2:
@@ -178,7 +190,8 @@ def implicit_multiplex_blocker(
 
 # ── ④ 裁决入口（真实版 `resolve_multiplex_mode`，:110-123） ──
 def resolve_multiplex_mode(explicit: Optional[bool] = None, *,
-                           served: Optional[Sequence[Path]] = None) -> MultiplexDecision:
+                           served: Optional[Sequence[Path]] = None,
+                           home: Optional[Path] = None) -> MultiplexDecision:
     """给一次 boot 定下开关；**不抛异常**（异常一律降级成 standalone）。
 
     顺序（真实版：env > 配置 > 未设置）：
@@ -194,7 +207,7 @@ def resolve_multiplex_mode(explicit: Optional[bool] = None, *,
         return MultiplexDecision(env_value, "config", f"{MULTIPLEX_ENV_VAR} 覆盖")
 
     try:
-        blocker = implicit_multiplex_blocker(served=served)
+        blocker = implicit_multiplex_blocker(served=served, home=home)
     except Exception as exc:      # noqa: BLE001
         # ★ 真实版逐字：a broken preflight must not take the gateway down with it
         logger.warning("多路复用预检失败，按 standalone 启动：%s", exc, exc_info=True)

@@ -56,7 +56,8 @@ class BasePlatformAdapter:
 
     def __init__(self, on_message: Optional[Callable[[MessageEvent], Any]] = None,
                  on_interrupt: Optional[Callable[[str], None]] = None,
-                 session_key_fn: Optional[Callable[[SessionSource], str]] = None):
+                 session_key_fn: Optional[Callable[[SessionSource], str]] = None,
+                 owner_profile: Optional[str] = None):
         # 网关 runner 的入站入口（真装配时由 runner 注入）
         self._on_message = on_message
         # 忙时通知：让 runner 去 `agent.interrupt()`
@@ -67,6 +68,14 @@ class BasePlatformAdapter:
         #   第 1 级守卫也要用键来分会话，所以键必须在**进守卫之前**就有；
         #   但"命名空间是哪个 profile"只有网关知道 —— 于是注入的是函数，不是值。
         self._session_key_fn = session_key_fn
+        # ★ 第 9 章 A8：**这个适配器是哪个 profile 的 bot**。
+        #   真实版 `run_adapters.py:1004-1100` 给每个 profile 建适配器时都会
+        #   `set_owner_profile(name)`；`None` = 默认 profile 的 bot（归一见 `bot_profile_key`）。
+        #   为什么必须有：多路复用下一个进程里可能有好几个 bot，**同一个人可以同时跟两个
+        #   bot 说话**；没有这个标注，它们会算出**同一个会话键**（共享一条 lane = 互相顶掉）。
+        from gateway.session_keys import bot_profile_key
+
+        self._owner_profile: Optional[str] = bot_profile_key(owner_profile)
         # ---- 第 1 级守卫三件套 ----
         self._active_sessions: Dict[str, threading.Event] = {}
         self.queues = SessionQueues()               # 第 8 章：单槽（覆盖）+ 溢出 FIFO（不合并）
@@ -93,8 +102,34 @@ class BasePlatformAdapter:
     # ------------------------------------------------------------------ #
     # 第 1 级守卫
     # ------------------------------------------------------------------ #
+    def set_owner_profile(self, name: Optional[str]) -> None:
+        """标注"这个适配器是哪个 profile 的 bot"（真实版 `run_adapters.py:1115` 同名）。"""
+        from gateway.session_keys import bot_profile_key
+
+        self._owner_profile = bot_profile_key(name)
+
+    def _session_key_profile(self, source: SessionSource):
+        """这条消息该进哪条 lane（= 键的命名空间）—— 真实版 `session.py:906-916` 的三段解析。
+
+        逐字顺序（真实版注释）：
+
+            ① `source.profile`（**路由表命中**时由 `_stamp_routed_profile` 盖的章）
+            ② `self._owner_profile`（收这条消息的 bot 自己的 profile）
+            ③ 都没有 → `None`（= 默认 profile 的命名空间）
+
+        ★ 第 ③ 条顺带回答了"默认 profile 的键为什么一直叫 `main`"：`None` 在
+        `build_session_key` 里映射成 `main`，所以单 profile 时期的历史键**逐字节不变**。
+        """
+        return source.profile or self._owner_profile
+
     def handle_message(self, event: MessageEvent) -> str:
         """所有入站的**唯一入口**。返回这一条被怎么处理了（便于测试与观察）。"""
+        # ★ A8：入站口盖"这条消息归哪个 profile"的章（真实版是适配器入口那一步）。
+        #   顺序：**路由表命中**（第 9 章 A7，在 `run_inbound` 里做）→ 否则
+        #   **收它的那个 bot 的 profile**（本适配器的 `_owner_profile`）。
+        #   没有这一步，"一个进程里两个 bot"会算出同一个会话键。
+        if not event.source.profile:
+            event.source.profile = self._session_key_profile(event.source)
         # ★ 会话键必须在**进守卫之前**就有：守卫是按会话分锁的。
         #   键本身只由 build_session_key 产出（通过 runner 注入的函数），
         #   适配器不许自己拼。

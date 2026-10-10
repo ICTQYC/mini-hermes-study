@@ -31,13 +31,18 @@ class ConsoleAdapter(BasePlatformAdapter):
 
     def __init__(self, on_message=None, on_interrupt=None, session_key_fn=None, *,
                  chat_id: str = DEFAULT_CHAT_ID, user_id: str = DEFAULT_USER_ID,
-                 echo: bool = True, prompt: str = "you> "):
+                 echo: bool = True, prompt: str = "you> ",
+                 owner_profile: Optional[str] = None,
+                 profile_feed=None, multiplex_note: str = ""):
         super().__init__(on_message=on_message, on_interrupt=on_interrupt,
-                         session_key_fn=session_key_fn)
+                         session_key_fn=session_key_fn, owner_profile=owner_profile)
         self.chat_id = chat_id
         self.user_id = user_id
         self.echo = echo
         self.prompt = prompt
+        # ★ 第 9 章：`@<profile> 文本` 的落点（由 runner 注入；None = 单 profile 模式不使用）
+        self._profile_feed = profile_feed
+        self.multiplex_note = multiplex_note
         self._out: list = []
         self._stdin_thread: Optional[threading.Thread] = None
 
@@ -69,13 +74,43 @@ class ConsoleAdapter(BasePlatformAdapter):
         return self.handle_message(self.make_event(text, user_id=user_id, chat_id=chat_id))
 
     def serve_forever(self) -> None:
-        """从 stdin 逐行读；EOF（Ctrl-D）就退出。"""
+        """从 stdin 逐行读；EOF（Ctrl-D）就退出。
+
+        ★ 第 9 章：多路复用下多一条语法 —— `@<profile> <文本>` 表示
+        **"这条消息是那个 profile 的 bot 收到的"**（真实版的 `bot_profile` 判别项）。
+        没有 `@` 前缀的行照旧 = 当前 profile 的 bot 收到。
+
+        没有那个 profile 时**说出来**，不许静默丢（真实版的"静默死通道"纪律）。
+        """
         print("（console 适配器已连接；输入一行 = 一条消息，/help 看命令，Ctrl-D 退出）",
               flush=True)
+        if self._profile_feed is not None and self.multiplex_note:
+            print(self.multiplex_note, flush=True)
         for line in sys.stdin:
             line = line.rstrip("\n")
             if not line.strip():
                 continue
             if self.prompt and self.echo:
                 print(f"{self.prompt}{line}", flush=True)
+            routed = self._maybe_feed_profile(line)
+            if routed:
+                continue
             self.feed(line)
+
+    def _maybe_feed_profile(self, line: str) -> bool:
+        """`@<profile> 文本` → 喂给那个 profile 的适配器。返回是否已处理。"""
+        if not line.startswith("@"):
+            return False
+        head, _, rest = line[1:].partition(" ")
+        name = head.strip()
+        if not name or not rest.strip():
+            return False
+        if self._profile_feed is None:
+            print(f"（`@{name}` 需要网关在跑多路复用；这条按普通消息处理）", flush=True)
+            return False
+        if self._profile_feed(name, rest):
+            return True
+        # ★ 静默丢是最坏的：说清楚，并告诉他怎么看到有哪些
+        print(f"⛔ 没有 profile {name!r}（或它没被服务）—— 这条消息**被丢弃**。"
+              f"用 `./mini profile list` 看有哪些。", flush=True)
+        return True

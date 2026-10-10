@@ -29,6 +29,11 @@ from typing import Any, Dict, List, Optional
 
 from hermes_constants import get_mini_home
 
+# ★ 第 9 章：凭据读取走**密钥作用域**（`get_secret` 提供"作用域 → 兜底"的完整四分支，
+#   含"多路复用下没有作用域就抛"的 fail-closed 行为）。import 提到模块级，
+#   免得每次读密钥都重新 import。
+from agent.secret_scope import get_secret
+
 # 已经打过"跳过进程级 .env 加载"日志的 home（真实版同名集合 `_SCOPED_SKIP_LOGGED`）
 _SCOPED_SKIP_LOGGED: set = set()
 
@@ -193,7 +198,15 @@ def resolve_provider(provider: str, model: Optional[str] = None) -> Dict[str, An
             f"未知 provider：{provider}（已注册：{', '.join(PROVIDER_REGISTRY)}）"
         )
 
-    api_key = os.environ.get(spec["api_key_env"], "")
+    # ★ 第 9 章 A9 的**真正消费者**：凭据读取必须走密钥作用域。
+    #   为什么不能直读 `os.environ`：多路复用下一个进程服务多个 profile，
+    #   而 `os.environ` 里装的**永远只有启动那个 profile** 的凭据（加载器边界还会
+    #   刻意不把次级 profile 的 .env 灌进去）—— 于是次级 profile 的回合会：
+    #     ① 明明自己 `.env` 里有 key，却报"环境变量为空"（实测踩过，就是这个 bug）；
+    #     ② 更糟：静默用**别人的** key 去调用（钱和数据的账都记错人）。
+    #   多路复用下**没有**作用域时 `get_secret` 会抛 `UnscopedSecretError` —— 那正是要的：
+    #   说明有条路径没被作用域包住，宁可当场炸也不要静默用错凭据。
+    api_key = get_secret(spec["api_key_env"], "") or ""
     if not api_key:
         # 报错必须包含"下一步该做什么"——别人第一次跑卡住的地方就在这
         own_env = get_mini_home() / ".env"
