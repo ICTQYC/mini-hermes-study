@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-MINI = Path("$HOME/Desktop/study/hermes学习/mini-hermes")
+MINI = Path(__file__).resolve().parent.parent          # 项目根（不许写死机器路径）
 sys.path.insert(0, str(MINI))
 
 # ── 造一个"有身份、有记忆、有项目上下文"的环境（否则读文件次数全是 0，对比看不出来）──
