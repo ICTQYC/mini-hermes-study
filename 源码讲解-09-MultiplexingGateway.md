@@ -18,7 +18,7 @@
 | 概念 | 对应实现 |
 |---|---|
 | "被服务的 profile" | `hermes_cli/profiles.py::profiles_to_serve(multiplex)`（§7） |
-| 共用的一把锁 / 一个监听 / 一个状态面 | 进程级单例；状态面 `runtime_status.json`（§12 表里点名为"进程级"） |
+| 共用的一把锁 / 一个监听 / 一个状态面 | 进程级单例；状态面 `gateway_state.json`（⚠️ 原文写 `runtime_status.json`，代码里没有这个文件名 —— 精译附录 C ④） |
 | 失败关闭的开关 | `agent/secret_scope.py::_MULTIPLEX_ACTIVE`（§4） |
 
 ## 2. The mode flag —— 开关与它的三道来源
@@ -161,7 +161,7 @@ tui_gateway/methods_profiles.py:624  @_profile_handler("profiles.set_asset", 506
 tui_gateway/methods_profiles.py:662  @_profile_handler("profiles.get_asset", 5066)
 ```
 
-📌 括号里那几个数字（5061…5066）是**方法编号**，不是行号 —— 名字叫
+📌 括号里那几个数字（5061…5066）是**每个 handler 的兜底错误码**，不是行号 —— 名字叫
 `_profile_handler(name, code)`，装饰器把"名字 + 编号"一起注册。
 
 ## 11. Failure modes —— 四种处置

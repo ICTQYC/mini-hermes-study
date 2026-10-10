@@ -7,7 +7,7 @@
 > 看不懂的地方或想深挖的点，随时问，我再往这里补。
 >
 > 📌 行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`）；上游每合并一个 PR 行号就会漂。
-> 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 **3 处**，见附录 C）。
+> 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 **6 处**，见附录 C）。
 > 🔗 各节原本附的 `【源码】要点` 已整体搬进《源码讲解-09-MultiplexingGateway.md》（节号一一对应）；本篇只做翻译。
 > 🧭 原文是**维护者设计说明**（通篇模块名/类名/issue 号），所以译文**先给白话**，
 > 逐字标识符与 issue 号收进《源码讲解-09》的【源码要点】；译文只把 issue 号降为「出处」一行。
@@ -148,9 +148,17 @@ A 更新完、B 又更新，**两边都会读到 B 的值**；而且 `subprocess
   - **多路复用开、且没装作用域**：**抛 `UnscopedSecretError`**，而不是静默读进程环境。
     这样一处"忘了迁移"的调用点会在**那一行**响亮地失败，而不是泄漏另一个 profile 的值。
 
-**全局白名单**（`HERMES_HOME`、`HERMES_PROFILE`、代理设置、`API_SERVER_*` 监听设置 ——
-**但故意不含 `API_SERVER_KEY`**）保持全局，因为这些描述的是**进程**，不是某个 profile。
-（源码里那行注释逐字：*API_SERVER_KEY is a credential: NOT here.*）
+原文只说"一份**小**白名单（`HERMES_HOME`、`HERMES_PROFILE`、代理设置、`API_SERVER_*` 监听设置 ——
+**但故意不含 `API_SERVER_KEY`**）保持全局"。源码里的真实规模是 **36 个精确名 + 3 个前缀**，
+分成五族（都描述**进程/部署**，不是某个 profile）：**进程身份**（`HERMES_HOME`、`HERMES_PROFILE`、
+`HERMES_GATEWAY_LOCK_DIR`、`HERMES_MAX_ITERATIONS`、`HERMES_API_TIMEOUT`、`HERMES_REDACT_SECRETS`、
+`HERMES_NOUS_TIMEOUT_SECONDS`、`_HERMES_GATEWAY`）· **shell/解释器**（`PATH`、`HOME`、`USER`、`LANG`、
+`LC_ALL`、`TZ`、`PWD`、`SHELL`、`TMPDIR`、`VIRTUAL_ENV`、`PYTHONPATH`、`SSL_CERT_FILE`）·
+**看板路径**（`HERMES_KANBAN_*`）· **监听设置**（`API_SERVER_ENABLED/HOST/PORT/CORS_ORIGINS`）·
+**relay 路由戳**（`GATEWAY_RELAY_*` 九个）。前缀三个：`HERMES_KANBAN_`、`HERMES_TELEGRAM_`
+（**调参用，不是 token**）、`TERMINAL_`。
+**凭据一律不在名单里** —— 源码注释逐字：*API_SERVER_KEY is a credential: NOT here.*；
+同一段还写着 relay 的 `GATEWAY_RELAY_SECRET/_ID/_DELIVERY_KEY` 与 `IDP_*` **刻意保持按 profile 作用域**。
 
 **原文还澄清了三处相邻的 `os.environ` 缝**（都被同一条"作用域权威"规则接管）：
 
@@ -208,6 +216,10 @@ A 更新完、B 又更新，**两边都会读到 B 的值**；而且 `subprocess
 2. **最具体的先赢**（写了更多字段的规则优先）；
 3. 线程（thread）会**顺着父聊天链**向上匹配（话题挂在频道下时也能命中）。
 
+> ⚠️ **上游文档出入**：第 3 条这句「**向上**匹配」容易读成**多级回溯**；源码里是**单跳** ——
+> 只把入站的 `(chat_id, parent_chat_id)` **两个值放进一个元组**做成员判断，**没有任何循环**
+> （附录 C ⑥；`parent_chat_id` 本身也只取一跳）。
+
 **只有多路复用开着时才会路由**。而且：一条命中的规则**如果目标不在"被服务的集合"里，
 事件会被拒绝（丢弃），而不是投错地方**。
 
@@ -246,8 +258,9 @@ HTTP 准入**、**路由资格**、以及**运行时状态面**。
 
 ## 8. Per-profile persistence —— 每个 profile 自己的库
 
-`SessionStore` **在构造时不绑定任何数据库句柄**。
-会话库句柄是**在调用时**通过**当前的 HERMES_HOME 覆盖**解析出来的 ——
+`SessionStore` **不把数据库句柄冻结在构造那一刻**（字段 `_db_pinned = _DB_UNPINNED`；
+构造末尾只为当前作用域**预热**一个句柄，好让启动诊断照旧）。
+真正的句柄是**每次读取时**按**当前的 HERMES_HOME 覆盖**解析出来的 ——
 **每个解析到的 `profiles/<name>/state.db` 一个缓存句柄** ——
 所以**即使 store 对象本身是共享的**，会话也会落进**拥有它的那个 profile** 的库里。
 
@@ -311,7 +324,10 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | **回退** | 外部的 `cron.provider` **不支持多路复用** → 带警告回退到内置 ticker |
 
 > ⚠️ **上游文档出入**：原文点名的启动致命错误 `SecondaryPortBindingConfigError` ——
-> **源码里没有这个类**（机制在、名字没了；附录 C ②）。
+> **源码里没有这个类**（机制在、名字没了；附录 C ②）。而且「二级启用占端口平台 → **启动即致命**」
+> 这半句**也不准确**：真实行为是把二级的占端口适配器改成**共享监听模式**（走 `/p/<profile>/…`，
+> 自己不 bind）；启动时真正会被拒绝（`MultiplexConfigError`）的是**开放策略却没开 allow-all**。
+> 「启用了占端口平台但**没有** `/p/<profile>/` ingress」只在**迁移预检**里算 blocker（附录 C ⑤）。
 
 ### 为什么这么设计 / 砍掉会怎样
 四种处置对应**四种不同的"坏"**，不能互换：
@@ -335,7 +351,8 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | **终端 / 沙箱环境（`TERMINAL_*`）** | 按白名单保持全局；工具从**进程环境**读它 |
 | **内置工具注册表** | 内置的是进程级；**插件注册的工具按 profile 叠加**（靠 `hermes_home_key()`） |
 | **provider / 能力注册表** | 同一种"混合叠加"模式（浏览器、图像生成、TTS、转写、视频生成、网络搜索、密钥源） |
-| **HTTP 监听、relay 入口、进程锁** | 一个进程一份，归默认/活动 profile 所有。按 profile 的 `runtime_status.json` **仍然照写** |
+| **HTTP 监听、relay 入口、进程锁** | 一个进程一份，归默认/活动 profile 所有。按 profile 的 `gateway_state.json` **仍然照写**（⚠️ 原文写 `runtime_status.json` ——
+**代码里没有这个文件名**，见附录 C ④） |
 
 > ⚠️ **上游文档出入**：**MCP 那条已经不是原文说的样子了** —— 它已经被修掉（详见附录 C ③）。
 源码里 `hermes_cli/mcp_startup.py` 的开头注释逐字写着：
@@ -428,7 +445,7 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 （per-bot session lanes 的完整落地）、按 profile 的持久化句柄缓存、
 控制面方法、失败模式的四类处置 —— 这些是第 9 章实现阶段的正题。
 
-## 附录 C · 上游文档出入（本次核实 3 处；另附「未逐字核」清单）
+## 附录 C · 上游文档出入（本次核实 6 处；另附已核实/未核清单）
 
 | # | 原文说什么 | 源码实测 | 性质 |
 |---|---|---|---|
@@ -436,15 +453,31 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | ② | 启动致命错误之一是 `SecondaryPortBindingConfigError` | **源码里没有这个类**（全 `gateway/` grep 无 `class SecondaryPortBinding…`）。**语义在**：`gateway/run_adapters.py:1139`、`gateway/platforms/base.py:1905`、`gateway/platforms/shared_ingress.py:4` 三处注释都在讲"二级 profile 的占端口适配器永不绑定，那个监听归默认 profile" | **类名过时/不存在**（机制在、名字没了） |
 | ③ | 「已知限制」表：**MCP 发现与工具注册是进程级，第一个建 agent 的 profile 赢下发现槽位** | **已经不成立**：`hermes_cli/mcp_startup.py:12-17` 逐字注释说明发现槽位**按 profile home 分桶**（`hermes_home_key()`），并且明说这就是 **#67605** 修掉的；代码里也是 `Set[str]` / `Dict[str, Thread]` 分桶 | **限制表过期**（方向少见：**源码比文档更先进**） |
 
+| ④ | 「已知限制」表里按 profile 写的状态文件叫 `runtime_status.json` | **代码里没有 `runtime_status.json`**：常量是 `_RUNTIME_STATUS_FILE = "gateway_state.json"`（`gateway/status.py:32`），路径 `_get_process_hermes_home() / "gateway_state.json"`（`:166`）；消费者按 profile 读的是 `profile_dir / "gateway_state.json"`（`hermes_cli/web_routers/status.py:264`） | **文件名过时**（照抄会写出一个不存在的文件） |
+| ⑤ | 「启动即致命：二级 profile 启用了**要占端口**的平台」 | 真实**不拒绝**：二级的占端口适配器被改成 **shared-listener 模式**（`adapter._shared_listener_profile = profile_name`，`gateway/run_adapters.py:1139`；只有 `api_server`/`webhook` 两个 MIRROR 平台被直接跳过，`:551`）。`MultiplexConfigError`（`run.py:1636`）全仓唯一 raise 点是 `run_adapters.py:926`，条件是**开放 dm/group 策略却没开 allow-all**（`_own_policy_open_startup_violation`，`run.py:2184`）。「没有 `/p/<profile>/` ingress」是**迁移预检**的 blocker（`gateway_migrate.py:456`） | **语义错位**（把"迁移预检的 blocker"读成"启动期的致命错"，还把平台名单写进错了地方） |
+| ⑥ | 路由匹配"with parent-chain chat matching"（我译成「顺着父聊天链向上匹配」） | 源码是**单跳**：`self.chat_id not in (chat_id, parent_chat_id)`（`gateway/profile_routing.py:93`），整个模块**没有任何 `while` 循环**；`parent_chat_id` 由适配器只取一跳（Discord `channel.parent`，`plugins/platforms/discord/adapter.py:5494`） | **措辞暗示多级**（照抄时别自己加回溯） |
+
 **出处引用方式的说明**：本章有几处 issue 号（`#88532`、`#61276`）在**源码里找不到注释**，
 只在**测试文件**里能查到（分别见 `tests/hermes_state/test_named_profile_session_db.py`、
 `tests/gateway/test_api_server_multiplex_secret_scope.py`）—— 这不影响结论，
 但"顺着 issue 号去源码找注释"时找不到是正常的。
 
-**未逐字核的声明**（原文有、我这轮没去源码逐字验证，**别当成已核实**）：
+**本轮补核实（原先列在"未核"里的三条，现在有源码级证据了）**：
 
-1. 「回退：外部 `cron.provider` 不支持多路复用 → 带警告回退内置 ticker」；
-2. 「配对（pairing）存储按被服务的 profile 各造一个」；
-3. 「资产写入原子 + 类型与大小上限」的具体上限值；
-4. 已知限制表里**除 MCP 那条以外**的其余四行（终端环境、内置注册表、能力注册表、监听/锁）。
+1. ✅ **cron 回退确实存在**：`scheduler_for_profile_mode()`（`cron/scheduler_provider.py:391-402`）逐字
+   *"External providers own one unscoped remote registry and cannot reconcile several profile stores:
+   fail closed to the built-in multiplex ticker until the API carries profile identity."* ——
+   命中就 `logger.warning("cron.provider '%s' does not support multiplex_profiles; using built-in ticker")`
+   并返回 `InProcessCronScheduler()`；多路复用 ticker 本体在 `:496 _start_multiplex`（每个 profile 用
+   `_profile_cron_scope(home)` 分别打心跳，`#69377`）。
+2. ✅ **配对存储确实按 profile 各造一个**：`run_adapters.py:895-899` 逐字
+   `self.pairing_stores[name] = (self.pairing_store if name == active else PairingStore(profile=name))`。
+3. ✅ **资产上限**：`2_000_000` 字节（`tui_gateway/methods_profiles.py:654`，超了报 `4069 asset too large`）；
+   只收 `png/jpg/webp`（`_ASSET_EXTS`，`:15`）；**格式靠 magic bytes 嗅探、不信声明的 mime**（`_ASSET_MAGIC`，`:17-18`）；
+   落盘是**临时文件 + `Path.replace()`**（`:657-659`）。
+
+**仍未逐字核**（别当成已核实）：
+
+1. 已知限制表里**除 MCP 那条以外**的其余四行（终端环境、内置注册表、能力注册表、监听/锁）；
+2. `implicit_multiplex_blocker()` 依赖的 `build_migration_plan()` / `_host_supports_migration()` 的完整构造。
 
