@@ -1,3 +1,5 @@
+# 源码讲解 · 第 9 章：多路复用网关（Multiplexing Gateway）
+
 > **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
 > **真实源码**：`$HOME/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
 > **对照实现**：`mini-hermes/`（全项目 **11,643 行**代码 / **5,984 行**测试，本章开工前）
@@ -11,7 +13,7 @@
 
 ---
 
-# 两份代码的路径与规模
+## 两份代码的路径与规模
 
 | 关注点 | 真实 Hermes | mini-hermes |
 |---|---|---|
@@ -30,12 +32,12 @@
 
 ---
 
-# 导言 · 机制总览：Hermes 具体怎么做的（先读这一节）
+## 导言 · 机制总览：Hermes 具体怎么做的（先读这一节）
 
 > 本节只讲 **Hermes 一侧**：谁在管、什么时候发生、具体做什么、哪些是圣线、错了怎么办、
 > 跨层的那一半、以及一轮的完整时间线。每条给 `文件:行号`，优先引注释（WHY 都在注释里）。
 
-## 0.1 谁在管这件事
+### 0.1 谁在管这件事
 
 | 职责 | 接口 | 实现 | 兜底 |
 |---|---|---|---|
@@ -51,7 +53,7 @@
 | **每 profile 适配器** | `_start_secondary_profile_adapters()` | `gateway/run_adapters.py:832` | 单 profile 失败 → 跳过继续（`:865`） |
 | **状态面** | `write_runtime_status / read_runtime_status` | `gateway/status.py:819 / :895` | 读不到就当作"没有记录" |
 
-## 0.2 什么时候发生
+### 0.2 什么时候发生
 
 **（a）开关值从哪来 —— 三道来源 + 真值词表**（`gateway/config.py:29-64`）
 
@@ -90,7 +92,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 **（d）每次读密钥 / 读会话库 / 建适配器**：都按"**当前作用域**"解析，而不是按进程启动时的值
 （`get_secret` `:143`、`_db` property `session_persistence.py:89`、`_profile_runtime_scope` 的 30+ 调用点）。
 
-## 0.3 具体做什么
+### 0.3 具体做什么
 
 | 阶段 | 做什么 | 出网？ |
 |---|---|---|
@@ -114,7 +116,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 3. **预检失败不算致命**：`resolve_multiplex_mode` 把异常转成 blocker（*"a broken preflight must not
    take the gateway down with it"*），结果仍是"老实起 standalone 并记日志"。
 
-## 0.4 不变式（四条圣线 + 一条顺序约定）
+### 0.4 不变式（四条圣线 + 一条顺序约定）
 
 | # | 圣线 | 依据 |
 |---|---|---|
@@ -124,7 +126,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | ④ | **数据库句柄不冻结**：每个解析出的 path 一个句柄；**没命中不缓存** | `gateway/session.py:789-800`（#88532 逐字）；`session_persistence.py:135` 逐字 *"Only hits are memoized: a profile directory can be provisioned *after* startup … and a cached miss would pin that profile's rows to the ambient store for life."* |
 | ⑤ | （顺序）**默认 profile 永远排第一** | `profiles_to_serve` 的 `serve = [("default", …)]` 先建；mini 侧 docstring 也记了"共享入口的平台只在默认 profile 上跑 / 在默认 profile 停网关会停掉全部" |
 
-## 0.5 出错了怎么办（四类处置，各有逐字出处）
+### 0.5 出错了怎么办（四类处置，各有逐字出处）
 
 | 类别 | 触发 | 行为 | 出处 |
 |---|---|---|---|
@@ -134,7 +136,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | **回退 + 警告** | 外部 `cron.provider` 不支持多路复用；预检自身抛异常 | 回退内置 ticker 并 warning；按 standalone 起并 warning | `cron/scheduler_provider.py:391-402` 逐字；`gateway_multiplex_mode.py:117-119` |
 | （热重载的第五类） | 运行中某个二级 profile 配置坏了 | **只把那个 profile 停下来**（park），不拖垮进程 | `run_profile_reconcile.py:125-129` |
 
-## 0.6 跨层的那一半：哪些东西仍然是"进程级"
+### 0.6 跨层的那一半：哪些东西仍然是"进程级"
 
 | 仍然是进程级 | 归属与出处 |
 |---|---|
@@ -148,7 +150,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 对应地，这些都是 **profile 级**：密钥、home、会话库、配对存储、cron store、适配器实例、
 会话键命名空间、终端策略、`pairings` 白名单。
 
-## 0.7 一轮的完整时间线
+### 0.7 一轮的完整时间线
 
 ```text
 进程启动
@@ -200,7 +202,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
    状态面：gateway_state.json（served_profiles / multiplex_standalone_reason）
 ```
 
-## 读完这一节的验收 —— 不看后面的差异表，能说清这四件事
+### 读完这一节的验收 —— 不看后面的差异表，能说清这四件事
 
 1. **开关的三种状态**分别是什么、为什么"未设置"不能当成 `False`，以及**预检六条**里哪一条最贵、为什么排最后；
 2. **服务集合**为什么必须只有一个实现，以及"枚举不许建目录"防的是什么；
@@ -209,7 +211,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 ---
 
-# §〇 差异表（本章 34 条）
+## §〇 差异表（本章 34 条）
 
 > 列序：`真实 Hermes | mini 版 | 性质 | 值得改`。「mini 版」列一律指**当前代码**；
 > 本章待实现的行标 `⬜ 本章待实现`。
@@ -256,9 +258,9 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 ---
 
-# §一 Overview —— 一进程 vs 一 profile（精译 §1）
+## §一 Overview —— 一进程 vs 一 profile（精译 §1）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 一个网关进程服务**所有** profile：默认 profile 加上每个被服务的具名 profile，各有自己的
 **适配器、凭据、会话库、cron 心跳**；同时**共用**一个事件循环、一个 HTTP 监听、一把进程锁、
@@ -266,7 +268,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 > **profile A 的回合，永远不许看见 profile B 的状态。**
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/run.py:288   # "Non-default profiles' adapters by profile then Platform;
@@ -282,13 +284,13 @@ gateway/run.py:1646  def _multiplex_profile_homes(config)   ← 服务集合的�
 `self._profile_adapters[profile][platform]`。这个"默认在明、次级在暗"的布局后面到处出现
 （配对 store、状态面、平台状态键都是同一套）。
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 - `gateway/run.py:59-71`：`self.adapters: Dict[str, Any] = {}` —— 键是**适配器名字**，与 profile 无关；
 - `gateway/run.py:190-191`：`set_multiplex_active(self.multiplex)` + `self.served_homes = profiles_to_serve(self.multiplex)`；
 - `gateway/run.py:255-257`：`served_homes` 只用来在 banner/status 里显示"服务了几个 home"。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：① mini 只有**一个** console 适配器（`gateway/adapters/console.py`），不存在"多 bot"；
 ② 没有控制面（桌面插件那扇门），所以没有"运行中增删 profile"的需求；③ 第 7 章做的是**入口层**（`-p <profile>`
@@ -299,14 +301,14 @@ gateway/run.py:1646  def _multiplex_profile_homes(config)   ← 服务集合的�
 
 ---
 
-# §二 The mode flag —— 开关的三道来源（精译 §2）
+## §二 The mode flag —— 开关的三道来源（精译 §2）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 `gateway.multiplex_profiles` 也接受顶层写法，**默认开**；解析顺序 **env > config.yaml > unset**。
 关键在**三态**：`None`（未设置，等 boot 裁决）/ `True` / `False`；**空白与未识别都不算覆盖**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/config.py:29-30  _TRUTHY_STRINGS = frozenset({"1","true","yes","on"})
@@ -329,12 +331,12 @@ hermes_cli/gateway_multiplex_mode.py:53-63  default_gateway_multiplexes(default_
     # 别的进程**不猜** unset 的默认（否则"还没迁移"会被读成"已经在多路复用"）
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `gateway/run.py:42/48 multiplex: bool = False`，CLI 侧 `--multiplex`（`hermes_cli/gateway_cmd.py:111/118`）；
 **没有** env 覆盖、没有真值词表、没有"未设置"这一态。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：mini 的配置面只有 `config.json` + 命令行旗标，**没有托管部署**（没人往容器里塞
 `MINI_*` 空值），所以"空白 ≠ False"这条防御在 mini 里暂时没有受害者。
@@ -343,16 +345,16 @@ hermes_cli/gateway_multiplex_mode.py:53-63  default_gateway_multiplexes(default_
 
 ---
 
-# §三 启动预检与裁决（原文散落，本章新增小节）
+## §三 启动预检与裁决（原文散落，本章新增小节）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 "默认开"必须配一个**预检**，否则一次安装里两个进程会抢同一个 bot token —— 那不是报错，是
 **间歇性错乱**。预检六条（见 0.2），**短路顺序**本身就是设计：最便宜、最能排除大类的排前面。
 裁决结果记三种来源（`config` / `default` / `guard`），并**落盘 + 分级打日志**。
 预检崩了**不许拖垮网关**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 hermes_cli/gateway_multiplex_mode.py:75-107   implicit_multiplex_blocker() 六条（逐字见 §0.2）
@@ -371,11 +373,11 @@ hermes_cli/gateway_multiplex_mode.py:126-133  record_multiplex_decision() → wr
 hermes_cli/gateway_multiplex_mode.py:136-149  log_multiplex_decision()  # guard+单profile → info；其它 guard → warning
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 **没有** —— `--multiplex` 是纯布尔，没有"该不该开"的判断，也没有"为什么没开"的记录。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **不抄的两条**（当场写清理由）：
 - 第 3 条 **host 可迁移性**：mini 没有 s6 / Windows 计划任务 / systemd 这些"宿主看不见 per-profile 网关"
@@ -389,9 +391,9 @@ mini 第 7 章已有"PID + 启动时间指纹"的存活判据（`gateway/status.
 
 ---
 
-# §四 Scope composition —— 作用域绑在"活动"上（精译 §3）
+## §四 Scope composition —— 作用域绑在"活动"上（精译 §3）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 每个入站事件，在**任何 profile 自己的代码跑起来之前**，先合成**三个**上下文局部作用域：
 
@@ -408,7 +410,7 @@ mini 第 7 章已有"PID + 启动时间指纹"的存活判据（`gateway/status.
 **作用域绑在"profile 的活动"上，不是"回合"上** —— 这是本章最容易看漏的一句：它不仅包住 agent 回合，
 还包住**适配器的建/连/重连、入站预处理、slash 命令、通知、热重载、平台监听**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/run.py:1750-1783  @_contextmanager def _profile_runtime_scope(profile_home, prepared_secret_scope=None, *, hydrate_secrets=True)
@@ -437,14 +439,14 @@ gateway/run.py:1784-1789  _async_profile_runtime_scope(profile_home)
 | `gateway/run_agent_cache.py:711`、`run_goals.py:463`、`run_profile_reconcile.py:168` | 缓存淘汰、目标、热重载 |
 | `gateway/platforms/api_server.py:1492`、`shared_ingress.py:142` | HTTP 入口 |
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `gateway/profile_scope.py:35-54 profile_runtime_scope()`：**两件**（home + 密钥），`finally` **反序**复位；
 docstring 已引真实版那句话解释"为什么不改 `os.environ`"。
 **唯一产品级调用点是 `gateway/run_turn.py:76`**（一个回合）—— 适配器连接、入站预处理、
 REPL 命令都不在作用域里。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：mini 的 profile 活动路径只剩"回合"这一条 —— 适配器按名字分键、不绑 profile（§一），
 命令面是 REPL 内的本地命令（不跑回合），也没有通知/热重载子系统。所以**不是忘了**，是**没有第二条路径**。
@@ -453,15 +455,15 @@ REPL 命令都不在作用域里。
 
 ---
 
-# §五 Workstream A —— 密钥作用域（精译 §4）
+## §五 Workstream A —— 密钥作用域（精译 §4）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 显然的写法（把 profile 的 `.env` 并进 `os.environ`）会把 A 的密钥泄漏进 B 的回合与**每个子进程**。
 所以：作用域是 **contextvar**，读取走一个**四分支**的解析器，且**多路复用开着又没有作用域时直接抛**。
 异常本身也分了**两层信息**：`str(exc)` 是给终端用户的一句可执行建议，开发者诊断挂 `__notes__`。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 agent/secret_scope.py:24    _MULTIPLEX_ACTIVE: bool = False     # "Process-global (describes the
@@ -494,13 +496,13 @@ agent/secret_scope.py:254-257 build_profile_secret_scope(hermes_home)
 **四分支速查**（`:153-171`）：白名单 → `os.environ`；有作用域命中 → 返回；有作用域未命中 →
 `default if _MULTIPLEX_ACTIVE else os.environ`；**无作用域** → mux 开则 `raise`，否则 `os.environ`。
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `agent/secret_scope.py`（91 行）：`_MULTIPLEX_ACTIVE` / `set_multiplex_active` / `multiplex_active` /
 `UnscopedSecretError` / `get_secret` **都在**；逻辑是三分支（作用域命中 → 返回；无作用域 + mux 开 → 抛；
 否则 `os.environ`）。**没有全局白名单**（`_GLOBAL_ENV_EXACT` / `_is_global_env` 不存在）。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：mini 的 `get_secret` 是照着真实版的 fail-closed 骨架写的，但**漏了"豁免层"**。
 当时的理由（我回顾第 7 章的决定）：mini 的密钥消费者少，"没有需要豁免的进程级键"。
@@ -512,9 +514,9 @@ agent/secret_scope.py:254-257 build_profile_secret_scope(hermes_home)
 
 ---
 
-# §六 Workstream A 的三处"相邻缝"（精译 §4 后半）
+## §六 Workstream A 的三处"相邻缝"（精译 §4 后半）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 同一条"作用域权威"规则要管的还有三处**不是回合**的缝：
 
@@ -524,7 +526,7 @@ agent/secret_scope.py:254-257 build_profile_secret_scope(hermes_home)
 | **(b) 配置里的 `${VAR}` / `${env:VAR}`** | 装了作用域时**经 `get_secret`** 解析；多路复用下"未命中就是未命中"，**绝不读另一个 profile 的 `os.environ`**（#84079） |
 | **(c) 作用域下的 `.env` 写入** | `save_env_value` 的镜像发布更新**已装的作用域映射**，而不是进程环境（#88441 / #77490） |
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 hermes_cli/env_loader.py:26    _SCOPED_SKIP_LOGGED: set[str]   # 已打过日志的 routed home（防刷）
@@ -545,14 +547,14 @@ hermes_cli/config.py:2586-2612 _publish_env_value(key, value)   # .env 写入后
     the change. … See #77490, #88441."""
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 - **(a) 有隐患**：`hermes_cli/runtime_provider.py:105 load_env_file()` 在 `:135` **直接 `os.environ[key] = val`**
   —— mini 的 `.env` 加载**没有**"mux 开 + 有覆盖就跳过"的闸。
 - **(b) 无消费者**：mini 没有 `${VAR}` / `${env:VAR}` 展开能力（全仓 grep 零命中）→ 这一缝在 mini 不存在。
 - **(c) 未取证的半件**：mini 的 `.env` 写入路径（`profile_cmd` / `runtime_provider`）本轮没核它是否也写 `os.environ`。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 - (a) **抄**（新列 A13，~15 行）：mini 现在的加载路径在"多路复用 + 有 home 覆盖"时会把**别人的 .env**
   灌进进程环境 —— 与 §五的 fail-closed 精神直接冲突（fail-closed 只管读取，不管加载）。
@@ -562,16 +564,16 @@ hermes_cli/config.py:2586-2612 _publish_env_value(key, value)   # .env 写入后
 
 ---
 
-# §七 The HERMES_HOME override（精译 §5）
+## §七 The HERMES_HOME override（精译 §5）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 `hermes_constants.py` 里有一个**上下文局部的覆盖**，`get_hermes_home()` **先查它、再查 `HERMES_HOME`**，
 于是所有走它解析路径的东西（配置、`state.db`、技能、记忆、SOUL、会话、看板、插件发现、MCP 启动）
 自动跟着当前 profile 走。另有两个**出口**处理例外：`get_process_hermes_home()`（进程级资产）与
 `hermes_home_key()`（按 home 分桶的注册表键）。另有一条**一次性告警**（声明了 profile 却在默认 home 上跑）。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 hermes_constants.py:15-17  _profile_fallback_warned = False
@@ -594,13 +596,13 @@ hermes_constants.py:73-98  _warn_profile_fallback_once()
     #  行 86-87 注释：直接写 stderr，不走 logging —— 因为它跑在 import 期（logging 还没配好）
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `hermes_constants.py:43-48`：覆盖 → `MINI_HOME` → `~/.mini-hermes` ✅（与真实版同序）。
 **缺**：`hermes_home_key()` 等价物（全仓只有一处**注释**提到它）、`get_process_hermes_home()` 等价物、
 一次性告警。另有一处细节不同：**只有** env/默认分支会 `mkdir`，override 分支不建目录（`:43-45`）。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 - `hermes_home_key()` **值得抄**（A10）：它不是一个"辅助函数"，而是**按 home 分桶的注册表的唯一稳定键**。
   缺了它的直接后果已经在 mini 里有了：`tools/registry.py` 的 `check_fn` 缓存**不按 profile 分键**
@@ -613,15 +615,15 @@ hermes_constants.py:73-98  _warn_profile_fallback_once()
 
 ---
 
-# §八 Inbound routing —— 共享 bot 路由表（精译 §6）
+## §八 Inbound routing —— 共享 bot 路由表（精译 §6）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 `gateway.profile_routes` 把 **(平台, 公会 id, 聊天 id, 线程 id)** 映射到 profile：**合取**匹配、
 **最具体优先**、线程走**单跳**父聊天。只有多路复用开着才路由；命中的规则**目标不在服务集合 → 丢弃**。
 还有一个不显眼但要命的判别项 **`bot_profile`**：路由只对**它指定的那个 bot** 收的消息生效。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/profile_routing.py:1-12  模块 docstring（逐字）：
@@ -659,13 +661,13 @@ gateway/run_inbound.py:173-178     if source.profile_route_rejected is True: …
 was ever consulted"*）。
 ★ 父链是**单跳**（`(chat_id, parent_chat_id)` 元组判断，全模块**无 `while`**）—— 与文档措辞的出入见精译附录 C ⑥。
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 **没有**（`grep -rn "profile_route\|ProfileRoute"` 零命中）。mini 里唯一的 `route()` 是
 `gateway/session_state.py:95 SessionRouter.route()` —— 那是**会话归属**（复用 / 软恢复 / 硬擦除后新建），
 **不是跨 profile 的消息路由**，两者同名但不同层。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：没有受害者 —— mini 只有**一个** console 适配器，"一个共享 bot 服务两个 profile"
 这个场景还不存在。所以第 7/8 章都没做。
@@ -678,15 +680,15 @@ WhatsApp 别名折叠**不抄**（mini 无 WhatsApp，B1）。
 
 ---
 
-# §九 Serving selected profiles —— 服务集合的单闸口（精译 §7）
+## §九 Serving selected profiles —— 服务集合的单闸口（精译 §7）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 `profiles_to_serve(...)` 是**"这个网关服务哪些 profile"的唯一闸口**：默认 profile + 每个**有效**的
 具名 profile 目录。它同时给**五个面**把关：**适配器启动**、**cron 心跳**、**`/p/<profile>/` HTTP 准入**、
 **路由资格**、**运行时状态面**。被排除的 profile **仍装在那儿**，也**仍能自己单独跑一个网关**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 hermes_cli/profiles.py:802-815  profiles_to_serve(multiplex: bool) -> List[Tuple[str, Path]]
@@ -706,13 +708,13 @@ hermes_cli/profiles.py:942      # clone 会剥掉源 profile 的 bot token / all
 📌 `#94590` 那条（*"never creates a profile dir"*）值得单独记：**枚举本身不许有副作用** ——
 否则"列一下服务谁"这个只读动作会凭空造出目录，而目录一存在，下一次枚举就会把它当活 profile。
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `hermes_cli/profiles.py:211-225 profiles_to_serve(multiplex: bool = False)` ✅ 已有，docstring 也记了
 "默认永远排第一"的两条后果（共享入口的平台只在默认 profile 上跑 / 在默认 profile 停网关会停掉全部）。
 `list_profiles()`（`:196-200`）是裸 `iterdir()`。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **缺的只有两件**：① **墓碑过滤**（mini 没有 `tombstoned`/`.deleted` 概念 → 残留/半删目录会被当活 profile）；
 ② **"枚举不建目录"的不变量注释**（mini 现在确实不建，但没有任何东西挡住以后有人加一句 `mkdir`）。
@@ -722,14 +724,14 @@ hermes_cli/profiles.py:942      # clone 会剥掉源 profile 的 bot token / all
 
 ---
 
-# §十 Per-profile persistence —— 每个 profile 自己的库（精译 §8）
+## §十 Per-profile persistence —— 每个 profile 自己的库（精译 §8）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 `SessionStore` **不把句柄冻结在构造那一刻**：句柄按解析出的 `state.db` 路径缓存，
 **每次读取都经 `_db` 重新按当前 HERMES_HOME 覆盖解析**。配对（pairing）存储**按被服务的 profile 各造一个**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/session.py:789-800   （#88532，逐字）
@@ -756,7 +758,7 @@ gateway/run_adapters.py:895-899  self.pairing_stores[name] = (self.pairing_store
                                                              else PairingStore(profile=name))
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 - 网关侧 ✅ **已经**按 home 缓存句柄：`gateway/run.py:109-116 _db()` → `_db_for(get_mini_home())`；
   `:118-124 _db_for(home)` → `self._dbs[str(home)]`。docstring 写明"让替次级 profile 干活的代码没法传错 home"。
@@ -765,7 +767,7 @@ gateway/run_adapters.py:895-899  self.pairing_stores[name] = (self.pairing_store
 - **缺**：`_profile_home_for_key` 的"**只 memoize 命中**"（mini 没有 profile→home 的 miss 语义），
   以及配对存储的 profile 维度（mini 的配对白名单是全局一份）。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 - "只 memoize 命中"**值得抄**（A11，~15 行）：它防的是**启动之后才被建出来的 profile**
   （mini 有 `profile create`，完全可能运行中新建）—— 缓存一个 miss 会把那个 profile 的行**钉到 ambient store 一辈子**。
@@ -775,16 +777,16 @@ gateway/run_adapters.py:895-899  self.pairing_stores[name] = (self.pairing_store
 
 ---
 
-# §十一 Per-bot session lanes —— 每个 bot 一条会话线（精译 §9）
+## §十一 Per-bot session lanes —— 每个 bot 一条会话线（精译 §9）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 会话键按 profile 加**命名空间**（默认 `agent:main`、具名 `agent:<name>`、**名字恰为 `main` 的 profile 用
 `main~`**）。适配器身上带 `_owner_profile`（**配置时**就装好，早于任何入站事件），
 `_session_key_profile` 的解析顺序是 **来源盖章 → owner profile → store 解析器**。
 批处理、活跃会话跟踪、忙会话守卫**全部按 lane 分键**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/session.py:625-634  _session_key_namespace(profile)
@@ -806,13 +808,13 @@ gateway/session_recovery.py:35-46    _resolve_profile_for_key(source)
     else ``source.profile`` or the active profile."""
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `gateway/session_keys.py:45-63 session_key_namespace(profile)` ✅ **已对齐**（含 `main~` 规则、`~` 不在 id 字母表）；
 `build_session_key(source, *, profile=None)` ✅ 是唯一入口。
 **缺**：`_owner_profile` / `set_owner_profile` 那一层（`grep _owner_profile` 零命中）。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：mini 的会话键现在**只从 `source` 推导**（加一个调用方传的 `profile` 参数）。
 在没有 per-profile 适配器之前，没有"这个键是谁的 bot 算出来的"这个问题 —— 所以那一层无处安放。
@@ -823,15 +825,15 @@ agent 缓存、`resume_pending`）会互相踩 —— **单槽覆盖会把另一
 
 ---
 
-# §十二 每 profile 适配器与 fail-soft 启动（原文散落，本章新增小节）
+## §十二 每 profile 适配器与 fail-soft 启动（原文散落，本章新增小节）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 - **主 profile（默认/活动）**：自己的适配器照常起，但**缺凭据的平台要跳过**（而不是起一个永远重连的坏适配器）；
 - **次级 profile**：逐 profile、逐平台建连，**每种失败都有专属日志与"跳过"**；
 - **只有两类错会中止启动**：`MultiplexConfigError`（配置错，见 §十四）与"共享监听被抢"。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 gateway/run_adapters.py:832-873  _start_secondary_profile_adapters()
@@ -870,7 +872,7 @@ gateway/run_startup.py:1186-1210  _start_secondary_profiles()
     #                                    → self._startup_fail_fatal_config(str(e)) → 启动中止
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 ```text
 gateway/run.py:59-71   self.adapters: Dict[str, Any] = {}   # 键 = 适配器名字（与 profile 无关）
@@ -880,7 +882,7 @@ gateway/run.py:198-199 for a in self.adapters.values():
 对照：`run_shutdown.py:80-84` 的 disconnect 循环**有** try/except —— 所以"连接没有、断开有"**不是疏忽**，
 是当年没人为它写消费者。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **原因具体**：mini 只有 console 一个适配器，且它的 `connect()` 只是打印一行 —— 没有**会失败**的连接
 （没有网络、没有 token），所以没有 fail-soft 的受害者。
@@ -891,15 +893,15 @@ info/warning 分级，理由：**跳过了不说 = 静默死掉的通道**）。
 
 ---
 
-# §十三 Control plane（精译 §10）
+## §十三 Control plane（精译 §10）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 桌面插件只能通过 ws JSON-RPC 够到网关，所以 profile 的枚举与配置住在 `tui_gateway/methods_profiles.py`：
 六个方法（`list` / `create` / `describe` / `configure` / `set_asset` / `get_asset` + 一个 `remember_onboarding`），
 **读写跑在目标 profile 的 HERMES_HOME 覆盖之下**，资产写入**原子 + 类型/大小上限**。
 
-## ② 读 Hermes 的代码
+### ② 读 Hermes 的代码
 
 ```text
 tui_gateway/methods_profiles.py:21-30  def _profile_handler(name: str, code: int):
@@ -921,12 +923,12 @@ tui_gateway/methods_profiles.py:475  if len(json.dumps(incoming)) > 65536: retur
 `:574` configure 的 config 段）—— 这不是遗漏，而是**诚实的不一致**：`set_asset`/`get_asset`/`ui_meta`/`model`
 直接读写 `profile_dir`（它们的目标本来就是"那个 profile 的目录"，不依赖 config 解析）。
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 **没有**控制面：mini 的命令面是 argparse 子命令（`gateway run|status|stop|hooks` + `profile create|list|show`），
 没有 ws/HTTP 服务、没有方法表、没有"资产"概念。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 **不抄**（B7）：① 基座 —— mini 没有桌面插件这扇门（真实版这条链是"桌面 → ws → 网关"）；
 ② 复杂度 —— 686 行的 RPC 层对 mini 是净负担；③ 没有资产（头像）概念。
@@ -936,9 +938,9 @@ tui_gateway/methods_profiles.py:475  if len(json.dumps(incoming)) > 65536: retur
 
 ---
 
-# §十四 Failure modes —— 四种处置（精译 §11）
+## §十四 Failure modes —— 四种处置（精译 §11）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 四种"坏"对应四种处置，不能互换（表见 §0.5）。这里补三个实现细节：
 
@@ -960,7 +962,7 @@ tui_gateway/methods_profiles.py:475  if len(json.dumps(incoming)) > 65536: retur
 3. **热重载只 park 坏 profile**：`run_profile_reconcile.py:125-129`
    `except MultiplexConfigError as exc: logger.error("[MULTIPLEX] Profile '%s' not served: %s", name, exc)`。
 
-## ② 读 Hermes 的代码（补一条"失败关闭"的消费链）
+### ② 读 Hermes 的代码（补一条"失败关闭"的消费链）
 
 ```text
 agent/secret_scope.py:162          raise UnscopedSecretError(...)                     ← 抛
@@ -971,13 +973,13 @@ gateway/platforms/base.py:4361-4376  build_source 捕 ProfileRouteRejected → s
 gateway/run_adapters.py:1430-1437    _stamp_routed_profile 捕到 → return False（不丢弃，交给上层）
 ```
 
-## ③ mini 的实现（当前）
+### ③ mini 的实现（当前）
 
 `authz.py` 的四层默认拒绝（第 7 章）**不覆盖**这些：mini 没有 `MultiplexConfigError` 等价物
 （`grep "Multiplex"` 零命中），没有"启动期配置错 → 中止"这条路径，也没有"拒绝 → 丢弃"这条链
 （因为还没有路由表）。
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 - **"配置错 → 启动中止"这条原则值得抄**（落在 A3 的守卫里）：mini 现在的 `--multiplex` 即使配得毫无意义
   （只有一个 home）也照样"启动成功"。抄法：守卫给出 blocker 就**降级 standalone + 记状态**，
@@ -988,9 +990,9 @@ gateway/run_adapters.py:1430-1437    _stamp_routed_profile 捕到 → return Fal
 
 ---
 
-# §十五 Known limitations —— 还没 profile 化的进程级状态（精译 §12）
+## §十五 Known limitations —— 还没 profile 化的进程级状态（精译 §12）
 
-## ① Hermes 怎么做的
+### ① Hermes 怎么做的
 
 原文五行表（MCP 发现 / `TERMINAL_*` / 内置工具注册表 / provider·能力注册表 / HTTP 监听·relay·进程锁）。
 **其中一行已经被修掉了**：MCP 发现槽位现在**按 profile home 分桶**：
@@ -1010,7 +1012,7 @@ hermes_cli/mcp_startup.py:12-17   # "Discovery slot per profile home (``hermes_h
 **MCP 注册表作用域与 `check_fn` 缓存键都跟随这个判据**（*"so a served profile's view never aliases the
 launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分家"是**显式对齐**过的。
 
-## ② mini 的实现（当前）
+### ② mini 的实现（当前）
 
 | 面 | 真实 | mini |
 |---|---|---|
@@ -1020,7 +1022,7 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 | `check_fn` 缓存 | 按 `hermes_home_key()` 分键 | **不分键** ← 真隐患（缺口 #7，A10 解决） |
 | 监听/relay/进程锁 | 一进程一份 | 进程锁 ✅（mini 有 PID 指纹） |
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 唯一的真问题是 **`check_fn` 缓存不分键** —— 它现在没爆是因为 mini 的 `check_fn` 只查"这台机器有没有
 `bash`/`grep`"这类**与 profile 无关**的事实。但 mini 的第 4 章已经给了 `check_fn` 一个**带 state 的**
@@ -1029,22 +1031,22 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 
 ---
 
-# §十六 Non-goals（精译 §13）
+## §十六 Non-goals（精译 §13）
 
-## ① 原文的边界声明（翻译要点的三句）
+### ① 原文的边界声明（翻译要点的三句）
 
 - 多路复用隔离的是 **profile**，**不负责认证或授权"终端用户"**；
 - **一个 profile 是一份配置，不是一个人**：网关**信任传输层与路由表**决定事件归属；
 - **请求级身份**与**profile 层之上的按用户授权**不在本文范围。
 
-## ②/③ Hermes 与 mini 各自把这件事放在哪
+### ②/③ Hermes 与 mini 各自把这件事放在哪
 
 | | 授权层 | 位置 |
 |---|---|---|
 | Hermes | 四层 `authz_mixin`（平台全放行 → 平台白名单 → 私聊配对 → 全局放行 → **默认拒**）+ 每 profile 一份 `PairingStore` | `gateway/authz_mixin.py`、`gateway/pairing.py:318` |
 | mini | 四层默认拒绝（第 7 章）＋**单一**配对白名单 | `gateway/authz.py` |
 
-## ④ mini 为什么没做成这样 / 值不值得改
+### ④ mini 为什么没做成这样 / 值不值得改
 
 这节**不是机制，是边界**：mini 照抄它的价值在于**别把安全责任放错层** ——
 "多路复用让两个 profile 不串味"≠"同一 profile 里两个用户不串味"。
@@ -1052,11 +1054,11 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 
 ---
 
-# §十七 差距清单（= 本章实现清单）
+## §十七 差距清单（= 本章实现清单）
 
 > 状态列：`⬜` 待做（本章）/ `✅` 已完成 / `⏭` 不做（附理由）。实现完成后逐条回填 commit 与收据。
 
-## A 批 · 要抄（13 条）
+### A 批 · 要抄（13 条）
 
 | # | 条目 | 真实出处 | 落点 | 规模 | 状态 |
 |---|---|---|---|---|---|
@@ -1076,7 +1078,7 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 
 **A 批合计：~630 行代码 + ~180-250 行测试（新增测试组 18~22）**
 
-## B 批 · 不抄（11 条，理由见 `/tmp/ch09-checklist.md`）
+### B 批 · 不抄（11 条，理由见 `/tmp/ch09-checklist.md`）
 
 | # | 条目 | 不抄理由（三类） |
 |---|---|---|
@@ -1092,14 +1094,14 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 | B10 | 句柄打开退避 + JSONL 降级 | ① 基座（无 live-system guard） |
 | B11 | 终端作用域桥（`tools/terminal_scope.py`） | ① 基座（无沙箱后端） |
 
-## mini 自身的两件（本章顺手修）
+### mini 自身的两件（本章顺手修）
 
 | # | 问题 | 证据 | 状态 |
 |---|---|---|---|
 | M1 | **真 bug**：`self._last_active_key` 无赋值点，只在 `run_turn.py:181/186` 被读 → 网关里一旦审批就 `AttributeError` | `grep -rn _last_active_key` 只有两处读 | ⬜ 本章"真问题"候选 |
 | M2 | `--multiplex` 半成品语义（只设标志 + 横幅） | `run.py:190/191/255` | ⬜ 由 A5/A6/A7 解决 |
 
-## 实现顺序建议（依赖决定）
+### 实现顺序建议（依赖决定）
 
 ```text
 第一批（地基）：A1 → A3+A4（守卫要三态）           A9+A13（同一根因：进程环境不是 profile 存储）
@@ -1111,7 +1113,7 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 
 ---
 
-# 附录 A · 真实侧常量与函数索引（本章用到的）
+## 附录 A · 真实侧常量与函数索引（本章用到的）
 
 | 文件:行号 | 名字 | 一句话 |
 |---|---|---|
@@ -1140,7 +1142,7 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 | `hermes_cli/mcp_startup.py:12-17` | MCP 发现按 home 分桶 | #67605（已修） |
 | `hermes_cli/env_loader.py:340`、`hermes_cli/config.py:1595/2586` | 三处相邻缝 | §六 |
 
-# 附录 B · 文档矩阵（本仓三份 + 笔记）
+## 附录 B · 文档矩阵（本仓三份 + 笔记）
 
 | 精译节 | 讲解节 | 清单条目 | 取证笔记 |
 |---|---|---|---|
@@ -1159,7 +1161,7 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 | §12 Known limitations | §十五 | A10（check_fn 分键） | `notes-mini.md` §3 + `mcp_startup.py` |
 | §13 Non-goals | §十六 | —（边界） | — |
 
-# 附录 C · 上游文档出入
+## 附录 C · 上游文档出入
 
 本章共 **6 处**，完整表格与证据在《中文精译-09》附录 C（① `profiles_to_serve` 的 allowlist 参数不存在 ·
 ② `SecondaryPortBindingConfigError` 无此类 · ③ 限制表 MCP 那条已被 #67605 修掉 · ④ `runtime_status.json`
