@@ -16,7 +16,26 @@
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 14 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
 | 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试**（该章交付时点；现为 214 条） · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
-| 8 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-08-GatewaySessionLifecycle.md》《源码讲解-08-GatewaySessionLifecycle.md》 |
+| 8 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-07b-GatewaySessionLifecycle.md》《源码讲解-07b-GatewaySessionLifecycle.md》 |
+
+## 章族表（★ 章号怎么数）
+
+网关那条线做了三篇，但它们是**同一根主线的三次深入**（长什么样 → 两轮之间什么还在 →
+一个进程服务多个 profile），所以按「**一章 + 扩展**」记，扩展**不占章号**：
+
+| 主线章号 | 内容 | 文件 | 标签 |
+|---|---|---|---|
+| **第 7 章 · 网关（主线）** | `gateway-internals` | `中文精译-07-…` / `源码讲解-07-…` | `ch07-gateway` |
+| └ 扩展 **7.1**（旧称第 8 章） | `gateway-session-lifecycle` | `中文精译-07b-…` / `源码讲解-07b-…` | `ch08-gateway-session-lifecycle` |
+| └ 扩展 **7.2**（旧称第 9 章） | `multiplexing-gateway` | `中文精译-07c-…` / `源码讲解-07c-…` | `ch09-multiplexing-gateway` |
+| **第 8 章（下一章）** | `provider-runtime` | `中文精译-08-…` / `源码讲解-08-…` | `ch08-provider-runtime` |
+
+三条规则：
+
+- **章号 = 主线计数**（扩展用 `7.1 / 7.2`，不占号）；
+- **文件编号 = 全局序**：`07b` / `07c` 表示"它属于第 7 章的家族"；下一章仍叫 `-08-`；
+- **标签名不重打**（`ch08-*` / `ch09-*` 是那两个扩展的历史标签，改它会打断旧引用）；
+  正文里对旧称（"第 8 章 / 第 9 章"）的说法保留，读到时认成 `7.1 / 7.2` 即可。
 
 ## 章节顺序（★ 官方有**两份**口径，别混）
 
@@ -28,7 +47,7 @@
 | **B · 目录顺序** | `website/sidebars.ts` 的 Architecture 分组（14 项）+ Extending 分组 | **侧边栏罗列顺序**（就是目录树顺序，涵盖全部 49 篇） |
 
 **我们实际走的**：第 2~7 章按"主线优先"自己排（方向与 A 一致，顺序不同：A 把 provider-runtime 排第 4，
-我们放到了后面）；**第 8 章起按 B**（用户 2026-10-09 要求看官方推荐顺序，采用的位次口径）。
+我们放到了后面）；**第 8 章起按 B**（用户 2026-10-09 要求看官方推荐顺序，采用的位次口径）——注意章号按上面的**章族表**数：网关那三篇 = 第 7 章 + 扩展 7.1/7.2。
 
 ### A · Recommended Reading Order（官方"入门 10 篇"）的进度
 
@@ -507,7 +526,7 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > - 第 7 章的两处**语义错**：`shutdown()` 结束所有会话（→ 进程退出不是对话边界）、
 >   `shutdown()` 给所有会话 `touch()`（→ 废掉了恢复的 120 秒窗口）。两处都有断言守着。
 >
-> **本章新挂的**（详见《源码讲解-08》§十三）：
+> **本章新挂的**（详见《源码讲解-07b》§十三）：
 > - **主动续跑**（恢复第 ④ 步）—— 要先给 `AIAgent` 加"没有用户消息也能起轮"的入口（第 2 章），成本高；
 > - **stall 看门狗**（`HERMES_SESSION_STALL_TIMEOUT`，默认 300s）—— 要先给 agent 加 activity summary；
 > - **老记录剪枝**（`prune_old_entries`）—— 要在存储层做（第 6 章），当前只抄了开关语义 + 诚实记债。

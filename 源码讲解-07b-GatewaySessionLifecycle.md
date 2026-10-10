@@ -1,4 +1,4 @@
-# 源码讲解 · 第 8 章：网关会话生命周期（Gateway Session Lifecycle）
+# 源码讲解 · 第 7 章 · 扩展 7.1（旧称第 8 章）：网关会话生命周期（Gateway Session Lifecycle）
 
 > **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
 > **真实源码**：`$HOME/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
@@ -1361,7 +1361,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 | ④ | 文档说 `suspended` 由 **`/stop`** 设置 —— **实测不成立**：`/stop` 走的是 `_interrupt_and_clear_session`（打断 + 清队列），全仓 grep `suspend_session(` 的产品级调用点**只有 evals**；挂起实际只由卡死升级设置 | `gateway/session_lifecycle.py:107`（定义）+ 全仓调用点 |
 | ⑤ | 文档**没写**的三件事：① `get_or_create_session` 是**单飞**的（同 key 并发共享 owner 结果 + 阻塞 IO 全在锁外）；② **stall 看门狗**（`run_watchers.py:77-80`，`HERMES_SESSION_STALL_TIMEOUT` 默认 300，只看 `get_activity_summary()`）；③ 计数**不是只加不减**（挂起后清空 + 会话跑完清自己那条） | `gateway/session.py` / `run_watchers.py:234` / `run.py` 注释 |
 
-★ ①②③ 已记在《中文精译-08》附录 C；本文补上 ④⑤（都是**实现期读源码**才发现的）。
+★ ①②③ 已记在《中文精译-07b》附录 C；本文补上 ④⑤（都是**实现期读源码**才发现的）。
 
 
 

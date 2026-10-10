@@ -1,4 +1,4 @@
-# 中文精译 · 第 9 章：多路复用网关（Multiplexing Gateway）
+# 中文精译 · 第 7 章 · 扩展 7.2（旧称第 9 章）：多路复用网关（Multiplexing Gateway）
 
 > **原文**：`website/docs/developer-guide/multiplexing-gateway.md`（228 行，官方 Developer Guide **第 11 位**，
 > 紧跟第 8 章的 `gateway-session-lifecycle`）。
@@ -8,9 +8,9 @@
 >
 > 📌 行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`）；上游每合并一个 PR 行号就会漂。
 > 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 **6 处**，见附录 C）。
-> 🔗 各节原本附的 `【源码】要点` 已整体搬进《源码讲解-09-MultiplexingGateway.md》（节号一一对应）；本篇只做翻译。
+> 🔗 各节原本附的 `【源码】要点` 已整体搬进《源码讲解-07c-MultiplexingGateway.md》（节号一一对应）；本篇只做翻译。
 > 🧭 原文是**维护者设计说明**（通篇模块名/类名/issue 号），所以译文**先给白话**，
-> 逐字标识符与 issue 号收进《源码讲解-09》的【源码要点】；译文只把 issue 号降为「出处」一行。
+> 逐字标识符与 issue 号收进《源码讲解-07c》的【源码要点】；译文只把 issue 号降为「出处」一行。
 
 [TOC]
 

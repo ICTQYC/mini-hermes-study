@@ -1,4 +1,4 @@
-# 中文精译 · 第 8 章：网关会话生命周期（Gateway Session Lifecycle）
+# 中文精译 · 第 7 章 · 扩展 7.1（旧称第 8 章）：网关会话生命周期（Gateway Session Lifecycle）
 
 > **原文**：`website/docs/developer-guide/gateway-session-lifecycle.md`（621 行，官方 Developer Guide **第 10 位**，
 > 紧跟第 7 章的 `gateway-internals`）。

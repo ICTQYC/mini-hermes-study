@@ -1,4 +1,4 @@
-# 源码讲解 · 第 9 章：多路复用网关（Multiplexing Gateway）
+# 源码讲解 · 第 7 章 · 扩展 7.2（旧称第 9 章）：多路复用网关（Multiplexing Gateway）
 
 > **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
 > **真实源码**：`$HOME/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
@@ -1273,7 +1273,7 @@ mini 侧（§九/§十/§十一/§十二 正文未逐条列出者）：
 
 ## 附录 C · 上游文档出入
 
-本章共 **6 处**，完整表格与证据在《中文精译-09》附录 C（① `profiles_to_serve` 的 allowlist 参数不存在 ·
+本章共 **6 处**，完整表格与证据在《中文精译-07c》附录 C（① `profiles_to_serve` 的 allowlist 参数不存在 ·
 ② `SecondaryPortBindingConfigError` 无此类 · ③ 限制表 MCP 那条已被 #67605 修掉 · ④ `runtime_status.json`
 实为 `gateway_state.json` · ⑤ "二级启用占端口平台 = 启动即致命"语义错位 · ⑥ 父链是单跳不是多级）。
 本文 §十二/§十四 已把 ②⑤ 讲透，§十五 讲了 ③，§五/§七 引了 ④ 的落点。

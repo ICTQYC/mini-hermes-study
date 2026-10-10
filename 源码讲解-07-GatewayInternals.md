@@ -291,7 +291,7 @@ Hermes 的做法拆成五条，每条对应防住上面哪一种错：
 第 1 级在**适配器**里（`gateway/platforms/base.py`）：
 
 - `_active_sessions[session_key]` = 这个会话的锁（`guard` Event，`:1884-1885`、`:3610`）；
-- `_pending_messages` = 忙时消息的去处（★ **第 8 章改成单槽**：后到覆盖先到 + 覆盖通知；`/queue` 显式排的进**溢出 FIFO**。见《源码讲解-08》§六）；
+- `_pending_messages` = 忙时消息的去处（★ **第 8 章改成单槽**：后到覆盖先到 + 覆盖通知；`/queue` 显式排的进**溢出 FIFO**。见《源码讲解-07b》§六）；
 - `_session_tasks[session_key]` = **谁是主**（owner task，`:3611-3615`）。
 
 放锁与陈旧检测（`:3583` 与 `:3585-3589`，逐字）：
