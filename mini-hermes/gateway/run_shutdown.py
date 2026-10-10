@@ -86,7 +86,10 @@ class ShutdownMixin:
         from gateway import status as gw_status
         try:
             if self.pid:
-                gw_status.write_runtime_status(self.home, "stopped", pid=self.pid)
+                # ★ 带上裁决栏：`write_runtime_status` 是全量写，不带就等于把
+                #   "为什么多路复用/为什么没多路复用"从状态文件里抹掉（真跑实测踩过）。
+                gw_status.write_runtime_status(self.home, "stopped", pid=self.pid,
+                                               **getattr(self, "_multiplex_status_fields", {}))
             # ★ 第 8 章：**优雅关闭的末尾**写下"干净退出"标记 ——
             #   下次启动据此跳过崩溃恢复（否则每次 `restart` 都会被当成被打断的）。
             #   只在退出码 0 时写：启动失败（78）不是"干净退出"。

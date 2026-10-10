@@ -29,6 +29,9 @@ from typing import Any, Dict, List, Optional
 
 from hermes_constants import get_mini_home
 
+# 已经打过"跳过进程级 .env 加载"日志的 home（真实版同名集合 `_SCOPED_SKIP_LOGGED`）
+_SCOPED_SKIP_LOGGED: set = set()
+
 # provider 注册表：名字 → 默认端点和默认模型
 PROVIDER_REGISTRY: Dict[str, Dict[str, Any]] = {
     "deepseek": {
@@ -102,13 +105,57 @@ def env_file_candidates() -> List[Path]:
     return out
 
 
+def _multiplex_dotenv_boundary_active() -> bool:
+    """当前是否处在"多路复用的 profile-home 覆盖"之下（真实版 `env_loader.py:340` 的判据）。
+
+    判据就是真实版那一行：`is_multiplex_active() and get_hermes_home_override() is not None` ——
+    **两个条件都要**：
+
+    * 只开着多路复用、但没有覆盖 ⇒ 这是**启动期**的进程级加载，**照旧**（否则默认 profile 自己的
+      `.env` 都读不进来，网关起不来）；
+    * 有覆盖 ⇒ 说明正"替某个 profile 干活"，此刻把它的 `.env` 灌进进程环境就是泄漏。
+
+    ★ 日志只打一次（每个 home 一条）：import 期 / 每回合都会走到这里，不节流会刷屏
+      （真实版同名集合 `_SCOPED_SKIP_LOGGED`）。
+    """
+    try:
+        from agent.secret_scope import multiplex_active
+        from hermes_constants import current_home_override
+    except Exception:                        # 老代码 / 极早期 import：按"没有边界"处理
+        return False
+    if not multiplex_active():
+        return False
+    override = current_home_override()
+    if not override:
+        return False
+    key = str(override)
+    if key not in _SCOPED_SKIP_LOGGED:
+        _SCOPED_SKIP_LOGGED.add(key)
+        print(f"[mini] 多路复用：跳过进程级 .env 加载（home={key}）"
+              f"—— 该 profile 的凭据只经作用域解析")
+    return True
+
+
 def load_env_file(path: Optional[Path] = None) -> List[Path]:
     """把密钥文件里的键读进 os.environ（**不覆盖已存在的环境变量**）。
 
     真实环境变量永远优先于文件 —— 这样 CI / 容器里能直接覆盖，不用改文件。
 
     返回：实际读到并生效的文件列表（好让调用方/测试能断言读了哪个）。
+
+    ★ **多路复用边界**（对应真实版 `hermes_cli/env_loader.py:334-350`，逐字）：
+
+        Multiplex gateway: while a routed profile-home override is active, copying that profile's
+        .env into os.environ would expose its credentials to sibling turns and every spawned child.
+        Unscoped startup loads keep the normal path; external sources still refresh against the
+        profile mapping.
+
+      即：**有 profile-home 覆盖在生效时，这里直接跳过进程级加载并返回 `[]`**。
+      为什么必须在**加载器**这一层挡：fail-closed（`get_secret`）管的是"读"，管不了"灌" ——
+      一旦别人的 .env 已经进了 `os.environ`，任何读 `os.environ` 的代码（包括子进程）都绕过了作用域。
     """
+    if _multiplex_dotenv_boundary_active():
+        return []
     candidates = [path] if path is not None else env_file_candidates()
     used: List[Path] = []
 

@@ -39,13 +39,17 @@ from hermes_cli.profiles import profiles_to_serve, profiles_root
 class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMixin, WatchersMixin):
     def __init__(self, *, home: Optional[Path] = None, provider: str = "deepseek",
                  model: Optional[str] = None, profile: Optional[str] = None,
-                 multiplex: bool = False, max_turns: int = 200, debug: bool = False,
+                 multiplex: Optional[bool] = None, max_turns: int = 200, debug: bool = False,
                  authz: Optional[GatewayAuthz] = None, adapters: Optional[List[Any]] = None,
                  approval_timeout: float = 60.0, echo: bool = True,
                  memory_high_mb: Optional[float] = None):
         self.home = Path(home) if home else get_mini_home()
         self.profile = profile
+        # ★ 三态（真实版 `gateway.multiplex_profiles: Optional[bool] = None`）：
+        #   None = **未设置**（等 start() 里跑预检裁决）；True/False = 有人已经定了。
+        #   这里只存原始值；裁决结果落在 `self.multiplex_decision` 与 `self.multiplex`。
         self.multiplex = multiplex
+        self.multiplex_decision = None
         self.provider = provider
         self.model = model
         self.max_turns = max_turns
@@ -170,11 +174,32 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
                          f"（EX_CONFIG）—— 监督者据此**不要重启**。")
             return gw_status.GATEWAY_FATAL_CONFIG_EXIT_CODE
 
+        # ── 多路复用裁决（对应真实版 `hermes_cli/gateway_multiplex_mode.py`）──
+        #   ★ 位置很讲究：必须**在写身份/状态文件之前** ——
+        #     ① 状态文件里那一栏 `multiplex` 要写**裁决后**的值（不是 `None`）；
+        #     ② `guard` 的拦截理由也要一起落盘（`multiplex_standalone_reason`），
+        #        运维才能在 `gateway status` 里看到"它为什么没多路复用"。
+        from gateway.multiplex_mode import (log_multiplex_decision,
+                                            multiplex_status_fields,
+                                            record_multiplex_decision,
+                                            resolve_multiplex_mode)
+
+        self.multiplex_decision = resolve_multiplex_mode(self.multiplex)
+        self.multiplex = self.multiplex_decision.enabled
+        # ★ 这几栏要**跟着每一次状态写**（`write_runtime_status` 是全量写，不带就被抹掉）
+        self._multiplex_status_fields = multiplex_status_fields(self.multiplex_decision)
+        log_multiplex_decision(self.multiplex_decision)
+        # 密钥读取的 fail-closed 开关按**裁决结果**打开（真实版在 __init__ 里做同一件事）
+        set_multiplex_active(self.multiplex)
+
         self.pid = os.getpid()
         self._pid = self.pid
         gw_status.write_pid_record(self.home, self.pid)
         gw_status.write_runtime_status(self.home, "running", pid=self.pid,
-                                      profile=self.profile, multiplex=self.multiplex)
+                                      profile=self.profile,
+                                      # ★ `_multiplex_status_fields` 里**已经**含 `multiplex` 这一栏，
+                                      #   这里不许再单独传一次（重复关键字参数会让网关起不来 —— 实测踩过）
+                                      **getattr(self, "_multiplex_status_fields", {}))
 
         # ── 第 8 章：启动恢复（真实版 gateway/run_startup.py 的四步）──
         #    ★ 顺序要求：在"身份文件写好之后"（恢复要用 home）、"适配器连上之前"
@@ -186,9 +211,10 @@ class GatewayRunner(InboundMixin, TurnMixin, ShutdownMixin, StartupMixin, BusyMi
         #    先等 60 秒再开工（真实版同）：刚起来这会儿正在做恢复、连适配器，别抢缓存锁。
         self._start_housekeeping()
 
-        # ── 多路复用：一个进程服务多个 profile，密钥读取转 fail-closed ──
-        set_multiplex_active(self.multiplex)
+        # ── 多路复用：服务集合 + 裁决落盘 ──
+        #   fail-closed 开关已在裁决处打开；这里只做两件"读到谁、记下谁"的事。
         self.served_homes = profiles_to_serve(self.multiplex)
+        record_multiplex_decision(self.home, self.multiplex_decision)
 
         # ── 钩子：**在调用时**解析当前 home 的 hooks 目录 ──
         loaded = self.hooks.discover_and_load()

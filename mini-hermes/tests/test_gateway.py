@@ -633,11 +633,19 @@ def test_profiles_to_serve_and_gateway_status():
             pathlib.Path.home = real_home
 
         with fake_agent():
-            runner, src, key = _runner(mini_home)
+            # ★ 第 9 章：三态里的"显式关"。不给这个参数时是 `None` = **未设置** →
+            #   启动期预检裁决（本机有 2 个 profile 时会**默认开**，这是对齐真实版的行为）。
+            #   要断言"没开就不该提"，就得**显式钉死**。
+            runner, src, key = _runner(mini_home, multiplex=False)
             text = runner.status_text()
             check("网关 status 文本含 home / 存活 / 状态记录",
                   "home" in text and "状态记录" in text, text)
-            check("不多路复用时**不**列 profile（没开就不该提）", "服务 profile" not in text)
+            check("显式 --no-multiplex 时**不**列 profile（没开就不该提）", "服务 profile" not in text)
+            check("显式关 → 裁决 source=config 且 enabled=False",
+                  runner.multiplex_decision is not None
+                  and runner.multiplex_decision.source == "config"
+                  and runner.multiplex_decision.enabled is False,
+                  runner.multiplex_decision)
             runner.shutdown()
 
 
@@ -1274,6 +1282,212 @@ def test_housekeeping_tick_prune_switch_and_thread():
             runner.shutdown()
 
 
+def test_multiplex_mode_three_states_and_preflight():
+    """★ 第 9 章 A1+A3+A4：开关的**三态**、预检三条、裁决不许致命、裁决理由落盘。
+
+    为什么值得单独守：**"默认开"必须配预检**。没有它，一次安装里两个进程会去抢同一个
+    bot token —— 那不是报错，是**间歇性错乱**（真实版 `gateway_multiplex_mode.py:75-107`）。
+
+    三态的意义（真实版 `gateway/config.py:552` 逐字：*"a request the gateway settles at boot,
+    not a verdict"*）：`None` = 待裁决、`True/False` = 有人已经定了。
+    """
+    from unittest import mock
+
+    import gateway.multiplex_mode as mm
+    from gateway import status as gw_status
+    from hermes_cli import profiles as prof
+
+    env_key = mm.MULTIPLEX_ENV_VAR
+    saved = os.environ.get(env_key)
+    try:
+        os.environ.pop(env_key, None)
+        # ── 三态与词表 ──
+        decision = mm.resolve_multiplex_mode(True)
+        check("显式 True → source=config（显式值永不复核）",
+              decision.enabled is True and decision.source == "config", str(decision))
+        os.environ[env_key] = "   "
+        check("空白 env ≠ False（部署占位不算覆盖）", mm.env_multiplex_override() is None)
+        os.environ[env_key] = "On"
+        decision = mm.resolve_multiplex_mode(None)
+        check("env=On → config（大小写无关）",
+              decision.enabled is True and decision.source == "config", str(decision))
+        os.environ[env_key] = "nope"
+        check("未识别的词 → None（回落到下一道来源）", mm.env_multiplex_override() is None)
+        os.environ.pop(env_key, None)
+        check("bool_token 只认词表",
+              mm.bool_token("0") is False and mm.bool_token("yes") is True
+              and mm.bool_token("") is None)
+
+        with temp_profiles_home() as default_home:
+            (prof.profiles_root() / "coder").mkdir(parents=True, exist_ok=True)
+            (prof.profiles_root() / "writer").mkdir(parents=True, exist_ok=True)
+            served = prof.profiles_to_serve(multiplex=True)
+            check("服务集合：默认排第一 + 两个具名 profile",
+                  len(served) == 3 and served[0] == default_home,
+                  str([p.name for p in served]))
+
+            check("预检 ②：只有一个 home → 不白开（fail-closed 对它毫无用处）",
+                  mm.implicit_multiplex_blocker(served=[default_home]) == mm.SINGLE_PROFILE_REASON)
+            blocker = mm.implicit_multiplex_blocker(served=served, active="coder")
+            check("预检 ①：非默认 profile 自己的网关 → 拦下",
+                  blocker is not None and "profile 'coder'" in str(blocker), str(blocker))
+            with mock.patch("gateway.status.live_gateway_pid_for_home", return_value=987654):
+                blocker = mm.implicit_multiplex_blocker(served=served, active="default",
+                                                        own_pid=os.getpid())
+            check("预检 ③：有 secondary 还在跑 → 拦下并点名 pid",
+                  blocker is not None and "'coder' (pid 987654)" in str(blocker), str(blocker))
+
+            with mock.patch("gateway.status.live_gateway_pid_for_home", return_value=None):
+                check("三条都没拦 → 可以开", mm.implicit_multiplex_blocker(served=served) is None)
+                decision = mm.resolve_multiplex_mode(None)
+                check("未设置 + 预检过 → default（开）",
+                      decision.enabled is True and decision.source == "default", str(decision))
+
+                # ── 真网关端到端：裁决进 start()，落进状态文件与服务集合 ──
+                with fake_agent():
+                    runner, src, key = _runner(default_home)      # 不给 multiplex = **未设置**
+                    check("网关按裁决开启多路复用（不是 None）",
+                          runner.multiplex is True
+                          and runner.multiplex_decision is not None
+                          and runner.multiplex_decision.source == "default",
+                          str(runner.multiplex_decision))
+                    check("served_homes = 裁决后的服务集合",
+                          len(runner.served_homes) == 3,
+                          str([p.name for p in runner.served_homes]))
+                    payload = gw_status.read_runtime_status(
+                        gw_status.state_file(default_home)) or {}
+                    check("状态文件记下裁决（非 guard → standalone 原因为空）",
+                          payload.get("multiplex") is True
+                          and payload.get("multiplex_source") == "default"
+                          and payload.get("multiplex_standalone_reason") is None, str(payload))
+                    check("★ 记裁决不能抹掉别人写的字段（state / pid 还在）",
+                          payload.get("state") == "running" and payload.get("pid") == os.getpid())
+                    runner.shutdown()
+                    # ★ 真跑逼出来的不变量：`write_runtime_status` 是**全量写**，
+                    #   关机写 `stopped` 时若不带上裁决栏，状态文件里就查不到
+                    #   "它为什么多路复用/为什么没多路复用"了（实测踩过）。
+                    after = gw_status.read_runtime_status(
+                        gw_status.state_file(default_home)) or {}
+                    check("★ 关机写 stopped 之后，裁决栏仍然在（全量写不许抹掉它）",
+                          after.get("state") == "stopped"
+                          and after.get("multiplex") is True
+                          and after.get("multiplex_source") == "default", str(after))
+
+            # ── guard：理由必须落盘；预检崩了不许把网关带走 ──
+            mm.record_multiplex_decision(default_home,
+                                         mm.MultiplexDecision(False, "guard", "有人还在跑"))
+            payload = gw_status.read_runtime_status(gw_status.state_file(default_home)) or {}
+            check("guard → 写 multiplex_standalone_reason（运维查得到为什么没开）",
+                  payload.get("multiplex_standalone_reason") == "有人还在跑", str(payload))
+            with mock.patch("gateway.multiplex_mode.implicit_multiplex_blocker",
+                            side_effect=RuntimeError("boom")):
+                decision = None
+                escaped = None
+                try:
+                    decision = mm.resolve_multiplex_mode(None)
+                except Exception as exc:              # ★ 兜住：若把兜底删掉，
+                    escaped = exc                     #   这一条要"可诊断地红"，
+            check("预检抛异常 → guard（a broken preflight must not take the gateway down）",
+                  escaped is None and decision is not None and decision.enabled is False
+                  and decision.source == "guard" and "预检失败" in decision.reason,
+                  f"escaped={escaped!r} decision={decision}")
+    finally:
+        if saved is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = saved
+
+
+def test_secret_whitelist_and_dotenv_boundary():
+    """★ 第 9 章 A9+A13：密钥的**全局白名单**（管"读"）与 dotenv 的**多路复用边界**（管"灌"）。
+
+    两件事同一根因：**进程环境不是 profile 的存储**。
+    没有白名单 → 多路复用下读 `PATH` 会抛、或拿到空值；
+    没有加载边界 → 别人的 `.env` 会先进 `os.environ`，之后任何读进程环境的代码都绕过作用域。
+    """
+    from agent import secret_scope as ss
+
+    with temp_profiles_home() as default_home:
+        saved_path = os.environ.get("PATH")
+        saved_openai = os.environ.get("OPENAI_API_KEY")
+        os.environ["PATH"] = "/usr/bin:/bin"
+        # ★ 这个键**故意**在进程环境里放一个值：只有这样，"作用域未命中 → 返回 default"
+        #   才能和"作用域未命中 → 回落 os.environ"区分开（反向验证 ⑩ 抓到的缺口）。
+        os.environ["OPENAI_API_KEY"] = "sk-process"
+        ss.set_multiplex_active(True)
+        try:
+            token = ss.set_secret_scope({"DEEPSEEK_API_KEY": "sk-profile"})
+            check("白名单键（PATH）在有作用域时读**进程真值**",
+                  ss.get_secret("PATH") == "/usr/bin:/bin")
+            check("白名单键（MINI_HOME）同样豁免",
+                  ss.get_secret("MINI_HOME") == os.environ.get("MINI_HOME"))
+            check("作用域里的凭据 → 读作用域", ss.get_secret("DEEPSEEK_API_KEY") == "sk-profile")
+            check("作用域未命中 → 返回 default（**不**回落 os.environ —— 进程里明明有 sk-process）",
+                  ss.get_secret("OPENAI_API_KEY", "dflt") == "dflt")
+            ss.reset_secret_scope(token)
+            try:
+                ss.get_secret("DEEPSEEK_API_KEY")
+                check("无作用域 + 多路复用 → 抛 UnscopedSecretError", False)
+            except ss.UnscopedSecretError:
+                check("无作用域 + 多路复用 → 抛 UnscopedSecretError", True)
+            check("凭据键**不在**白名单（MINI_SEARCH_API_KEY）",
+                  ss.is_global_env("MINI_SEARCH_API_KEY") is False)
+            check("★ 没有 `MINI_` 前缀（加它 = 把凭据放行）", ss.GLOBAL_ENV_PREFIXES == ())
+            check("行为设置也不进名单（拿不准就当 profile 密钥）",
+                  ss.is_global_env("MINI_CORE_TOOLS") is False)
+        finally:
+            ss.set_multiplex_active(False)
+            if saved_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = saved_path
+            if saved_openai is None:
+                os.environ.pop("OPENAI_API_KEY", None)
+            else:
+                os.environ["OPENAI_API_KEY"] = saved_openai
+
+        # ── A13：dotenv 加载器的边界（对应真实版 env_loader.py:340-350）──
+        from hermes_cli import runtime_provider as rp
+        from hermes_constants import reset_mini_home_override, set_mini_home_override
+
+        env_file = default_home / "fake.env"
+        env_file.write_text("MINI_T_LEAK=leaked\n", encoding="utf-8")
+        saved_env_file = os.environ.get("MINI_ENV_FILE")
+        os.environ["MINI_ENV_FILE"] = str(env_file)
+        os.environ.pop("MINI_T_LEAK", None)
+        try:
+            used = rp.load_env_file()
+            check("没有边界时照旧加载（启动期要能读默认 profile 的 .env）",
+                  used == [env_file] and os.environ.get("MINI_T_LEAK") == "leaked", str(used))
+
+            os.environ.pop("MINI_T_LEAK", None)
+            ss.set_multiplex_active(True)
+            rp._SCOPED_SKIP_LOGGED.clear()
+            token = set_mini_home_override(str(default_home / "profiles" / "coder"))
+            try:
+                used = rp.load_env_file()
+            finally:
+                reset_mini_home_override(token)
+            check("多路复用 + 有 profile-home 覆盖 → **跳过**进程级加载",
+                  used == [] and "MINI_T_LEAK" not in os.environ, str(used))
+            check("跳过只记一次（每个 home 一条，不刷屏）", len(rp._SCOPED_SKIP_LOGGED) == 1)
+
+            # ★ 边界是"**两个条件都要**"：多路复用开着但**没有** home 覆盖 = 启动期那道加载，
+            #   必须照旧 —— 否则默认 profile 自己的 .env 都读不进来，网关根本起不来。
+            os.environ.pop("MINI_T_LEAK", None)
+            used = rp.load_env_file()
+            check("多路复用开着但**没有** home 覆盖 → 照旧加载（启动期）",
+                  used == [env_file] and os.environ.get("MINI_T_LEAK") == "leaked", str(used))
+            os.environ.pop("MINI_T_LEAK", None)
+            ss.set_multiplex_active(False)
+        finally:
+            if saved_env_file is None:
+                os.environ.pop("MINI_ENV_FILE", None)
+            else:
+                os.environ["MINI_ENV_FILE"] = saved_env_file
+            os.environ.pop("MINI_T_LEAK", None)
+
+
 GROUPS = [
     ("1. 会话键", "唯一来源 · 布局 · 退路", [test_session_key_is_single_source]),
     ("2. 命名空间", "默认 main / 真名 main → main~", [test_namespace_and_main_tilde]),
@@ -1302,6 +1516,10 @@ GROUPS = [
     ("17. 缓存与巡检（★ 第 8 章）", "命中/轮转必淘汰 · 三条不许淘汰 · 容量 LRU · 压力过线 · tick 与剪枝开关",
      [test_agent_cache_lifecycle_and_three_protections,
       test_housekeeping_tick_prune_switch_and_thread]),
+    ("18. 多路复用开关（★ 第 9 章）", "三态 · 词表 · 预检三条 · 裁决不致命 · 理由落盘 · 端到端",
+     [test_multiplex_mode_three_states_and_preflight]),
+    ("19. 密钥白名单与 dotenv 边界（★ 第 9 章）", "白名单豁免进程键 · 凭据不进名单 · 有覆盖就跳过加载",
+     [test_secret_whitelist_and_dotenv_boundary]),
 ]
 
 

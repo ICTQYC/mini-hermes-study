@@ -208,6 +208,30 @@ def default_home() -> Path:
     return Path.home() / ".mini-hermes"
 
 
+def active_profile_name() -> str:
+    """当前进程是哪个 profile（真实版 `hermes_cli.profiles.get_active_profile_name` 的 mini 版）。
+
+    ★ 判据是 **home 落在哪**，不是"用户敲了哪个参数"：
+      `mini -p lab` 的实现就是把 `MINI_HOME` 指到 `profiles/lab`（`hermes_cli/main.py:115`），
+      所以"当前 profile"完全等价于"`get_mini_home()` 落在 `profiles/` 下的哪一格"。
+      落在别处（默认家 / 临时目录）→ `"default"`。
+
+    ★ 为什么必须**归一成 `"default"`** 而不是返回 None：调用方（多路复用预检、会话键命名空间）
+      要的是"我是不是那个共享网关"这个判断，而 `profiles_to_serve()[0]` 的名字也是 `default`
+      —— 两边用同一个字面量才不会漂（真实版 `implicit_multiplex_blocker` 第一句就是
+      `active = get_active_profile_name() or "default"`）。
+    """
+    from hermes_constants import get_mini_home          # 懒导入：避免与 hermes_constants 成环
+
+    home = Path(get_mini_home()).resolve()
+    root = profiles_root().resolve()
+    try:
+        relative = home.relative_to(root)
+    except ValueError:
+        return "default"
+    return relative.parts[0] if relative.parts else "default"
+
+
 def profiles_to_serve(multiplex: bool = False) -> List[Path]:
     """要服务的 home 列表（对应真实版 `profiles_to_serve(multiplex=True)`）。
 

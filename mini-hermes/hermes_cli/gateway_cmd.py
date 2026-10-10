@@ -40,7 +40,16 @@ def cmd_run(args) -> int:
 
 
 def cmd_status(args) -> int:
-    multiplex = args.multiplex or args.all
+    from gateway.multiplex_mode import default_gateway_multiplexes
+    from hermes_cli.profiles import default_home
+
+    # ★ 三态里的"未设置"时**不猜**：先看活网关记下的 served_profiles，再看显式开关
+    #   （真实版 `default_gateway_multiplexes` 的纪律）。只看命令行旗标的话，
+    #   "网关自己在多路复用"这件事在 status 里看不见。
+    if args.multiplex is None:
+        multiplex = bool(args.all or default_gateway_multiplexes(default_home()))
+    else:
+        multiplex = bool(args.multiplex or args.all)
     found = False
     for home in _homes(multiplex):
         pid = gw_status.live_gateway_pid_for_home(home)
@@ -108,14 +117,20 @@ def add_gateway_parser(sub) -> None:
     r.add_argument("--namespace", default=None,
                    help="会话键里的命名空间（多 profile 并存时区分用；"
                         "home 由全局的 `-p/--profile` 决定）")
-    r.add_argument("--multiplex", action="store_true",
-                   help="一个进程服务多个 profile home（密钥读取转 fail-closed）")
+    r.add_argument("--multiplex", dest="multiplex", action="store_true", default=None,
+                   help="一个进程服务多个 profile home（密钥读取转 fail-closed）；"
+                        "不给 = 三态里的\"未设置\"，由启动期预检裁决")
+    r.add_argument("--no-multiplex", dest="multiplex", action="store_false",
+                   help="显式钉死\"不多路复用\"（覆盖环境变量，也不跑预检）")
     r.add_argument("--debug", action="store_true")
     r.add_argument("--no-echo", dest="echo", action="store_false")
     r.set_defaults(func=cmd_run)
 
     s = g.add_parser("status", help="看网关活着没（PID + 启动时间指纹）")
-    s.add_argument("--multiplex", action="store_true")
+    s.add_argument("--multiplex", dest="multiplex", action="store_true", default=None,
+                   help="按多路复用看（不给 = 问活网关记的 served_profiles）")
+    s.add_argument("--no-multiplex", dest="multiplex", action="store_false",
+                   help="只看当前 profile 自己")
     s.add_argument("--all", action="store_true", help="所有 profile home 都看一遍")
     s.set_defaults(func=cmd_status)
 
