@@ -18,28 +18,60 @@
 | 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试**（该章交付时点；现为 214 条） · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
 | 8 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-08-GatewaySessionLifecycle.md》《源码讲解-08-GatewaySessionLifecycle.md》 |
 
-## 章节顺序（官方侧边栏为准）
+## 章节顺序（★ 官方有**两份**口径，别混）
 
-第 8 章以前我们按"主线优先"自己排；**第 8 章起按官方 Developer Guide 侧边栏的顺序走**
-（`website/sidebars.ts` 里 developer-guide 那一段就是官方推荐阅读序）：
+官方文档里有**两份**"推荐顺序"，用途不同（2026-10-10 核对上游）：
+
+| 口径 | 出处 | 是什么 |
+|---|---|---|
+| **A · 速成 10 篇** | `developer-guide/architecture.md` 的 **Recommended Reading Order** | "如果你刚接触这个代码库"的**入门清单**（10 项，含 provider-runtime / adding-providers / acp-internals） |
+| **B · 目录顺序** | `website/sidebars.ts` 的 Architecture 分组（14 项）+ Extending 分组 | **侧边栏罗列顺序**（就是目录树顺序，涵盖全部 49 篇） |
+
+**我们实际走的**：第 2~7 章按"主线优先"自己排（方向与 A 一致，顺序不同：A 把 provider-runtime 排第 4，
+我们放到了后面）；**第 8 章起按 B**（用户 2026-10-09 要求看官方推荐顺序，采用的位次口径）。
+
+### A · Recommended Reading Order（官方"入门 10 篇"）的进度
 
 ```text
-官方位次  页面                              我们的进度
-  5      agent-loop                        ✅ 第 2 章
-  6      prompt-assembly                   ✅ 第 3 章
-  7      context-compression-and-caching   ✅ 第 5 章
-  8      micro-compaction                  ⬜ 被跳过（第 5 章只讲主线压缩；微压缩是独立支线 406 行）
-  9      gateway-internals                 ✅ 第 7 章
- 10      gateway-session-lifecycle         ✅ 第 8 章（已实现：状态机 / 恢复 / 两层队列 / 缓存 / 巡检）
- 11      multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
- 12      completion-backlog-delivery       ⬜ 52 行（"投递债"—— 第 7 章差距清单里挂着）
- 13      session-storage                   ✅ 第 6 章
- 14      state-db-recovery                 ⬜ 107 行（与第 6 章配对）
- 15      provider-runtime                  ⬜
- 36      tools-runtime                     ✅ 第 4 章
+#  页面                              我们的进度
+1  architecture                       ✅ 第 1 章（读文档，未实现）
+2  agent-loop                         ✅ 第 2 章
+3  prompt-assembly                    ✅ 第 3 章
+4  provider-runtime                   ⬜ ★ 唯一"两份口径都点名、我们都没做"的一篇
+5  adding-providers                   ⬜
+6  tools-runtime                      ✅ 第 4 章
+7  session-storage                    ✅ 第 6 章
+8  gateway-internals                  ✅ 第 7 章
+9  context-compression-and-caching     ✅ 第 5 章
+10 acp-internals（IDE 集成）           ⬜
 ```
 
-（"插件 / 技能 / 工具群"那一族在官方序里是 17~35、40+ 位，仓库里的占位仍写着"第 10 章"。）
+### B · 侧边栏 Architecture 分组（14 项）的进度
+
+```text
+位次  页面                              我们的进度
+  1   architecture                      ✅ 第 1 章（读文档）
+  2   codebase-ownership                ⬜
+  3   agent-loop                        ✅ 第 2 章
+  4   prompt-assembly                   ✅ 第 3 章
+  5   context-compression-and-caching   ✅ 第 5 章
+  6   micro-compaction                  ⬜ 被跳过（独立支线 406 行）
+  7   gateway-internals                 ✅ 第 7 章
+  8   gateway-session-lifecycle         ✅ 第 8 章
+  9   multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
+ 10   completion-backlog-delivery       ⬜ 52 行（"投递债"）
+ 11   session-storage                   ✅ 第 6 章
+ 12   state-db-recovery                 ⬜ 107 行（与第 6 章配对）
+ 13   provider-runtime                  ⬜（= A 的第 4 项）
+ 14   programmatic-integration          ⬜
+```
+
+**差额一句话**：A 是"少而精的必读路线"（10 篇），B 是"目录顺序"（14 + Extending 那一片）。
+A 里我们还欠 **provider-runtime / adding-providers / acp-internals** 三篇；
+B 里我们还欠 codebase-ownership / micro-compaction / multiplexing-gateway /
+completion-backlog-delivery / state-db-recovery / provider-runtime / programmatic-integration 七篇。
+
+（"插件 / 技能 / 工具群"那一族在 developer-guide 的 Extending 分组里，仓库里的占位仍写着"第 10 章"。）
 
 ## 环境 / 依赖
 
