@@ -8,8 +8,9 @@
 >
 > 📌 行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`）；上游每合并一个 PR 行号就会漂。
 > 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 **3 处**，见附录 C）。
-> 🧭 原文是**维护者设计说明**（通篇模块名/类名/issue 号）：本节译文**先给白话**，
-> 标识符收进【源码】要点，issue 号降为「出处」一行；事实不加不减。
+> 🔗 各节原本附的 `【源码】要点` 已整体搬进《源码讲解-09-MultiplexingGateway.md》（节号一一对应）；本篇只做翻译。
+> 🧭 原文是**维护者设计说明**（通篇模块名/类名/issue 号），所以译文**先给白话**，
+> 逐字标识符与 issue 号收进《源码讲解-09》的【源码要点】；译文只把 issue 号降为「出处」一行。
 
 [TOC]
 
@@ -42,7 +43,6 @@
 
 ## 1. Overview —— 一进程 vs 一 profile
 
-
 不开多路复用的时候：一个网关进程**恰好服务一个 profile** —— 它的 `.env`、会话、技能、
 平台适配器都是那一个的；多 profile 的安装方式就是**每个 profile 起一个进程**。
 
@@ -53,14 +53,6 @@
 **原文指出**：下面所有设计的出发点，就是那条硬约束 —— **A 的回合不许看见 B 的状态**。
 密钥、home、会话、适配器 lane 都按 profile 隔离；**暂时隔离不了的，要么失败关闭，
 要么在「已知限制」里点名**。
-
-### 源码要点
-
-| 概念 | 对应实现 |
-|---|---|
-| "被服务的 profile" | `hermes_cli/profiles.py::profiles_to_serve(multiplex)`（§7） |
-| 共用的一把锁 / 一个监听 / 一个状态面 | 进程级单例；状态面 `runtime_status.json`（§12 表里点名为"进程级"） |
-| 失败关闭的开关 | `agent/secret_scope.py::_MULTIPLEX_ACTIVE`（§4） |
 
 ### 为什么这么设计 / 砍掉会怎样
 砍掉"一进程多 profile"（也就是永远一 profile 一进程）会怎样？**资源**上：N 个 profile =
@@ -73,7 +65,6 @@ N 个 Chromium 级的常驻进程 + N 个平台连接池 + N 份 cron 心跳，�
 ---
 
 ## 2. The mode flag —— 开关与它的三道来源
-
 
 开关的配置项是 `gateway.multiplex_profiles`（也接受写在顶层），**默认开着**；
 解析顺序是 **环境变量 > 配置文件 > 未设置**。
@@ -92,27 +83,6 @@ N 个 Chromium 级的常驻进程 + N 个平台连接池 + N 份 cron 心跳，�
   **模块级全局量，不是 contextvar** —— 它描述的是"这个部署的模式"，不是"某个任务的值"。
   它唯一的职责是**把 `get_secret()` 的失败关闭行为武装起来**。
 
-### 源码要点
-
-```text
-gateway/config.py:45  _env_multiplex_profiles_override()   —— env 覆盖；空白/无法识别 → None
-gateway/config.py:558 multiplex_profiles: Optional[bool] = None
-gateway/config.py:703 # 注释：Nothing set stays None so the boot-time guard 能接管
-hermes_cli/config_defaults.py:1998   "multiplex_profiles": True      ← 默认开
-hermes_cli/gateway_multiplex_mode.py:110  def resolve_multiplex_mode(config) -> MultiplexDecision
-agent/secret_scope.py:24   _MULTIPLEX_ACTIVE: bool = False   ← 模块级全局
-agent/secret_scope.py:27   def set_multiplex_active(active: bool) -> None
-```
-
-**判决的三个理由**（`MultiplexDecision` 的 `reason`）：`"config"`（显式写了）/ `"guard"`
-（预检发现障碍 → 关）/ `"default"`（未设置且无碍 → 开）。
-
-**预检的作用**（原文 "keeps the gateway standalone when …"）：只要
-① 还有**二级 profile 自己跑着网关**，② 存在**阻塞项**，或 ③ **这台机器迁移不了**，
-就维持"一个 profile 一个进程"的老样子。预检自身崩了也**不会**拖垮网关 ——
-它按"启动 standalone"处理并记日志（源码里那句：*a broken preflight must not take the
-gateway down with it*）。
-
 ### 为什么这么设计 / 砍掉会怎样
 三道来源（env / config / 预检）看着啰嗦，但它们对应**三种不同的人**：
 运维（要能一键覆盖）、用户（配置文件里的偏好）、程序（自己判断这台机器能不能跑）。
@@ -122,7 +92,6 @@ gateway down with it*）。
 ---
 
 ## 3. Scope composition —— 两个作用域是怎么套上去的
-
 
 每一个入站事件，在**任何 profile 自己的代码跑起来之前**，都会先"合成"两个
 **context-local（上下文局部）作用域**：
@@ -153,19 +122,6 @@ finally 里按相反顺序解开
 **两个作用域都是 `contextvar`** —— 所以它们会通过 `copy_context()` **传播进线程池的工作线程**，
 并且**确定性地解开**。**任何东西都不写进 `os.environ`，永远不。**
 
-### 源码要点
-
-```text
-gateway/run.py            _profile_runtime_scope(profile_home)   ← 作用域的安装/解开
-hermes_constants.py:25    set_hermes_home_override(path) -> Token
-agent/secret_scope.py:80  set_secret_scope(mapping) -> Token
-agent/secret_scope.py:49  _SECRET_SCOPE: ContextVar[Optional[Mapping[str, str]]]
-```
-
-📌 "contextvar + 线程池"这条为什么值得单独记：`ThreadPoolExecutor` **默认不继承**调用方的
-上下文；要传就得显式 `ctx = copy_context()` 再 `executor.submit(ctx.run, fn)`。
-所以"作用域漏了"这件事**不会报错**，只会表现为"某个后台任务读到了默认 profile 的值"。
-
 ### 为什么这么设计 / 砍掉会怎样
 为什么不干脆"进事件时 `os.environ.update(profile_env)`"？
 因为 `os.environ` 是**进程级**的：并发处理两个 profile 的事件时，
@@ -176,7 +132,6 @@ A 更新完、B 又更新，**两边都会读到 B 的值**；而且 `subprocess
 ---
 
 ## 4. Workstream A —— 上下文局部的密钥作用域
-
 
 `agent/secret_scope.py` 存在的原因很直白：**显然的写法**（把每个 profile 的 `.env`
 **并进 `os.environ`**）会把 A 的密钥泄漏进 B 的回合，以及**每一个用
@@ -208,21 +163,6 @@ A 更新完、B 又更新，**两边都会读到 B 的值**；而且 `subprocess
 3. **作用域下的 `.env` 写入**（`save_env_value`，例如配对授权的镜像写入）：
    **更新已装的作用域映射**，而不是进程环境。
 
-### 源码要点
-
-```text
-agent/secret_scope.py:52   class UnscopedSecretError(RuntimeError)
-agent/secret_scope.py:98   _GLOBAL_ENV_EXACT = frozenset({ "HERMES_HOME", "HERMES_PROFILE",
-                                 "HERMES_GATEWAY_LOCK_DIR", "API_SERVER_ENABLED", "API_SERVER_HOST",
-                                 "API_SERVER_PORT", "API_SERVER_CORS_ORIGINS", … })
-agent/secret_scope.py:126  _GLOBAL_ENV_PREFIXES = ( … 代理设置等前缀 … )
-agent/secret_scope.py:143  def get_secret(name, default=None)   ← 白名单 → 作用域 → 兜底
-agent/secret_scope.py:174  def get_secret_str(...)  # 逐字 docstring：
-    """… Still raises UnscopedSecretError —— swallowing it hides a spawn-site bug."""
-```
-
-**出处**：`#77562`（加载器边界）、`#84079`（配置里的 `${VAR}` 解析）、`#88441`（作用域下的 `.env` 写入）。
-
 ### 为什么这么设计 / 砍掉会怎样
 这是整章**最能体现"失败关闭"价值**的一段。同一件事有两种失败方式：
 
@@ -237,7 +177,6 @@ agent/secret_scope.py:174  def get_secret_str(...)  # 逐字 docstring：
 
 ## 5. The HERMES_HOME override —— 让"家"也跟着 profile 走
 
-
 `hermes_constants.py` 里有一个**上下文局部的覆盖**，`get_hermes_home()` 会**先查它、
 再查 `HERMES_HOME` 环境变量**。于是**所有通过它解析路径的东西**都会自动跟着当前 profile 走：
 配置、`state.db`、技能、记忆、SOUL、会话、看板、目标、插件发现、MCP 启动。
@@ -250,19 +189,6 @@ agent/secret_scope.py:174  def get_secret_str(...)  # 逐字 docstring：
 还有一条**一次性告警**：如果**该有覆盖的地方**却在没有覆盖的情况下跑了 profile 自己的代码，
 就警告一次（同一条不会反复刷）。
 
-### 源码要点
-
-```text
-hermes_constants.py:25   def set_hermes_home_override(path) -> Token
-hermes_constants.py:39   def get_hermes_home_override() -> str | None
-hermes_constants.py:101  def get_hermes_home() -> Path        ← 覆盖优先于环境变量
-hermes_constants.py:119  def hermes_home_key(path=None) -> str
-hermes_constants.py:150  def get_process_hermes_home() -> Path
-hermes_constants.py:94   "… (see issue #18594)."              ← 一次性告警正文里的出处
-```
-
-**出处**：`#18594`（一次性告警）。
-
 ### 为什么这么设计 / 砍掉会怎样
 这一条是**"隔离"能否成立的地基**：密钥隔离只解决"别读错 key"，
 但**会话、记忆、技能、日志**都是**按路径**找家的。只要有一条路径解析走的是
@@ -274,7 +200,6 @@ hermes_constants.py:94   "… (see issue #18594)."              ← 一次性告
 ---
 
 ## 6. Inbound routing —— 把共享 bot 收到的消息分给正确的 profile
-
 
 `gateway/profile_routes` 把一组坐标 —— **(平台, 服务器/公会 id, 聊天 id, 线程 id)** ——
 映射到一个 profile。匹配规则三条：
@@ -289,17 +214,6 @@ hermes_constants.py:94   "… (see issue #18594)."              ← 一次性告
 完整 schema 与匹配规则在用户向文档里：
 [Routing shared-bot chats to profiles](../user-guide/multi-profile-gateways.md#routing-shared-bot-chats-to-profiles-profile_routes)。
 
-### 源码要点
-
-```text
-gateway/profile_routing.py:56   class ProfileRoute
-gateway/profile_routing.py:73   def matches(...)          ← 合取 + 最具体优先
-gateway/profile_routing.py:130  def parse_profile_routes(raw) -> List[ProfileRoute]
-gateway/profile_routing.py:166  def match_profile_route(...)
-gateway/profile_routing.py:51   class ProfileRouteRejected(RuntimeError)   ← "拒绝"是有类型的
-gateway/profile_routing.py:101  def _bot_profile_key(name)  ← 默认 profile 归一化（None）
-```
-
 ### 为什么这么设计 / 砍掉会怎样
 "共享 bot"是多路复用最现实的场景：**同一个 Telegram bot 同时给两个 profile 干活**
 （比如团队群里 @ 一次服务"工作"，另一个群里服务"个人"）。没有路由表，
@@ -312,7 +226,6 @@ gateway/profile_routing.py:101  def _bot_profile_key(name)  ← 默认 profile �
 
 ## 7. Serving selected profiles —— 服务集合的唯一闸口
 
-
 `profiles_to_serve(...)`（在 `hermes_cli/profiles.py`）是**"这个网关服务哪些 profile"的唯一闸口**：
 默认 profile + `profiles/` 下每个**有效**的 profile 目录。
 
@@ -320,26 +233,8 @@ gateway/profile_routing.py:101  def _bot_profile_key(name)  ← 默认 profile �
 HTTP 准入**、**路由资格**、以及**运行时状态面**。
 被排除的 profile **仍然装在那儿**，而且**仍然可以自己单独跑一个网关**。
 
-### 源码要点
-
-```text
-hermes_cli/profiles.py:802  def profiles_to_serve(multiplex: bool) -> List[Tuple[str, Path]]
-    """``(profile_name, hermes_home)`` pairs a gateway should serve — the single chokepoint
-    for "which profiles does the inbound gateway handle".
-
-    ``multiplex=False``: exactly one entry for the *active* profile (byte-for-byte the
-    historical single-profile behavior; name is ``"default"`` or the named profile's id).
-    ``multiplex=True``: default plus every live named profile under ``profiles/`` (tombstoned
-    profiles skipped). Pure directory read: never creates a profile dir (#94590)."""
-```
-
-> ⚠️ **上游文档出入**：原文这里写的是 `profiles_to_serve(multiplex, profile_allowlist)`，还说
-> "格式错的 allowlist 会安全地回退成只有默认" —— **源码签名没有 allowlist 参数**（详见附录 C ①）。
-
-📌 注意 docstring 里那句 **"Pure directory read: never creates a profile dir"** ——
-"枚举"这件事本身**不许有副作用**（否则一个"列一下服务谁"的动作会凭空造出 profile 目录）。
-
-**出处**：`#69377`（cron 心跳按 profile）、`#94590`（枚举不建目录）。
+> ⚠️ **上游文档出入**：原文写的是 `profiles_to_serve(multiplex, profile_allowlist)`，还说
+> "格式错的 allowlist 会安全地回退成只有默认" —— **源码签名没有 allowlist 参数**（附录 C ①）。
 
 ### 为什么这么设计 / 砍掉会怎样
 "**单闸口**"这个词在这里是硬要求：同一个"服务集合"概念如果被两处代码分别算出来，
@@ -351,26 +246,12 @@ hermes_cli/profiles.py:802  def profiles_to_serve(multiplex: bool) -> List[Tuple
 
 ## 8. Per-profile persistence —— 每个 profile 自己的库
 
-
 `SessionStore` **在构造时不绑定任何数据库句柄**。
 会话库句柄是**在调用时**通过**当前的 HERMES_HOME 覆盖**解析出来的 ——
 **每个解析到的 `profiles/<name>/state.db` 一个缓存句柄** ——
 所以**即使 store 对象本身是共享的**，会话也会落进**拥有它的那个 profile** 的库里。
 
 配对（pairing）相关的存储则**按被服务的 profile 各造一个**。
-
-### 源码要点
-
-```text
-gateway/session.py         SessionStore 构造时不取 db handle；句柄按 home 解析并缓存
-                           （结构上的抓手：`_routing_db_loaded` 这类"延迟加载"标记）
-hermes_constants.py:101    get_hermes_home()          ← 句柄解析用的就是 §5 那个覆盖
-```
-
-**出处**：`#88532`（这条修复的存在证据在测试里很直白：`tests/hermes_state/test_named_profile_session_db.py`
-的注释写 *"#88532 made SessionStore follow HERMES_HOME; this covers the TUI/agent …"*；
-一致性用例 `tests/conformance/test_profile_write_tripwire.py` 也点了它，原文是
-*"gateway sessions physically stored in the root `state.db` even …"* —— 即修复前的症状）。
 
 ### 为什么这么设计 / 砍掉会怎样
 这条是**"数据落到谁家"的最后一道闸**。如果 store 在构造时就把句柄绑死，
@@ -382,7 +263,6 @@ hermes_constants.py:101    get_hermes_home()          ← 句柄解析用的就�
 
 ## 9. Per-bot session lanes —— 每个 bot 一条会话线
 
-
 会话键按 profile 加**命名空间**：默认 profile 是 `agent:main`，具名 profile 是 `agent:<名字>`。
 
 适配器身上带着 `_owner_profile`（在**适配器配置时**就装好，**早于任何入站事件**），
@@ -391,19 +271,6 @@ hermes_constants.py:101    get_hermes_home()          ← 句柄解析用的就�
 
 **文本/媒体批处理、活跃会话跟踪、忙会话守卫，全部按 lane 分键** ——
 所以**两个 bot 共享同一个聊天时，不会共享同一条会话线**。
-
-### 源码要点
-
-```text
-gateway/platforms/base.py:1904  self._owner_profile: Optional[str] = None
-gateway/run_adapters.py:1115    adapter.set_owner_profile(...)   ← 适配器配置时装上
-gateway/platforms/base.py:2306  def _session_key_profile(self, source=None) -> Optional[str]
-    逐字 docstring：
-    """Profile namespace for an adapter-derived session key. Ingress … stamps ``source.profile``,
-    so without this every bot in a multiplex… ``agent:main:`` lane. Order: ``source.profile`` →
-    ``_owner_profile`` → store resolver; getattr-guarded (object.__new__ in tests), type-checked
-    (… key)."""
-```
 
 ### 为什么这么设计 / 砍掉会怎样
 一句话：**"同一把锁不能锁两条会话线"**。第 7/8 章里的锁、忙时队列、agent 缓存、
@@ -414,7 +281,6 @@ gateway/platforms/base.py:2306  def _session_key_profile(self, source=None) -> O
 ---
 
 ## 10. Control plane —— 桌面插件怎么管 profile
-
 
 桌面插件只能通过 **ws JSON-RPC 那扇门**够到网关，所以**profile 的枚举与配置**
 住在 `tui_gateway/methods_profiles.py` 里，方法一共六个：
@@ -427,20 +293,6 @@ profiles.configure profiles.set_asset  profiles.get_asset
 **读写都跑在目标 profile 的 HERMES_HOME 覆盖之下**。
 **资产（asset）的写入是原子的，且按类型与大小设上限。**
 
-### 源码要点
-
-```text
-tui_gateway/methods_profiles.py:248  @_profile_handler("profiles.list", 5061)
-tui_gateway/methods_profiles.py:362  @method("profiles.create")
-tui_gateway/methods_profiles.py:429  @_profile_handler("profiles.describe", 5063)
-tui_gateway/methods_profiles.py:592  @_profile_handler("profiles.configure", 5064)
-tui_gateway/methods_profiles.py:624  @_profile_handler("profiles.set_asset", 5065)
-tui_gateway/methods_profiles.py:662  @_profile_handler("profiles.get_asset", 5066)
-```
-
-📌 括号里那几个数字（5061…5066）是**方法编号**，不是行号 —— 名字叫
-`_profile_handler(name, code)`，装饰器把"名字 + 编号"一起注册。
-
 ### 为什么这么设计 / 砍掉会怎样
 "读写都跑在目标 profile 的作用域下"这条，正是 §3/§5 那套机制**在非回合路径上的复用**：
 桌面端点一次"改 profile X 的配置"，**没有 agent 回合**，如果不套作用域，
@@ -451,7 +303,6 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 
 ## 11. Failure modes —— 四种处置
 
-
 | 类别 | 具体 |
 |---|---|
 | **启动即致命** | 多路复用配置错误；以及**二级 profile 启用了"要占端口"的平台** —— 因为**一个共享 HTTP 监听归默认 profile 所有** |
@@ -459,24 +310,8 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | **失败关闭** | 多路复用下**没有作用域的 `get_secret()` 会抛**；路由命中但目标**不在服务集合** → 事件丢弃；**没有作用域的 `/p/` 请求** → 进入**默认 profile** 的作用域，而不是"未定义作用域" |
 | **回退** | 外部的 `cron.provider` **不支持多路复用** → 带警告回退到内置 ticker |
 
-### 源码要点
-
-```text
-gateway/run.py:1636              class MultiplexConfigError(RuntimeError)          ← 存在 ✓
-gateway/run_adapters.py:1139     # "A secondary's port-binding adapter never binds:
-                                 #  the default profile owns the one shared …"      ← 语义在
-gateway/platforms/base.py:1905   # "Set by the runner on a secondary's port-binding adapter:
-                                 #  serve via the default profile's …"
-gateway/platforms/shared_ingress.py:4  # 枚举了要占端口的平台（Twilio SMS、LINE、Teams、
-                                 #  BlueBubbles、Microsoft Graph …）
-```
-
 > ⚠️ **上游文档出入**：原文点名的启动致命错误 `SecondaryPortBindingConfigError` ——
-> **源码里没有这个类**（机制在、名字没了，详见附录 C ②）。
-
-**出处**：`#61276`（`/p/` 请求在无作用域时进默认 profile —— 这条只在测试里能找到：
-`tests/gateway/test_api_server_multiplex_secret_scope.py` 的第一行就写着 *"Regression for #61276:
-api_server agent entry under multiplex isolation."*）。
+> **源码里没有这个类**（机制在、名字没了；附录 C ②）。
 
 ### 为什么这么设计 / 砍掉会怎样
 四种处置对应**四种不同的"坏"**，不能互换：
@@ -524,16 +359,10 @@ api_server agent entry under multiplex isolation."*）。
 
 ## 13. Non-goals —— 不是目标的东西
 
-
 多路复用隔离的是 **profile**；它**不负责认证或授权"终端用户"**。
 **一个 profile 是一份配置，不是一个人**：网关**信任它的传输层和它的路由表**
 来决定"这个事件属于哪个 profile"。**请求级的身份**、以及**profile 层之上的按用户授权**，
 **不在本文范围内**。
-
-### 源码要点
-
-这一节没有实现细节 —— 它是**边界声明**。对应的实现在别处：
-授权（谁能跟这个 bot 说话）是第 7 章那套四层 `authz_mixin`。
 
 ### 为什么这么设计 / 砍掉会怎样
 这句话是**防止把安全责任放错层**。一个常见误读是"上了多路复用，就等于做了多租户隔离" ——
