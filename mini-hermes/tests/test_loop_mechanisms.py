@@ -523,6 +523,33 @@ def test_interrupt() -> None:
     )
 
 
+def test_usage_is_per_turn_on_reused_agent() -> None:
+    """`result['usage']` 必须是**这一轮**的用量 —— 同一个 agent 连跑两轮也不能累加。
+
+    ★ 为什么这条属于"agent loop 的机制"：`self.usage` 是**轮内的**累加器
+    （一次工具循环里可能发好几个请求）。它天然正确的前提是"一个 agent 只活一轮"——
+    第 8 章网关改成**缓存 agent**之后，这个前提没了：同一个对象活很多轮，
+    不清零就会跨轮累加，而网关写库是 `record_usage()`（**加**）→ 会话行用量静默翻倍。
+    真实版对应写法：`agent/conversation_loop.py:1504` 每轮开头 `agent._last_turn_usage = None`。
+    """
+    usage = {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}
+
+    def resp(text: str) -> dict:
+        return {"choices": [{"message": {"role": "assistant", "content": text}}],
+                "usage": dict(usage)}
+
+    agent = make_agent(max_turns=5)
+    agent._http_post = canned(resp("一"), resp("二"))
+    r1 = agent.run_conversation("第一轮")
+    check("轮 1：用量 = 这一次请求的用量",
+          r1["usage"]["prompt_tokens"] == 100, str(r1["usage"]))
+    r2 = agent.run_conversation("第二轮")
+    check("★ 轮 2（同一个 agent 对象）：**仍然**只是这一轮的用量，没把轮 1 再算一遍",
+          r2["usage"]["prompt_tokens"] == 100, str(r2["usage"]))
+    check("……而且 agent 自己的累加器也归零了（下一轮从零开始）",
+          agent.usage["prompt_tokens"] == 100, str(agent.usage))
+
+
 if __name__ == "__main__":
     test_order_and_concurrency()
     test_alternation()
@@ -536,6 +563,7 @@ if __name__ == "__main__":
     test_failures_are_visible()
     test_budget_exhausted()
     test_interrupt()
+    test_usage_is_per_turn_on_reused_agent()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))

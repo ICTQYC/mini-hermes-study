@@ -274,6 +274,17 @@ class AIAgent:
         messages.append({"role": "user", "content": user_message})
         self._persist_message(messages[-1])
 
+        # 2b. ★ **用量清零**：`self.usage` 是**本轮**的累加器，不是进程累计。
+        #     （真实版：`agent/conversation_loop.py:1504` 每轮开头 `agent._last_turn_usage = None`
+        #       + `agent/turn_usage.py:157` 写入 —— 它也只有"最后一轮"这一个槽。）
+        #     ★ 为什么这行在第 8 章之后才变得关键：网关原来是**每条消息新建 agent**
+        #       （对象活一轮 → 累加器天然就是本轮的），第 8 章改成**缓存 agent**之后，
+        #       同一个对象活很多轮 → 不清零就会**跨轮累加**，而网关侧写库是
+        #       `record_usage()`（SQL 里 `input_tokens = input_tokens + ?`，**加**）
+        #       → 第二轮的用量会把第一轮再算一遍，**静默翻倍**（连跑两轮的探针抓到的：轮 2 报了 200）。
+        for _k in self.usage:
+            self.usage[_k] = 0
+
         # 3. 拼/复用系统提示词
         #    ★ build_system_prompt 内部**缓存**在 agent 上，同一会话只拼一次。
         #      这里不是"每轮重拼一个字符串"——那是第 2 章的做法，
