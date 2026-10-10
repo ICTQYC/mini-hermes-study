@@ -2,7 +2,7 @@
 
 > **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
 > **真实源码**：`$HOME/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
-> **对照实现**：`mini-hermes/`（全项目 **12,943 行**代码 / **6,362 行**测试）
+> **对照实现**：`mini-hermes/`（全项目 **12,883 行**代码 / **6,355 行**测试）
 > **mini 侧现状**：✅ **已交付两批** —— 地基（A1/A3/A4/A9/A13）提交 `f34fdaa`、
 > 成型（A6/A8/A5）提交 `9e7c8e4`；收据见 §十七。没做的只剩 §十七 里标 `⬜` 的那些。
 > **本文的写法**：mini 那一栏**一律写现状** —— 做过的写 `已对齐` / `✅ 已抄（<commit>）`，
@@ -221,7 +221,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 |---|---|---|---|---|---|
 | 1 | 开关三态 | `None`=待裁决 / `True` / `False`（`config.py:552`） | 三态齐（`--multiplex` / `--no-multiplex` / 不给=待裁决），`gateway/multiplex_mode.py:38-95` | 语义缺失 | ✅ 已抄（`f34fdaa`·A1） |
 | 2 | env 覆盖 | `GATEWAY_MULTIPLEX_PROFILES` + 真值词表 + **空白不算覆盖** | `MINI_MULTIPLEX_PROFILES` + 同一套真值词表 + 空白不算覆盖 | 能力缺失 | ✅ 已抄（`f34fdaa`·A1） |
-| 3 | 启动预检 | 六条（`multiplex_mode.py:75`） | 三条 + **异常兜底降级**（`multiplex_mode.py:132-190`） | ★ 机制缺失 | ✅ 已抄（`f34fdaa`·A3） |
+| 3 | 启动预检 | 六条（`multiplex_mode.py:75`） | 三条 + **异常兜底降级**（`multiplex_mode.py:132 implicit_multiplex_blocker()`） | ★ 机制缺失 | ✅ 已抄（`f34fdaa`·A3） |
 | 4 | 裁决不许致命 | 预检异常 → standalone + warning（`:117`） | 同 ✅（预检抛异常 → standalone + warning） | 防御缺失 | ✅ 已抄（`f34fdaa`·A3） |
 | 5 | 裁决理由落盘 | `write_runtime_status(multiplex_standalone_reason=…)` | `multiplex_status_fields()` 单一来源，running/stopped 两次写都带裁决栏 | 可观测性 | ✅ 已抄（`f34fdaa`·A4） |
 | 6 | 服务集合 | `profiles_to_serve(multiplex)` 单闸口 + 墓碑过滤 + 纯目录读 | 同名函数 ✅ 但无墓碑过滤 | 细节差异 | ⬜ 没做（A2，~10 行） |
@@ -240,7 +240,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | 19 | 路由拒绝 | `ProfileRouteRejected` + served 集合判定 | 无 | 缺层 | ⬜ 没做（含在 A7） |
 | 20 | 拒绝 → 丢弃 | 入站咽喉 `return None` + warning | 无 | 缺层 | ⬜ 没做（含在 A7） |
 | 21 | per-bot lane | `_owner_profile` + `_session_key_profile` 三段解析 | `_owner_profile` + `_session_key_profile` 三段解析（`adapters/base.py:111/131`） | 缺一层（同聊天两 bot 会共用 lane） | ✅ 已抄（`9e7c8e4`·A8） |
-| 22 | 每 profile 适配器 | `_profile_adapters[profile][platform]` | `_profile_adapters[名字][平台]` + `servable_homes()` 边界（`run_adapters.py:63/98`） | ★ 架构成型问题 | ✅ 已抄（`9e7c8e4`·A6） |
+| 22 | 每 profile 适配器 | `_profile_adapters[profile][platform]` | `_profile_adapters[名字][平台]` + `servable_homes()` 边界（`run_adapters.py:63/102`） | ★ 架构成型问题 | ✅ 已抄（`9e7c8e4`·A6） |
 | 23 | fail-soft 启动 | 单 profile/平台失败 → 跳过 + 警告 + 排重连 | 活动与次级适配器**都** fail-soft（`run.py:250`、`run_adapters.py:138`） | ★ 可用性 | ✅ 已抄（`9e7c8e4`·A6） |
 | 24 | 跳过要说出来 | 每种跳过都有专属日志（info/warning 分明） | `_adapter_note()` → `[MULTIPLEX]` 日志 + `adapters_log()` 观测面 | 可观测性 | ✅ 已抄（`9e7c8e4`·A6） |
 | 25 | 重复认领拒绝 | `_refuse_duplicate_claim`（同 token/同监听） | 无 | 基座缺失（mini 适配器无 token） | ⬜ 不抄（B8） |
@@ -254,9 +254,8 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | 33 | open-policy 启动拒绝 | `_own_policy_open_startup_violation` | 无（授权是默认拒绝） | 概念不存在 | ⬜ 不抄（B9） |
 | 34 | 终端作用域桥 | `install_and_reset_profile_terminal_scope` | 无（无沙箱后端） | 基座缺失 | ⬜ 没做（只留「占位 + 注释」，避免以后误以为做了隔离） |
 
-**统计**：34 行 = ✅ **已抄 11 项**（A1/A3/A4/A5/A6/A8/A9/A13 已落地，见 §十七 的收据）
-＋ — **已对齐 4 项**（#7/#10/#12 ＋ #8 的 home+密钥那一半）＋ ⬜ **没做 12 项**
-（A2/A7/A10/A11/A12 ＋ #15/#28/#34 及其它 = 第三、四批）＋ ⏭ **不抄 7 项**。
+**统计**：34 行 = ✅ **已抄 11** ＋ ⬜ **没做 12**（A2/A7/A10/A11/A12 ＋ #15/#28/#34 等）
+＋ ⏭ **不抄 8**（含 #8 的"终端策略"那一半）＋ — **已对齐 3**（#7/#10/#12）＝ 34。
 
 ---
 
@@ -787,8 +786,8 @@ gateway/run_adapters.py:895-899  self.pairing_stores[name] = (self.pairing_store
 
 ### ③ mini 的实现（现状）
 
-- 网关侧 ✅ **已经**按 home 缓存句柄：`gateway/run.py:109-116 _db()` → `_db_for(get_mini_home())`；
-  `:118-124 _db_for(home)` → `self._dbs[str(home)]`。docstring 写明"让替次级 profile 干活的代码没法传错 home"。
+- 网关侧 ✅ **已经**按 home 缓存句柄：`gateway/run.py:137 _db()` → `:146 _db_for(get_mini_home())`；
+  `:146-152 _db_for(home)` → `self._dbs[str(home)]`。docstring 写明"让替次级 profile 干活的代码没法传错 home"。
 - `hermes_state.SessionDB` 自己**构造时把路径固化**（`hermes_state.py:83-95`）—— 在 mini 的结构里没问题，
   因为 `_db_for` 每次显式传路径。
 - **缺**：`_profile_home_for_key` 的"**只 memoize 命中**"（mini 没有 profile→home 的 miss 语义），
@@ -1004,9 +1003,14 @@ gateway/run_adapters.py:1430-1437    _stamp_routed_profile 捕到 → return Fal
 
 ### ③ mini 的实现（现状）
 
-`authz.py` 的四层默认拒绝（第 7 章）**不覆盖**这些：mini 没有 `MultiplexConfigError` 等价物
-（`grep "Multiplex"` 零命中），没有"启动期配置错 → 中止"这条路径，也没有"拒绝 → 丢弃"这条链
-（因为还没有路由表）。
+`authz.py` 的四层默认拒绝（第 7 章）**不覆盖**这些。**mini 的处置与真实版不同，而且是刻意的**：
+
+- **没有 `MultiplexConfigError` 等价物**：真实版"配置错 → 启动中止"，mini 是**降级为 standalone 继续起**
+  （`gateway/multiplex_mode.py:132 implicit_multiplex_blocker()` 的预检 + `:222-260` 的裁决落盘）—— 判据：mini 的配置来源是
+  env 与目录扫描，没有"把 fleet 折进一个进程"那种**需要中止**的配置错，能降级就不该让网关起不来。
+- **"拒绝 → 丢弃"这条链还没有**（因为还没有路由表，A7 没做）—— 现在只有"**未知 profile 而被丢弃**"
+  这一种：console 的 `@<profile>` 命中不到适配器时**明说被丢弃**（`adapters/console.py:100`），
+  绝不静默吞掉。
 
 ### ④ mini 为什么没做成这样 / 值不值得改
 
@@ -1041,7 +1045,7 @@ hermes_cli/mcp_startup.py:12-17   # "Discovery slot per profile home (``hermes_h
 **MCP 注册表作用域与 `check_fn` 缓存键都跟随这个判据**（*"so a served profile's view never aliases the
 launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分家"是**显式对齐**过的。
 
-### ② mini 的实现（当前）
+### ② mini 的实现（现状）
 
 | 面 | 真实 | mini |
 |---|---|---|
@@ -1128,7 +1132,7 @@ launch profile's (#111151)"*）—— 也就是说这两处的"按 profile 分�
 | # | 问题 | 证据 | 状态 |
 |---|---|---|---|
 | M1 | **真 bug**：`self._last_active_key` 无赋值点，只在 `run_turn.py:181/186` 被读 → 网关里一旦审批就 `AttributeError` | `grep -rn _last_active_key` 只有两处读 | ⬜ 本章"真问题"候选 |
-| M2 | `--multiplex` 半成品语义（只设标志 + 横幅） | `run.py:190/191/255` | ✅ 已解决（A5/A6 已落地；A7 待做） |
+| M2 | `--multiplex` 半成品语义（只设标志 + 横幅） | `run.py:242/250-256` | ✅ 已解决（A5/A6 已落地；A7 待做） |
 
 ### 已交付的两批（收据）
 
