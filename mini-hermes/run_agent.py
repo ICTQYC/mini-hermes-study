@@ -458,7 +458,8 @@ class AIAgent:
           chat_completions   → 直接用
           codex_responses    → 转成 Responses API 的 input items
           anthropic_messages → 经 anthropic_adapter.py 转换
-        我们只有第一种；另外两种的转换点在这里标注出来。
+        mini 只实现了第一种；其余两种在这里给出**带指引**的报错
+        （说清 mini 支持哪几种、该改哪个文件）——而不是跑到发请求才炸。
 
         ★ 这里的 `_validate_alternation` 校验的是**历史本身**（`messages`），
           **不是**最终请求。它防的是"历史已经被污染"。
@@ -466,14 +467,13 @@ class AIAgent:
           而注入也可能把序列弄违规（见循环里第 7.5 步）。
         """
         self._validate_alternation(messages)
-        if self.api_mode == "chat_completions":
-            return [dict(m) for m in messages]
-        if self.api_mode in ("codex_responses", "anthropic_messages"):
-            raise NotImplementedError(
-                f"{self.api_mode} 需要格式转换层（对应 Hermes 的 codex_responses_adapter.py "
-                f"/ anthropic_adapter.py）——本章只实现 chat_completions。"
-            )
-        raise ValueError(f"未知 api_mode：{self.api_mode}")
+        # ★ 第 8 章 A3：协议检查收敛到 providers/api_mode.py 一处，
+        #   `require_implemented_api_mode` 对未实现的模式抛**带指引**的
+        #   `UnsupportedApiMode`（不再裸抛 NotImplementedError）。
+        from providers.api_mode import require_implemented_api_mode
+
+        require_implemented_api_mode(self.api_mode)
+        return [dict(m) for m in messages]
 
     def _validate_alternation(self, messages: List[Dict]) -> None:
         """消息角色交替规则 —— 硬约束，provider 真的会因此拒绝你的请求。

@@ -1,10 +1,26 @@
-"""provider → (api_mode, base_url, api_key, model) 的解析。
+"""provider → (api_mode, base_url, api_key, model, source) 的解析 —— **两段式**（A1）。
 
 对应 Hermes 的 hermes_cli/runtime_provider.py + hermes_cli/auth.py。
 
 这一层存在的原因：模型和 provider 是**两件独立的事**。
 同一个模型名可以走 OpenAI 官方、OpenRouter、本地 vLLM、国内 MaaS……
 所以配置里存的是"provider 名字"，运行时才解析成真正要 POST 的 URL 和 key。
+
+═══ 第 8 章 A1：解析分两段 ═════════════════════════════════════════════════
+真实版的解析被拆成**名字段**和**运行时段**两层，五入口（CLI/TUI/gateway/cron/ACP）
+只调同一道门面。mini 照抄这道形状：
+
+    ① 名字层  resolve_requested_provider(requested)   —— \"请求的是谁\"（一个字符串）
+                 显式 → config → env → auto；裁决理由落在 .source
+    ② 连接层  resolve_provider(provider, model)        —— 只看名字定\"凭据/base_url/api_mode\"
+                 从 providers/ 注册表拿（唯一事实源）
+    ③ 门面    resolve_runtime_provider(...)            —— ①+② 合成一份 dict（含 source）
+
+  「名字层」不碰凭据（没有 key 也能说出\"你要的是谁\"）；
+  「连接层」不猜名字（只认注册表里的 canonical id）。
+
+★ 向后兼容：老的 `resolve_provider(provider, model)` **原样保留**（仍是连接层，
+  返回同样的 dict）—— `cli.py` / `gateway/run.py` / `doctor.py` 的调用点一行都不用改。
 
 密钥只从环境变量 / .env 文件读，永不写进代码、永不打印
 （Hermes 的铁律：secrets in .env, settings in config.yaml）。
@@ -34,33 +50,47 @@ from hermes_constants import get_mini_home
 #   免得每次读密钥都重新 import。
 from agent.secret_scope import get_secret
 
+# ★ 第 8 章：解析的事实源与判据都搬进了 `providers/` 包（A2/A3/A5/A10）。
+from providers import get_provider_profile, list_providers
+from providers.aliases import normalize_provider
+from providers.api_mode import fallback_api_mode
+from providers.host_gate import host_derived_key_name, key_candidates_for
+
 # 已经打过"跳过进程级 .env 加载"日志的 home（真实版同名集合 `_SCOPED_SKIP_LOGGED`）
 _SCOPED_SKIP_LOGGED: set = set()
 
-# provider 注册表：名字 → 默认端点和默认模型
-PROVIDER_REGISTRY: Dict[str, Dict[str, Any]] = {
-    "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key_env": "DEEPSEEK_API_KEY",
-        "base_url_env": "DEEPSEEK_BASE_URL",
-        "default_model": "deepseek-chat",
-        "api_mode": "chat_completions",
-    },
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "api_key_env": "OPENAI_API_KEY",
-        "default_model": "gpt-4o-mini",
-        "api_mode": "chat_completions",
-    },
-    "anthropic": {
-        # 注意：Hermes 里 anthropic 走的是 anthropic_messages 模式（另一套消息格式），
-        # 我们这一章只实现 chat_completions，所以这里标注出来是为了"知道差异在哪"。
-        "base_url": "https://api.anthropic.com/v1",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "default_model": "claude-sonnet-4-5",
-        "api_mode": "anthropic_messages",
-    },
-}
+# 这些供应商**不从环境变量自动选**（真实版 `_NO_AUTO_DETECT_PROVIDERS`）：
+#   copilot 的 token 常为仓库/工具访问而存在，不该劫持推理；lmstudio 是本地服务器，
+#   有 LM_API_KEY 不代表它在线。两者都需要用户显式选。
+_NO_AUTO_DETECT_PROVIDERS = frozenset({"copilot", "lmstudio"})
+
+
+def provider_registry() -> Dict[str, Dict[str, Any]]:
+    """`PROVIDER_REGISTRY` 的**派生视图**（注册表是唯一事实源，这里只是它的一种读法）。
+
+    ★ 第 8 章 A2 的关键：以前这是一张**硬编码**的表（数据存了两份）；现在它从
+      `providers.list_providers()` 派生 —— 任何 `register_provider()` 进来的画像都自动可见。
+    键名沿用旧表（base_url / api_key_env / base_url_env / default_model / api_mode），
+    以免打破老消费者的读法。
+    """
+    view: Dict[str, Dict[str, Any]] = {}
+    for profile in list_providers():
+        key_envs = profile.api_key_env_vars
+        view[profile.name] = {
+            "base_url": profile.base_url,
+            "api_key_env": key_envs[0] if key_envs else "",
+            "base_url_env": profile.base_url_env_var,
+            "default_model": profile.default_model,
+            "api_mode": profile.api_mode,
+        }
+    return view
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562：`PROVIDER_REGISTRY` 懒构造（import 期不触发文件系统发现，也不 mkdir home）。"""
+    if name == "PROVIDER_REGISTRY":
+        return provider_registry()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ── 模型 → 上下文窗口（token）────────────────────────────────────────────
@@ -178,59 +208,234 @@ def load_env_file(path: Optional[Path] = None) -> List[Path]:
             #
             # 不这样做的后果（实测过）：在 `$MINI_HOME/.env` 里留一行
             # `DEEPSEEK_API_KEY=`（准备以后填），因为跳过判据是"**键名**是否已存在"，
-            # 它会先把键设成空字符串，于是后面 `~/.hermes/.env` 里那个**真值**
-            # 被当成"已存在"跳过 —— 报错只说"密钥为空"，绝口不提是哪个文件干的。
-            #
-            # 语义代价：**不能靠写空值来"主动屏蔽"某个键**（本来也做不到，
-            # 屏蔽该用环境变量覆盖或注释掉那一行）。
+            # 它会先把键设成空字符串，于是后面 `~/.hermes/.env` 里那个**真值**被当成
+            # "已存在"跳过 —— 报错只说"密钥为空"，绝口不提是哪个文件干的。
             if key and val and key not in os.environ:
                 os.environ[key] = val
     return used
 
 
-def resolve_provider(provider: str, model: Optional[str] = None) -> Dict[str, Any]:
-    """解析出真正要用的 API 参数。解析不出来就明确报错，不猜。"""
+# ══════════════════════════════════════════════════════════════════════════
+# ① 名字层：resolve_requested_provider —— "请求的是谁"（A1 第 1 段 / A4 source）
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class RequestedProvider(str):
+    """名字层结果：它**是 `str`**（`== "deepseek"` / `.lower()` 都照旧可用），
+    额外挂一个 `.source` 说明这个决定是**怎么来的**。
+
+    为什么用 str 子类：真实版的 `resolve_requested_provider` 返回字符串；
+    A4 又要求把"裁决理由"落成数据。一个带 `.source` 的 str 两边都满足，
+    而且老的字符串用法（拼接 / 比较 / 当 dict 键）全都不受影响。
+    """
+
+    source: str
+
+    def __new__(cls, name: str, source: str) -> "RequestedProvider":
+        obj = super().__new__(cls, name)
+        obj.source = source
+        return obj
+
+
+def _config_model_config() -> Dict[str, Any]:
+    """从 `$MINI_HOME/config.json` 取 `model` 段（对应真实版 `_get_model_config`）。
+
+    ★ 第 8 章只用到 `model.provider`（名字层的第 2 层）。完整配置层
+      （model / fallback / aux、config 压 env 的顺序）是 A9 的活 —— 它在**这里**扩展。
+    坏配置**不抛**（一个用户的笔误不该让 agent 起不来），按空配置处理。
+    """
+    path = get_mini_home() / "config.json"
+    if not path.is_file():
+        return {}
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001 —— 坏 JSON 按空配置
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    model_cfg = data.get("model")
+    return model_cfg if isinstance(model_cfg, dict) else {}
+
+
+def resolve_requested_provider(requested: Optional[str] = None) -> str:
+    """**名字层**：显式 arg → config.yaml → env → auto（返回一个带 `.source` 的字符串）。
+
+    真实版 `runtime_provider.py:410-419` 的 docstring 逐字解释了顺序：
+
+        Provider request from explicit arg, then config, then ``HERMES_INFERENCE_PROVIDER``,
+        else "auto". Config beats the env so chat uses the endpoint the user last saved,
+        not a stale shell/.env override.
+
+    ★ **config 压过 env**（刻意）：否则一个陈旧的 `export MINI_INFERENCE_PROVIDER=…`
+      会悄悄盖掉用户在 config 里存下的选择。
+    ★ 这一层**不读凭据、不碰注册表** —— 没有 key 也能说出"你要的是谁"。
+    """
+    if requested and str(requested).strip():
+        return RequestedProvider(str(requested).strip().lower(), "explicit")   # 第 1 层
+    cfg_provider = _config_model_config().get("provider")
+    if isinstance(cfg_provider, str) and cfg_provider.strip():
+        return RequestedProvider(cfg_provider.strip().lower(), "config")       # 第 2 层
+    env_provider = os.environ.get("MINI_INFERENCE_PROVIDER", "").strip().lower()
+    if env_provider:
+        return RequestedProvider(env_provider, "env")                          # 第 3 层
+    return RequestedProvider("auto", "auto")                                  # 第 4 层
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ② 连接层：resolve_provider —— 只看名字，定 (凭据 / base_url / api_mode)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _resolve_auto_provider() -> str:
+    """`auto` 的落地：按**注册顺序**扫，第一个有可用环境密钥的 api_key 供应商胜出。
+
+    真实版 `auth.py:1304-1319 _env_key_auto_detected`（`_NO_AUTO_DETECT_PROVIDERS` 排除
+    copilot/lmstudio）。mini 只保留这一段"按 env key 自动选"，没有 OAuth / free-tier /
+    Bedrock 那些基座（那是 B 批，不抄）。
+    """
+    for profile in list_providers():
+        if profile.auth_type != "api_key" or profile.name in _NO_AUTO_DETECT_PROVIDERS:
+            continue
+        for env_var in profile.api_key_env_vars:
+            if str(get_secret(env_var, "") or "").strip():
+                return profile.name
+    raise RuntimeError(
+        "没有配置任何 provider 可选（provider='auto'）。\n"
+        "任选一种：\n"
+        "  1) 用 --provider 显式指定（如 deepseek）\n"
+        "  2) 在 config.json 写 model.provider\n"
+        "  3) 设 MINI_INFERENCE_PROVIDER\n"
+        "  4) 给某个供应商配好密钥（如 DEEPSEEK_API_KEY）"
+    )
+
+
+def _resolve_api_key(profile: Any, base_url: str, *, explicit_api_key: Optional[str],
+                     explicit_base_url: Optional[str]) -> str:
+    """连接层的凭据解析（真实版 `_host_gated_env_key_candidates` + 注册表密钥的合成）。
+
+    候选顺序：
+      ① 显式 CLI 凭据（`--api-key`）—— 用户当场给的，最优先；
+      ② 注册表声明的密钥（按 `env_vars` **优先级顺序**）—— **只在端点没被换成别的 host 时**用；
+      ③ host 门控候选（A5）—— 每把 key 只发给自己那条域名。
+
+    第 ② 步加"端点是否被换"的守卫，正是 A5 的安全语义：把一个已声明密钥发到一个
+    被 `--base-url` 换成陌生域名的端点上，就是凭据泄漏。
+    """
+    candidates: List[str] = []
+    if explicit_api_key and explicit_api_key.strip():
+        candidates.append(explicit_api_key.strip())
+    if not explicit_base_url and profile.api_key_env_vars:
+        for env_var in profile.api_key_env_vars:
+            candidates.append(str(get_secret(env_var, "") or "").strip())
+    candidates.extend(key_candidates_for(base_url))
+    return next((c for c in candidates if c), "")
+
+
+def _missing_key_error(profile: Any, base_url: str) -> RuntimeError:
+    """密钥为空的报错 —— 必须包含\"下一步该做什么\"（别人第一次跑卡住的地方就在这）。"""
+    key_envs = profile.api_key_env_vars
+    var_name = key_envs[0] if key_envs else (host_derived_key_name(base_url) or "API_KEY")
+    own_env = get_mini_home() / ".env"
+    return RuntimeError(
+        f"provider {profile.name} 缺少密钥：环境变量 {var_name} 为空。\n"
+        f"任选一种：\n"
+        f"  1) 写进密钥文件（推荐，不会进 shell 历史、不会出现在进程列表里）：\n"
+        f"       echo '{var_name}=你的key' >> {own_env}\n"
+        f"  2) 设环境变量：export {var_name}=你的key\n"
+        f"已查找的密钥文件：{', '.join(str(p) for p in env_file_candidates())}"
+    )
+
+
+def resolve_provider(provider: str, model: Optional[str] = None, *,
+                     source: Optional[str] = None,
+                     explicit_api_key: Optional[str] = None,
+                     explicit_base_url: Optional[str] = None) -> Dict[str, Any]:
+    """**连接层**：把一个 provider 名字解析成真正要用的 API 参数（A1 第 2 段）。
+
+    ★ 这一段的入口与返回值**与旧版逐字兼容**（`resolve_provider(provider, model)` → 同样的 dict，
+      多一个 `source` 键）—— `cli.py` / `gateway/run.py` / `doctor.py` 一律不用改。
+    ★ 解析不出来就明确报错，不猜。
+    """
     load_env_file()
 
-    spec = PROVIDER_REGISTRY.get(provider)
-    if spec is None:
+    name = normalize_provider(provider) if provider else provider
+    if name == "auto":
+        name = _resolve_auto_provider()
+        source = source or "auto"
+
+    profile = get_provider_profile(name)
+    if profile is None:
         raise RuntimeError(
-            f"未知 provider：{provider}（已注册：{', '.join(PROVIDER_REGISTRY)}）"
+            f"未知 provider：{provider}（已注册：{', '.join(provider_registry())}）"
         )
 
-    # ★ 第 9 章 A9 的**真正消费者**：凭据读取必须走密钥作用域。
-    #   为什么不能直读 `os.environ`：多路复用下一个进程服务多个 profile，
-    #   而 `os.environ` 里装的**永远只有启动那个 profile** 的凭据（加载器边界还会
-    #   刻意不把次级 profile 的 .env 灌进去）—— 于是次级 profile 的回合会：
-    #     ① 明明自己 `.env` 里有 key，却报"环境变量为空"（实测踩过，就是这个 bug）；
-    #     ② 更糟：静默用**别人的** key 去调用（钱和数据的账都记错人）。
-    #   多路复用下**没有**作用域时 `get_secret` 会抛 `UnscopedSecretError` —— 那正是要的：
-    #   说明有条路径没被作用域包住，宁可当场炸也不要静默用错凭据。
-    api_key = get_secret(spec["api_key_env"], "") or ""
+    # ── 端点：profile 默认 → 供应商自己的 base_url_env → 显式 --base-url ──
+    base_url = profile.base_url
+    if profile.base_url_env_var:
+        base_url = os.environ.get(profile.base_url_env_var, base_url) or base_url
+    if explicit_base_url:
+        base_url = explicit_base_url
+    base_url = base_url.rstrip("/")
+    if not base_url:
+        raise RuntimeError(
+            f"provider {profile.name} 没有端点：请设置 {profile.base_url_env_var or 'base_url'} 或用 --base-url 指定"
+        )
+
+    # ── 凭据：走密钥作用域（第 9 章），并做 host 门控（A5）──
+    api_key = _resolve_api_key(profile, base_url,
+                               explicit_api_key=explicit_api_key,
+                               explicit_base_url=explicit_base_url)
     if not api_key:
-        # 报错必须包含"下一步该做什么"——别人第一次跑卡住的地方就在这
-        own_env = get_mini_home() / ".env"
-        raise RuntimeError(
-            f"provider {provider} 缺少密钥：环境变量 {spec['api_key_env']} 为空。\n"
-            f"任选一种：\n"
-            f"  1) 写进密钥文件（推荐，不会进 shell 历史、不会出现在进程列表里）：\n"
-            f"       echo '{spec['api_key_env']}=你的key' >> {own_env}\n"
-            f"  2) 设环境变量：export {spec['api_key_env']}=你的key\n"
-            f"已查找的密钥文件：{', '.join(str(p) for p in env_file_candidates())}"
-        )
+        raise _missing_key_error(profile, base_url)
 
-    base_url = spec["base_url"]
-    if spec.get("base_url_env"):
-        base_url = os.environ.get(spec["base_url_env"], base_url) or base_url
+    model_name = model or profile.default_model or (
+        profile.fallback_models[0] if profile.fallback_models else "")
+    # ★ 第 8 章 A3：api_mode 由 host 探测 + provider 叠加决定，不是入口硬编码。
+    api_mode = fallback_api_mode(profile.name, base_url, model_name)
 
-    model_name = model or spec["default_model"]
     return {
-        "provider": provider,
-        "api_mode": spec["api_mode"],
-        "base_url": base_url.rstrip("/"),
+        "provider": profile.name,
+        "api_mode": api_mode,
+        "base_url": base_url,
         "api_key": api_key,
         "model": model_name,
         # ★ 窗口大小随 spec 一起走 —— 压缩阈值 = 窗口 × threshold，
         #   没有它就只能吃默认值，等于"假装知道模型多大"。
         "context_length": resolve_context_length(model_name),
+        # ★ A4：裁决理由（显式 / config / env / auto）落成数据。
+        "source": source or "explicit",
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ③ 门面：resolve_runtime_provider —— 五入口共用的唯一出口（A1）
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def resolve_runtime_provider(*, requested: Optional[str] = None,
+                             model: Optional[str] = None,
+                             explicit_api_key: Optional[str] = None,
+                             explicit_base_url: Optional[str] = None) -> Dict[str, Any]:
+    """**唯一运行时门面**：名字层 → 连接层，合成一份 dict。
+
+    真实版 `runtime_provider.py:851` 的对应物：五个入口（CLI/TUI/gateway/cron/ACP）
+    都只调它，不各自解析。返回 dict 固定含
+    `provider / api_mode / base_url / api_key / source / requested_provider`。
+
+    `source` 四取值（A4）：
+      * `"explicit"` —— 显式 `--provider` / 运行时参数；
+      * `"config"`   —— config.json 的 `model.provider`；
+      * `"env"`      —— `MINI_INFERENCE_PROVIDER`；
+      * `"auto"`     —— 都没给，按环境密钥自动选。
+    """
+    requested_name = resolve_requested_provider(requested)          # ① 名字层
+    source = getattr(requested_name, "source", "auto")
+    provider = normalize_provider(str(requested_name))              # 别名归一（A10）
+    runtime = resolve_provider(provider, model, source=source,      # ② 连接层
+                               explicit_api_key=explicit_api_key,
+                               explicit_base_url=explicit_base_url)
+    runtime["source"] = source
+    runtime["requested_provider"] = str(requested_name)
+    return runtime

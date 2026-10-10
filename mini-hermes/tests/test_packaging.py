@@ -56,6 +56,7 @@ PROJECT_MODULES = {
     "hermes_cli",
     "gateway",                 # ← 第 7 章新增（对应 Hermes 的 gateway/：门面 + run_*.py 兄弟）
     "toolsets",          # ← 第 4 章新增（对应 Hermes 的 toolsets.py）
+    "providers",               # ← 第 8 章新增（对应 Hermes 的 providers/：画像注册表 + 门面派生视图）
 }
 
 STDLIB_PATH = Path(sysconfig.get_paths()["stdlib"]).resolve()

@@ -31,9 +31,8 @@
 ⚠️ **厂商形状不许长进提示词里**：`description` 描述的是**我们自己的**结果形状
 （`{query, results:[{title,url,snippet}]}`），换供应商只动下面的表，模型看到的契约不变。
 
-⚠️ 与 Hermes 的一处差异：Hermes 的凭据要走 `get_secret`（按 profile 隔离，
-因为一个进程可能服务多个 profile），不能直接 `os.getenv`。
-mini 是单 profile 的，所以这里读环境变量；**多 profile 之前必须改**。
+凭据走 `get_secret`（按 profile 隔离）—— 因为一个进程可能服务多个 profile，
+直读 `os.environ` 会让 A 的回合用上 B 的 key（那是第 7.2 章修掉的真 bug）。
 """
 from __future__ import annotations
 

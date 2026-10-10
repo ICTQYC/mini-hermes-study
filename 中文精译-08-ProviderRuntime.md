@@ -323,6 +323,25 @@ Hermes 支持配置一条**回退供应商链**：一串 `(provider, model)` 条
 
 ## 附录 C · 本篇与上游源码的出入（轻量核对，2026-10-10）
 
+★ **三处"文档说的与源码不符"**（读源码取证时发现，正文按原文照译，这里给事实）：
+
+1. **§11.2「子代理不支持回退」—— 与源码相反**。文档说子代理"继承父级供应商但不继承回退配置"；
+   实测 `tools/delegate_tool.py`：子代理**默认继承父级的回退链**，只有显式 pinned 或
+   `fallback_providers: []` 才会断。另外**辅助任务也不是"没有回退"**，而是不走主机制
+   （`_try_activate_fallback`），它走**解析期**自己的链（见 §10）。
+2. **§11.1「三处触发点」—— 实际五处**。文档列了 `turn_api_error` / `turn_response_check` /
+   `turn_recovery` 三处；实测另有 `agent/turn_api_call.py` 与 `agent/turn_empty_response.py`
+   两处也调 `_try_activate_fallback`。**判据本身（哪类错可回退）文档写得对**，只是调用点数不全。
+
+3. **§7「`OPENAI_API_KEY` 用于自定义端点，并作为兜底」—— 源码比这句话严格**。
+   实测 `runtime_provider.py:317-326 _host_gated_env_key_candidates`：三把 key（OLLAMA / OPENAI / OPENROUTER）
+   **都只挂自己的权威域名**，其余一律给空串；自定义端点走 `_host_derived_api_key()`（从 host 反推
+   `<VENDOR>_API_KEY`）。docstring 附了安全理由（逐字）：*"Sending OPENAI/OPENROUTER/OLLAMA keys to an
+   unrelated endpoint leaks credentials (GHSA-76xc-57q6-vm5m); match on HOST, not substring."*
+   —— 即"兜底"是**按域名推导出的那把 key**，不是"把 OpenAI 的 key 发给任意端点"。
+
+（下面三处是"清单/形态类"出入，不算错，列出便于对照。）
+
 按用户 2026-10-10 定的新口径（**架构优先、不为细节付成本**），本篇只核**架构性声明**，
 不逐条对函数级细节（那些留给《源码讲解-08》）。核了三处：
 
