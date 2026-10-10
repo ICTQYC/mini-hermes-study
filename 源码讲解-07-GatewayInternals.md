@@ -24,7 +24,7 @@
 | 本章规模 | `gateway/` **160 个 .py / 86,785 行** | 全项目代码 **8,200 → 10,615 行**（本章新增文件 2,030 行 + 改动既有 +70 行 + **侧线 profile 入口层 +315 行**，见下表） |
 | 平台适配器 | `plugins/platforms/` **22 个**平台 | `gateway/adapters/` **1 个**（console） |
 | 存储 | `state.db`（第 6 章） | 同（本章加 `session_key` 列） |
-| 测试 | ~39k 条 | 新增 `tests/test_gateway.py` **903 行 / 14 组 / 135 条断言**（该章交付时点；★ 第 8 章后为 **1,327 行 / 17 组 / 214 条**） |
+| 测试 | ~39k 条 | 新增 `tests/test_gateway.py` **903 行 / 14 组 / 135 条断言**（该章交付时点；★ 到网关族收尾时已是 **1,698 行 / 21 组 / 266 条**） |
 
 **本章 mini 新增/改动**（`wc -l` 实测）：
 
@@ -622,12 +622,13 @@ s6 finish→125 / launchd `KeepAlive.SuccessfulExit=false`）—— mini 不装�
 
 - `hermes_constants.py`：`_HOME_OVERRIDE` contextvar + `set/reset_mini_home_override`，
   `get_mini_home()` 解析顺序 = **作用域 → `MINI_HOME` → 默认**；
-- `agent/secret_scope.py`（91 行）：`set_secret_scope` / `get_secret` / `UnscopedSecretError` /
+- `agent/secret_scope.py`（**135 行**）：`set_secret_scope` / `get_secret` / `UnscopedSecretError` /
+  全局白名单 `GLOBAL_ENV_EXACT`（19 项）—— 白名单与 dotenv 边界是**第 7 章家族扩展 7.2** 补的，见《源码讲解-07c》
   `set_multiplex_active` / `build_profile_secret_scope`（读 `.env` 成**只读字典**，不碰 `os.environ`）；
 - `gateway/profile_scope.py`（74 行）：`profile_runtime_scope(home)` 上下文管理器
   （绑 home + 绑密钥，**复位顺序与绑定相反**，异常路径也不留残留作用域）+
   `served_profile_child_env(home)`（给子进程：**摘掉** `MINI_HOME`/各种 `*_API_KEY`，再钉上目标 home）；
-- `hermes_cli/profiles.py`（56 行）：`profiles_to_serve(multiplex)`，默认 profile **永远排第一**；
+- `hermes_cli/profiles.py`（**249 行**）：`profiles_to_serve(multiplex)`，默认 profile **永远排第一**；
 - `gateway/run.py::_db()` 用 `get_mini_home()` 而不是 `self.home`：
   **作用域绑好之后，"替谁干活"这件事就不用传参了 —— 于是也没法传错**。
 
@@ -770,7 +771,7 @@ docker/ssh 这类后端，就必须补上这一层，否则会出现与 `#68559`
 
 ## §十三 测试与收据
 
-**测试**：`tests/test_gateway.py`（903 行 / **14 组 / 135 条断言**，**该章交付时点**；★ 第 8 章后为 1,327 行 / 17 组 / 214 条），双解释器
+**测试**：`tests/test_gateway.py`（903 行 / **14 组 / 135 条断言**，**该章交付时点**；★ 到网关族收尾时已是 1,698 行 / 21 组 / 266 条），双解释器
 （`/usr/local/bin/python3` = 3.13.14、`/usr/bin/python3` = 3.9.6）**135 通过 / 0 失败**。
 
 | 组 | 守的承诺 |
@@ -925,5 +926,5 @@ pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
 | 中文精译 | `中文精译-07-GatewayInternals.md` | 636 行（含附录 A 术语表 25 条 / C 上游出入 1 处） |
 | 源码讲解（本篇） | `源码讲解-07-GatewayInternals.md` | 929 行（导言 + 差异表 17 + 逐机制四步 + 真问题 5 + 差距 14）★ 含第 8 章开工时的 5 处同步 |
 | 实现 | `gateway/` + `agent/secret_scope.py` + `hermes_cli/{commands,profiles,profile_cmd,gateway_cmd}.py` | 新增 2,345 行 |
-| 测试 | `tests/test_gateway.py` | 903 行 / 14 组 / 135 条（该章交付时点；第 8 章后 1,327 行 / 17 组 / 214 条） |
+| 测试 | `tests/test_gateway.py` | 903 行 / 14 组 / 135 条（该章交付时点；网关族收尾时 1,698 行 / 21 组 / 266 条） |
 | 侧线 | 多 profile 入口层（`-p` / `profile create\|list\|show`） | 含在实现行数里 |
