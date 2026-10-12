@@ -84,6 +84,8 @@ Hermes 在**做任何字符串操作之前**先把它拍平（flatten），而�
 反面例子就一句话：**别让一个"上一次 shell 里导出过的旧环境变量"悄悄盖掉用户刚刚在 `hermes model` 里选的端点。**
 —— 这正是把 config 排在 env **上面**的原因。
 
+**配置优先级的设计，不能让环境变量盖过配置文件。**
+
 ---
 
 ## 3. 供应商清单
@@ -331,9 +333,7 @@ Hermes 支持配置一条**回退供应商链**：一串 `(provider, model)` 条
    实测 `tools/delegate_tool.py`：子代理**默认继承父级的回退链**，只有显式 pinned 或
    `fallback_providers: []` 才会断。另外**辅助任务也不是"没有回退"**，而是不走主机制
    （`_try_activate_fallback`），它走**解析期**自己的链（见 §10）。
-2. **§11.1「三处触发点」—— 实际五处**。文档列了 `turn_api_error` / `turn_response_check` /
-   `turn_recovery` 三处；实测另有 `agent/turn_api_call.py` 与 `agent/turn_empty_response.py`
-   两处也调 `_try_activate_fallback`。**判据本身（哪类错可回退）文档写得对**，只是调用点数不全。
+2. **§11.1「三处触发点」—— 实际远多于三处（6 个模块 / 11 处调用点）**。文档列了 `turn_api_error.py` / `turn_response_check.py` / `turn_recovery.py` 三处；实测锚点上 `_try_activate_fallback()` 还被 `agent/turn_api_call.py:258`、`agent/turn_empty_response.py:271`、`agent/turn_truncation.py:213` 与 `:600` 调用（`turn_api_error.py` 自身也有 `:330` 与 `:359` 两处）。上游自己的测试就把这件事写成了断言：`tests/agent/test_prompt_cache_ttl_propagation.py:256` —— `assert seen >= 5, "expected the retry-loop _try_activate_fallback sites"`。文档列的是**按原因归纳的三类**，不是调用点清单。
 
 3. **§7「`OPENAI_API_KEY` 用于自定义端点，并作为兜底」—— 源码比这句话严格**。
    实测 `runtime_provider.py:317-326 _host_gated_env_key_candidates`：三把 key（OLLAMA / OPENAI / OPENROUTER）
