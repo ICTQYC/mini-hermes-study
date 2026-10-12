@@ -41,6 +41,52 @@
 
 **交换（exchange）**是一整轮 agent 回合：一条 assistant 消息，连同它的工具结果以及后续的 assistant 迭代，直到下一条 user 消息为止。在工具密集的工作里，**大头 token 就住在这儿** —— 一次文件读取或一条命令的输出，把周围的散文比得微不足道 —— 所以\"一次吸收一个交换\"这件事本身是划算的。取**整轮**（而不是单独一组 assistant+tools）还能让转写本的角色交替**严格保持合法**：摘要标记是一条 assistant 角色的消息，而一整轮**两端总是被 user 消息夹住**。
 
+> 📌 **译注（补充，2026-10-12）：`exchange`（交换）到底指哪一段？**
+>
+> 原文在 §1 只给了一句话定义，但它在这章里出现得非常频繁，所以这里把它钉死。
+>
+> **一句话**：`exchange` = **一次来回里 agent 那一侧的全部产出** —— 它**不含**你（user）说的那句话。
+> 原文自己给的等价说法是 *full agent turn*（完整的一个 agent 回合）。
+>
+> **形状**（转写本按顺序编了号，标出边界在哪儿）：
+>
+> ```text
+> [0]  system                        ← 头部保护：永不碰
+> [1]  user      "帮我加个重试逻辑"      ┐  user 不属于任何 exchange
+> [2]  assistant (tool_calls)         │
+> [3]  tool      read_file → …        │  ★ exchange #1
+> [4]  assistant (tool_calls)         │    （从 [2] 开始，到 [5] 结束）
+> [5]  tool      write_file → ok      ┘
+> [6]  user      "跑一下测试"           ← 边界：遇到别的角色就停
+> [7]  assistant (tool_calls)         ┐
+> [8]  tool      pytest → …           │  ★ exchange #2
+> [9]  assistant (最终回答)            ┘
+> [10] user      "谢谢"                ← 边界
+> [11] assistant …                    ← 尾部保护窗口：永不碰
+> ```
+>
+> **怎么"切"**（判据在 `agent/micro_compaction.py:62-90 _find_one_exchange()`，三条）：
+>
+> 1. 先**跳过** `user` 行与（`assistant` 角色的）摘要标记，够到**第一条真正的 `assistant` 行** —— 从这里开始
+>    （注释逐字：*otherwise a rehydrated cursor could absorb the marker itself*，即别让从盘上恢复的游标把**标记自己**当成一个回合吞掉）；
+> 2. 往后**连续吃** `assistant` / `tool` 行，直到遇到别的角色（那就是下一条 `user`）；
+> 3. **必须能收尾**：如果走到尾部保护窗口的边界时下一条还是 `assistant`/`tool`，**这一轮就不吸收**
+>    （注释逐字：*Boundary must close the turn: a mid-turn stop at tail_start would put the assistant marker
+>    beside assistant/tool rows. Any other role is a safe splice (avoids wedging the cursor).*）
+>    —— 宁可这轮什么都不做，也不留半截回合。
+>
+> **尺寸不是按 token 切的**：整条链上唯一按 token 算的地方是**尾部保护窗口从哪儿开始**
+> （`_find_tail_cut_by_tokens()`，见 §3），它只决定"哪儿不许碰"。被吸收的那一段，大小**由边界决定**。
+>
+> **被吸收时换成什么**：**一条 `assistant` 角色的摘要标记**（内容 = 那份累积摘要）。
+> 因为 `assistant` 角色的标记两端总是被 `user` 夹住，角色交替**严格保持合法**；这也是为什么它必须取**整轮**
+> 而不是单独一组 assistant+tools（半截会让标记挨着 assistant/tool 行）。
+>
+> **别混**：本章的 `exchange` 与 `turn`（回合）不同 —— `turn` 含 user 那一侧；也与 OAuth 的
+> *token exchange*（拿授权码换令牌）毫无关系。你在代码里看到的 `exchange_start` / `exchange_end` /
+> `exchange_text` / `exchange_tokens` 说的都是本节这一件事。
+
+
 ---
 
 ## 2. Your messages are never compacted —— 你的消息永不被压缩
@@ -262,10 +308,10 @@ Micro-compaction: skipping exchange at cursor 12 after 3 consecutive failures
 
 | 术语 | 原文 | 一句话意思 |
 |---|---|---|
+| 交换 | exchange (full agent turn) | **一整轮 agent 回合里 agent 那一侧的全部产出** —— 一条 `assistant` 消息 + 它的工具结果 + 后续 `assistant` 迭代，直到下一条 `user` 消息为止；**不含** user 那一步。切法与框图见 §1 译注 |
 | 微型压缩 | micro-compaction | 每完成一个回合就把最早的那个未吸收交换折进滚动摘要；把压缩成本**分期摊销**的方式 |
 | 批量压缩 | batch compaction | 到上下文阈值才停止会话、**一次性**摘要中间段的常规压缩（是本特性的**推迟对象**，不是被替代者） |
 | 压缩（行级） | compaction | 把多行历史**合并 / 替换**成更少行的那个动作（本特性每回合做一次，故也叫行级） |
-| 交换 | exchange | 一整轮 agent 回合：一条 assistant 消息 + 它的工具结果 + 后续 assistant 迭代，直到下一条 user 消息 |
 | 吸收 | absorb | 把某个交换折进滚动摘要、并在转写本里用一条摘要标记替换它 |
 | 滚动摘要 | rolling summary | 唯一一份持续累积的摘要；每个新交换**并入**它，而不是各自单独存一份 |
 | 摘要标记 | summary marker | 转写本里携带当前滚动摘要的那条 assistant 角色消息（就是那条\"摘要\"行） |
