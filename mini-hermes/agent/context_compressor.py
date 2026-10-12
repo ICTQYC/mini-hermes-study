@@ -518,6 +518,7 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         self._micro_passes = 0
         self._micro_turns_since_pass = 0
         self._micro_dirty = False            # 本次 pass 是否真的改了（调用方据此落库）
+        self._micro_last_action = "none"     # ★ 本次 pass 真的走的哪条分支（absorb/defrag/none）
         self.reset_micro_compact_state()     # 游标 / 滚动摘要 / 失败记账
 
     # ── 阈值与触发 ──────────────────────────────────────────────────────────

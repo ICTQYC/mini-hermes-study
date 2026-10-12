@@ -538,6 +538,7 @@ def test_defrag_rewrites_marker_in_place() -> None:
     check("★ 最新 micro 标记正文被改写", any("紧凑重写后的摘要" in str(m.get("content"))
                                             for m in out2 if is_micro_marker(m)))
     check("defrag 也置 dirty（调用方据此落库）", c._micro_dirty is True)
+    check("★ 分支标签 = defrag", c._micro_last_action == "defrag", f"action={c._micro_last_action}")
 
 
 def test_defrag_failure_leaves_summary_intact() -> None:
@@ -700,6 +701,85 @@ def test_no_middle_segment_is_noop_when_tail_covers_all() -> None:
     check("没有造出 micro 标记", sum(1 for m in out if is_micro_marker(m)) == 0)
 
 
+# ══════════════════════════════════════════════════════════════════ 10. 分支标签（真跑抓出的回归）
+
+def test_action_label_is_absorb_when_count_unchanged() -> None:
+    """★ 回归：吸收**不一定**改变消息条数 —— 交换只含 1 条消息时是"删 1 加 1"。
+
+    旧写法（`run_agent._micro_compact_after_turn` 的早期版本）按"消息条数变没变"
+    反推 absorb / defrag ⇒ 把这种吸收**误报成 defrag**（真跑两次的回合 1 都是）。
+    契约：分支只能由**当次真的走了哪条**决定 —— 压缩器记 `_micro_last_action`。
+    """
+    c, msgs = _fresh(payload_chars=6000)
+    llm, calls = _recording_llm("## 摘要\n- 进度：读完模块 0")
+    out = c.micro_compact(msgs, call_llm=llm)
+    n_markers = sum(1 for m in out if is_micro_marker(m))
+    check("★ 这个形状下吸收**不改变条数**（1 条消息的交换：删 1 加 1）",
+          len(out) == len(msgs) and n_markers == 1, f"{len(msgs)} → {len(out)} · 标记 {n_markers}")
+    check("★ 分支标签 = absorb（不是 defrag）", c._micro_last_action == "absorb",
+          f"action={c._micro_last_action}")
+    check("确实只有一次 LLM 调用", len(calls) == 1, f"calls={len(calls)}")
+    check("吸收仍然置 dirty（调用方据此落库）", c._micro_dirty is True)
+
+
+def test_hook_status_text_follows_branch_not_count() -> None:
+    """★ 回归（**用户可见面**）：钩子文案必须按分支标 —— 条数没变也可能是吸收。
+
+    这一条直接钉住真跑抓出的那个缺陷：`run_agent._micro_compact_after_turn`
+    曾用 `len(messages) != before` 决定文案，于是"吸收但条数不变"被报成
+    "微压缩：defrag 重压了滚动摘要（条数不变）"。
+    """
+    import run_agent
+
+    c, msgs = _fresh(payload_chars=6000)
+
+    class _Stub:
+        """只实现钩子真正用到的那几个方法（不联网、不落库）。"""
+
+        def __init__(self) -> None:
+            self.statuses: list = []
+            self.persisted: list = []
+
+        def _compressor(self):
+            return c
+
+        def _summary_llm(self, system, user):
+            return "## 摘要\n- 进度：读完模块 0"
+
+        def _summary_llm_meta(self, system, user):
+            return "## 摘要\n- 进度：读完模块 0", "stop"
+
+        def _emit_status(self, text: str) -> None:
+            self.statuses.append(text)
+
+        def _persist_micro_compaction(self, messages) -> None:
+            self.persisted.append(list(messages))
+
+    stub = _Stub()
+    before = len(msgs)
+    run_agent.AIAgent._micro_compact_after_turn(stub, msgs)
+    check("★ 这次吸收**条数没变**（形状前提）", len(msgs) == before, f"{before} → {len(msgs)}")
+    check("★ 钩子文案 = 吸收（**不是** defrag 重压）",
+          bool(stub.statuses) and "吸收" in stub.statuses[-1] and "defrag" not in stub.statuses[-1],
+          f"statuses={stub.statuses}")
+    check("吸收 ⇒ 走了落库", len(stub.persisted) == 1, f"persisted={len(stub.persisted)}")
+
+
+def test_action_label_none_on_noop_and_disabled() -> None:
+    """`none` = 这一轮压根没动手（关着 / 无可吸收交换 / 失败）。"""
+    llm, calls = _recording_llm()
+    c, msgs = _fresh()
+    c.micro_compact_enabled = False
+    c.micro_compact(msgs, call_llm=llm)
+    check("关着时分支 = none", c._micro_last_action == "none")
+    c2 = ContextCompressor(context_length=64_000, micro_compact=True)
+    c2.micro_compact([{"role": "system", "content": "s"}, {"role": "user", "content": "u"},
+                      {"role": "assistant", "content": "a"}, {"role": "user", "content": "u2"}],
+                     call_llm=llm)
+    check("no-op（无可吸收交换）时分支 = none", c2._micro_last_action == "none")
+    check("两条路径都零调用", len(calls) == 0, f"calls={len(calls)}")
+
+
 GROUPS = [
     ("1. 交换边界（A1）",
      "跳 user/标记 · 连续吃 assistant+tool · **必须能收尾** · **user 永不被吸收**",
@@ -755,6 +835,11 @@ GROUPS = [
       test_wiring_absorb_notifies_and_persists,
       test_wiring_failure_no_persist,
       test_summary_prompt_contract]),
+    ("10. 分支标签（真跑抓出的回归）",
+     "分支由**当次真的走了哪条**决定 · 「吸收但条数不变」不许被报成 defrag",
+     [test_action_label_is_absorb_when_count_unchanged,
+      test_hook_status_text_follows_branch_not_count,
+      test_action_label_none_on_noop_and_disabled]),
 ]
 
 

@@ -1243,10 +1243,13 @@ class AIAgent:
         if getattr(c, "_micro_dirty", False):
             self._persist_micro_compaction(messages)
             c._micro_dirty = False
-            if len(messages) != before:
-                self._emit_status(f"微压缩：吸收 1 个交换 · {before} → {len(messages)} 条消息")
-            else:
+            # ★ 文案按**当次真的走了哪条分支**标（压缩器记的 `_micro_last_action`），
+            #   不按"消息条数变没变"反推 —— supersede + 相邻用户回合合并会让一次**真正的
+            #   吸收**也保持条数不变（旧写法就是把这种吸收误报成 defrag）。
+            if getattr(c, "_micro_last_action", "") == "defrag":
                 self._emit_status("微压缩：defrag 重压了滚动摘要（条数不变）")
+            else:
+                self._emit_status(f"微压缩：吸收 1 个交换 · {before} → {len(messages)} 条消息")
 
     def _persist_micro_compaction(self, messages: List[Dict]) -> None:
         """把微压缩后的上下文**原子落库**（第 6 章 `record_compaction` 行级归档）。

@@ -458,6 +458,9 @@ class MicroCompactionMixin:
           旧调用方只传 `call_llm` 时行为不变（finish 未知、不判截断）。
         """
         self._micro_dirty = False
+        # ★ 本次 pass 真的走了哪条分支（`absorb` / `defrag` / `none`）—— 调用方**据此**标文案，
+        #   不要按"消息条数变没变"反推：supersede + 相邻 user 合并会让一次真正的吸收也保持条数不变。
+        self._micro_last_action = "none"
         if not getattr(self, "micro_compact_enabled", False):
             return messages
 
@@ -484,6 +487,7 @@ class MicroCompactionMixin:
                 self._reset_micro_failures()
                 self._micro_passes += 1
                 self._micro_dirty = True
+                self._micro_last_action = "defrag"
             return messages
 
         # 本次摘要是否**累积**（含更早的 micro 标记）—— 摘要前捕获。
@@ -504,6 +508,7 @@ class MicroCompactionMixin:
         self._micro_cursor = cursor_after_marker(result, exchange_start + 1)
         self._micro_passes += 1
         self._micro_dirty = True
+        self._micro_last_action = "absorb"
         return result
 
     def micro_compact_describe(self) -> str:
