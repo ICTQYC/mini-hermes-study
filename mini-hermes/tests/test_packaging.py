@@ -51,6 +51,9 @@ PROJECT_MODULES = {
     "hermes_state_sessions",
     "hermes_state_messages",
     "hermes_state_search",
+    "hermes_state_errors",     # ← 第 11 章新增（错误分类谓词 + StateDbCorruptError）
+    "hermes_state_fts",        # ← 第 11 章新增（fail-open 摘触发器 / 显式 rebuild_fts）
+    "hermes_state_repair",     # ← 第 11 章新增（session repair 引擎：raw-copy 备份 + 重建 + 三段验证）
     "tools",
     "agent",
     "hermes_cli",

@@ -130,8 +130,11 @@ def test_reopen_is_idempotent() -> None:
 def test_schema_sql_is_single_source_of_truth() -> None:
     with fresh_db() as db:
         declared = parse_schema_columns(SCHEMA_SQL)
-        check("解析出 4 张实体表（含 schema_version）",
-              set(declared) == {"sessions", "messages", "system_prompts", "schema_version"},
+        # ★ 第 11 章加了 `state_meta`（键值元数据表，装 fts_stale 降级标记）：
+        #   它是**纯加表**（IF NOT EXISTS），所以这个集合从 4 变 5 —— 机制没变，清单变了。
+        check("解析出 5 张实体表（含 schema_version / state_meta）",
+              set(declared) == {"sessions", "messages", "system_prompts", "schema_version",
+                                "state_meta"},
               repr(sorted(declared)))
         check("列定义片段带约束（不是只有类型名）——#51646 的学费",
               "DEFAULT 1" in declared["messages"]["active"],

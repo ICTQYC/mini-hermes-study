@@ -52,6 +52,35 @@ CHECKPOINT_EVERY_N_WRITES = 50
 """
 
 
+# ── 第 11 章：FTS 同步触发器名单 + 降级标记 ──────────────────────────────
+# （真实版 `hermes_state_common.py:321-322`（名单）/ `:878-880`（标记））
+_FTS_TRIGGERS = (
+    "messages_fts_insert",
+    "messages_fts_delete",
+    "messages_fts_update",
+)
+"""三个同步触发器的名字（真实版是 **6 个**：base 3 + trigram 3，`:321-322`；mini 只有 base 一套）。
+
+★ 为什么名单必须是常量：fail-open 要"把这一整套**摘掉**"，`rebuild_fts()` 要
+  "把这一整套**装回来**" —— 两处必须看**同一份**名单。名单要是散在那两句 SQL 里，
+  迟早会漏掉一个；漏一个的后果是"以为摘干净了，其实还有一条路径在往坏索引里写"，
+  而那正是 FTS5 external-content 的经典损坏点（真实版 `hermes_state_fts.py:28-31`）。
+"""
+
+FTS_STALE_KEY = "fts_stale"
+"""`state_meta` 里的降级标记键（真实版 `hermes_state_common.py:878-880`，逐字）：
+
+    # Set when a base/trigram FTS index was detached after runtime corruption; startup must rebuild the complete
+    # index before reinstalling sync triggers (rows written while they were absent leave an unknown gap).
+    FTS_STALE_KEY = "fts_stale"
+
+★ 它的存在理由就是**跨重启可见**：触发器一摘，索引就有了一段"范围未知的空窗"
+  （触发器缺席期间写进来的行没进索引）。在内存里记一个标志，进程一重启就忘了，
+  重开库会以为索引是好的 → 把触发器装回去 → 空窗永远补不上、越补越错。
+  落在 `state_meta` 里，"降级中"这件事就成了**持久事实**，而不是某个进程的私事。
+"""
+
+
 SCHEMA_SQL = """
 -- ══════════════════════════════════════════════════════════════════════
 -- 系统提示词去重表：会话行只存 sha256 哈希，正文在这里存一份
@@ -129,11 +158,29 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
+
+-- ══════════════════════════════════════════════════════════════════════
+-- 第 11 章：键值元数据表（真实版 `hermes_state_common.py:448-451`，逐字同 DDL）
+--
+--   CREATE TABLE IF NOT EXISTS state_meta (
+--       key TEXT PRIMARY KEY,
+--       value TEXT
+--   );
+--
+-- ★ **纯加表，不写迁移**：SCHEMA_SQL 是唯一事实来源，加一张 `IF NOT EXISTS` 的表
+--   跟加一列一样，改这里就够了（老库打开时自动补建）。
+-- ★ 它存在的唯一理由：装**跨重启可见**的持久标记 —— `fts_stale`（见下面常量）。
+--   在内存里记一个"我降级了"的标志，进程一退出就没了；重开库会以为索引是好的。
+-- ══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS state_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
-# ↑ 分界线：**上面是三张实体表的建表语句**，
+# ↑ 分界线：**上面是四张实体表的建表语句**（第 11 章加了 `state_meta`），
 #   下面是"引用具体列"的 DDL（索引 / FTS 虚拟表 / 触发器 / 版本表）。
 
-POST_RECONCILE_SQL = """
+_POST_RECONCILE_SQL = """
 -- ══════════════════════════════════════════════════════════════════════
 -- 下面这段必须在 `_reconcile_columns()` **之后**再执行。
 --
@@ -177,24 +224,47 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content_rowid='id'
 );
 
--- 三个触发器：INSERT / DELETE / UPDATE 各一个（真实版 `:703/:718/:737`）
-CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content, tool_name, tool_calls)
-    VALUES (new.id, new.content, new.tool_name, new.tool_calls);
-END;
-
--- 外部内容表的删除是一条**特殊的 delete 命令**（不是 DELETE 语句）：
--- 要把"当时索引进去的那几个值"再喂一遍，FTS5 才知道倒排表里该摘掉什么。
-CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content, tool_name, tool_calls)
-    VALUES ('delete', old.id, old.content, old.tool_name, old.tool_calls);
-END;
-
-CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content, tool_name, tool_calls)
-    VALUES ('delete', old.id, old.content, old.tool_name, old.tool_calls);
-    INSERT INTO messages_fts(rowid, content, tool_name, tool_calls)
-    VALUES (new.id, new.content, new.tool_name, new.tool_calls);
-END;
-
 """
+
+# ── 第 11 章：触发器从上面那份 DDL 里**拆出来**，成为独立可执行的清单 ──────
+# ★ 抄的是真实版的切法（`hermes_state_fts.py:28-31` 逐字）：
+#
+#     # Split DDL: the table/view is safe to ensure any time; triggers are created ONLY
+#     # while the index is complete-or-marker-gated. A stale index must keep its
+#     # triggers DROPPED — an external-content 'delete' for a rowid the index never
+#     # held is the canonical FTS5 corruption hazard.
+#
+#   理由在 mini 里同样成立：触发器要能被 fail-open **整套摘掉**（`DROP TRIGGER`）、
+#   被 `rebuild_fts()` **整套装回来**，所以它必须是"一份可以逐条执行的清单"，
+#   而不是埋在一大段 DDL 尾巴里的一串文本。
+#   `PRE_RECONCILE` 的语义：建表/建索引/建虚拟表随时可以 ensure（幂等），
+#   只有触发器要等"索引是完整的"才能装。
+FTS_TRIGGER_STATEMENTS = (
+    # INSERT：新行进 messages → 同一份内容进 FTS（真实版 `:703`）
+    """CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content, tool_name, tool_calls)
+    VALUES (new.id, new.content, new.tool_name, new.tool_calls);
+END""",
+    # DELETE：外部内容表的删除是一条**特殊的 delete 命令**（不是 DELETE 语句）——
+    # 要把"当时索引进去的那几个值"再喂一遍，FTS5 才知道倒排表里该摘掉什么（真实版 `:718`）
+    """CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content, tool_name, tool_calls)
+    VALUES ('delete', old.id, old.content, old.tool_name, old.tool_calls);
+END""",
+    # UPDATE = 先 delete 旧值、再 insert 新值（真实版 `:737`）
+    """CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content, tool_name, tool_calls)
+    VALUES ('delete', old.id, old.content, old.tool_name, old.tool_calls);
+    INSERT INTO messages_fts(rowid, content, tool_name, tool_calls)
+    VALUES (new.id, new.content, new.tool_name, new.tool_calls);
+END""",
+)
+
+# 拼回一整份（`_ensure_schema` 用 `executescript` 一次跑完，行为不变）。
+# ★ 用 ";\\n" 连接、并补一个收尾分号：`executescript` 是按分号切语句的，
+#   而触发器的**语句体**里本来就有分号（`BEGIN … END` 之内），所以清单里的每条
+#   都是"不带收尾分号的完整触发器定义"，只在拼成整份时才补分号。
+FTS_TRIGGER_SQL = ";\n".join(FTS_TRIGGER_STATEMENTS) + ";\n"
+
+POST_RECONCILE_SQL = _POST_RECONCILE_SQL + FTS_TRIGGER_SQL
+"""建索引 / FTS 虚拟表 / 三个触发器（**顺序不能换**：触发器在最后，见上面的注释）。"""

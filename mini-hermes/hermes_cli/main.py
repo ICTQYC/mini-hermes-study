@@ -82,17 +82,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     # ★ 第 7 章：`gateway` 子命令（对应 `hermes gateway …`）。
     #   它**必须在构造 MiniCLI 之前**处理 —— 网关自己要建 agent，不需要先建一个。
+    # ★ 第 11 章：`sessions` 子命令（对应 `hermes sessions repair`）—— 同理，
+    #   修库这件事不该先建一个 agent（库本身可能就打不开）。
     from hermes_cli.gateway_cmd import add_gateway_parser
     from hermes_cli.profile_cmd import add_profile_parser
+    from hermes_cli.sessions_cmd import add_sessions_parser
 
     sub = parser.add_subparsers(dest="command")
     add_gateway_parser(sub)
     add_profile_parser(sub)
+    add_sessions_parser(sub)
 
     args = parser.parse_args(argv)
 
     # ---- 子命令：不建 MiniCLI，直接跑 ----
-    if getattr(args, "command", None) in ("gateway", "profile"):
+    if getattr(args, "command", None) in ("gateway", "profile", "sessions"):
         return int(args.func(args))
 
     # ---- `-p/--profile`：**在一切取路径的代码之前**把它钉住 ----

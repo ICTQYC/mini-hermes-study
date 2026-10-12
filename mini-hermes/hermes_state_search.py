@@ -21,6 +21,17 @@
 ★ 抄的名字与形状都来自真实版：`_is_cjk` / `_CJK_RANGES`（`hermes_state_search.py:74-89`）、
   `_LIKE_ANY_COLUMN_SQL`（`:48-50`，三列一起扫 + `ESCAPE`）、`_like_params`（`:105-106`）、
   `_LIKE_SNIPPET_SQL`（`:47`，用 `instr` 定位命中处再截 120 字符）。
+
+★ 第 11 章给路由**加了第二条理由**：`_fts_stale`（FTS 派生索引被摘除/损坏）也要走 LIKE。
+  这不是"多一条捷径"，而是**降级契约的一半** —— 写已经能继续写了（fail-open），
+  搜也必须还能搜；而且降级时的搜索**只能**扫权威表。
+
+★ A6 不变量（两处，逐字引真实侧）：
+  - 本文件 `hermes_state_search.py:918-920`：`... a live search never runs the unbounded rebuild.`
+  - `hermes_state_fts.py:354-356`：`once triggers are absent the index has a gap of unknown
+    extent, so nobody may reinstall them without a full rebuild.`
+  即：**活路径（一次写 / 一次搜）绝不允许跑 `FTS5('rebuild')`**。
+  原因见 `hermes_state_fts.py` 模块 docstring：一次阻塞式 rebuild 在 25GB 库上持写锁约 16 分钟。
 """
 from __future__ import annotations
 
@@ -128,6 +139,11 @@ class SessionSearchMixin:
     """给 `SessionDB` 用的检索部分。"""
 
     _conn: sqlite3.Connection
+    # 第 11 章：降级状态（由门面 `SessionDB.__init__` 维护）
+    #   `_fts_stale` —— 派生索引处于"摘除/不可信"状态 ⇒ 搜索必须走 LIKE 扫权威表
+    #   `_fts_enabled` —— 本进程还愿不愿意用 FTS 同步
+    _fts_stale: bool
+    _fts_enabled: bool
 
     def search_messages(self, query: str, *, limit: int = 20, offset: int = 0,
                         source_filter: Optional[Sequence[str]] = None,
@@ -137,16 +153,31 @@ class SessionSearchMixin:
         """跨会话检索。
 
         每条结果 = 片段（FTS 用 `>>>命中<<<` 标出 / LIKE 用 `instr` 截窗口）
-        + 它属于哪个会话 + `route`（`"fts"` 还是 `"like"`，方便你看是哪条路服务的）。
+        + 它属于哪个会话 + `route`（`"fts"` / `"like"` / `"like_scan_fts_stale"`，
+        方便你看是哪条路服务的）。
 
         `active = 0 AND compacted = 0` 的行（被回退/撤销的）默认排除；
         压缩归档的世代**照样能搜到** —— 历史不该因为被压缩过就搜不到。
+
+        ★ 第 11 章把路由**扩了一条理由**（A5，真实版 `hermes_state_search.py:1085-1087`）：
+
+            ① 含中文       → LIKE（FTS5 默认分词器不切 CJK，见模块 docstring 的实测）
+            ② `_fts_stale` → LIKE（FTS 派生索引已被摘除/损坏 ⇒ 索引不可信）
+
+        第 ② 条是本章接的线：**降级不只是"写还能写"，搜也要还能搜** ——
+        而且搜索**只能**从权威表（`messages`）扫，绝不允许为了"让搜索快起来"
+        在活路径上跑一次 `FTS5('rebuild')`（见模块 docstring 的 A6 不变量）。
         """
         if not (query or "").strip():
             return []
-        # ★ 路由：含中文走 LIKE 兜底（默认分词器不切 CJK，见模块 docstring 的实测）
-        if has_cjk(query):
-            return self._search_like(query, limit=limit, offset=offset,
+        if has_cjk(query) or self._fts_stale:
+            # 结果里那个 `route` 字段只在"因降级而走 LIKE"时才换名字：
+            # 这是**第 6 章的既有契约**（中文走 LIKE 时 route == "like"）不能动；
+            # 而"降级在服务"必须一眼可见 ⇒ 标成真实版那个名字 `like_scan_fts_stale`
+            # （真实版 `hermes_state_search.py:884-885`）。
+            route = "like_scan_fts_stale" if self._fts_stale else "like"
+            return self._search_like(query, route=route,
+                                     limit=limit, offset=offset,
                                      source_filter=source_filter,
                                      exclude_sources=exclude_sources,
                                      role_filter=role_filter,
@@ -156,6 +187,30 @@ class SessionSearchMixin:
                                 exclude_sources=exclude_sources,
                                 role_filter=role_filter,
                                 include_inactive=include_inactive)
+
+    def _describe_search_path(self, query: str) -> str:
+        """这次查询**走哪条路**的名字（只给日志/观测用，真实版同名函数 `:881-896`）。
+
+        ★ 首条判据就是 stale 标记，名字照抄真实版 `:884-885`：
+
+            if self._fts_stale:
+                return "like_scan_fts_stale"
+
+          出问题时一眼能看出"这是降级在服务"，而不是"搜索突然搜不到东西了"。
+          其余名字也照抄真实版：非 CJK → `"fts5"`；CJK 走 LIKE → `"like_scan"`（真实版 `:894`）。
+
+        ⚠️ 与结果里那个 `route` 字段的分工：`route` 只在**因降级而走 LIKE** 时换成
+          `like_scan_fts_stale`，中文那条路仍保持 `"like"`（第 6 章的既有契约）。
+          这个函数给的是更细的名字，两者不冲突 —— 结果字段保持老语义，观测名字更具体。
+        """
+        try:
+            if self._fts_stale:
+                return "like_scan_fts_stale"
+            if has_cjk(query or ""):
+                return "like_scan"
+            return "fts5"
+        except Exception:                                  # noqa: BLE001
+            return "unknown"
 
     # ── 路一：FTS5 词索引 ──────────────────────────────────────────────
     def _search_fts(self, query: str, **kw: Any) -> List[Dict[str, Any]]:
@@ -178,8 +233,22 @@ class SessionSearchMixin:
         """
         return self._finish(self._conn.execute(sql, params).fetchall(), "fts")
 
-    # ── 路二：LIKE 兜底（中文/子串）────────────────────────────────────
-    def _search_like(self, query: str, **kw: Any) -> List[Dict[str, Any]]:
+    # ── 路二：LIKE 兜底（中文/子串 · **以及 FTS 降级时**）───────────────
+    def _search_like(self, query: str, route: str = "like", **kw: Any) -> List[Dict[str, Any]]:
+        """扫**权威表** `messages`（不碰派生索引）。
+
+        ★ A6 不变量（真实侧逐字引文 `hermes_state_search.py:918-920`）：
+
+            ... a live search never runs the unbounded rebuild.
+
+          一次"活搜索"永远不许变成一次无界全量重建（那在 25GB 库上持写锁约 16 分钟）。
+          所以降级时搜索的**唯一**出路是这条 LIKE 扫描：它慢，但它只读权威表、
+          不依赖任何派生状态、也永远不会去动索引。真实版同样如此
+          （`_search_messages_like_fallback` + 路径名 `like_scan_fts_stale`）。
+
+        `route` 是给结果打的**路径名**（观测用）：降级时调用方传
+        `"like_scan_fts_stale"`；默认 `"like"` 保持第 6 章既有语义。
+        """
         tokens = [t.strip('"').strip() for t in _non_operator_tokens(query)]
         tokens = [t for t in tokens if t]
         if not tokens:
@@ -204,7 +273,7 @@ class SessionSearchMixin:
              ORDER BY m.timestamp DESC, m.id DESC
              LIMIT ? OFFSET ?
         """
-        return self._finish(self._conn.execute(sql, params).fetchall(), "like")
+        return self._finish(self._conn.execute(sql, params).fetchall(), route)
 
     # ── 公共 ───────────────────────────────────────────────────────────
     @staticmethod
