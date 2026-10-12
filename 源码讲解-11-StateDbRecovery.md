@@ -229,7 +229,7 @@
 **两条准确性备注**
 
 - 行 11 的"不抄"指的是**跨进程守卫**（准入锁 + 外部持有者侦查）不抄；mini 的**重建动作本身**是有的（`hermes_state_fts.py:187-217`），只是入口收窄成 `repair` 一条，不开库自动跑。别把这一行读成"mini 不会重建"。
-- `hermes_state_errors.py:176-177` 那句"粘性隔离留给下一轮"是 **A1 轮的旧注释**；A7（`d269953`）已在 `hermes_state.py` 落地全套隔离。行号锚 HEAD 时**以 `hermes_state.py` 为准**，那两行只当历史残留看。
+- （已解决）A1 轮在 `hermes_state_errors.py` 里留过一句"粘性隔离留给下一轮"的旧注释；A7（`d269953`）把隔离落在 `hermes_state.py` 之后，该注释已在 `950fe6c` 改成指明四个真实落点（`_halt_db_corrupt` / `_raise_if_db_corrupt` / `_reopen_after_close` / `close()`）。
 
 **引用清单（本节）**
 
@@ -875,7 +875,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 
 | 文件 | 前 → 后行数（mini） | 性质 | 真实侧行数 |
 |---|---|---|---|
-| `hermes_state_errors.py` | **0 → 200**（新） | A1 分类谓词 + `StateDbCorruptError` | 264 |
+| `hermes_state_errors.py` | **0 → 202**（新） | A1 分类谓词 + `StateDbCorruptError` | 264 |
 | `hermes_state_fts.py` | **0 → 219**（新） | A2 标记助手 + A3 fail-open + `rebuild_fts()` + A6 | 430 |
 | `hermes_state_common.py` | 200 → **270** | A2 `state_meta` 表 + `FTS_STALE_KEY` + 触发器名单 | 1224 |
 | `hermes_state.py` | 223 → **417** | A2 开库读标记 + A4 写入环降级 + A7 粘性隔离/守卫 | 1674 |
@@ -914,6 +914,8 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | | `/usr/local/bin/python3` 3.13（SQLite 3.53） | `/usr/bin/python3` 3.9（SQLite 3.51） |
 |---|---|---|
 | `tests/test_state_db_recovery.py` | **121 通过 / 0 失败**（12 组） | **117 通过 / 0 失败**（12 组） |
+
+- **双解释器全套件 1,309 通过 / 0 失败**（`/usr/local/bin/python3` 3.13）· **1,305 / 0 失败**（`/usr/bin/python3` 3.9）—— 11 个测试文件；差额 4 条同上（3.9 的 SQLite 拒 `DROP messages_fts_data`）。
 
 差 4 条**全部来自第 8 组**那条"**真删 FTS 影子表**"的分支：3.13 允许 `DROP TABLE messages_fts_data` 并真造出 FTS 损坏，于是那一路的 4 条断言成立；3.9 / SQLite 3.51 直接**拒绝**（`table messages_fts_data may not be dropped`），该分支改记为一条"本机 SQLite 禁止删 FTS5 影子表"的实测事实。本次新增的 9~12 组在两边**条数完全一致**。
 
@@ -1164,7 +1166,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | `:146-182` | `def enter_fts_fail_o` | fail-open 主体 `enter_fts_fail_open`：门禁只对 FTS 归因损坏动手；`BEGIN IMMEDIATE` → 落标记 → 摘触发器 → commit，**绝不 rebuild**（对齐真实 `:353-403`）。 |
 | `:187` | `def rebuild_fts(self` | `rebuild_fts`——**只**能被显式恢复路径调用，证明「活路径不 rebuild」是结构性的。 |
 
-**`hermes_state_errors.py`（200 行）**
+**`hermes_state_errors.py`（202 行）**
 
 | 行号 | 该行/该段首 20 字 | 它证明什么 |
 |---|---|---|
