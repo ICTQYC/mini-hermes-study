@@ -50,6 +50,9 @@ from hermes_constants import get_mini_home
 #   免得每次读密钥都重新 import。
 from agent.secret_scope import get_secret
 
+# ★ 第 8 章 A9：配置层（键定义 / model / fallback 链 / auxiliary 的唯一读法）。
+from hermes_cli.config import get_configured_model
+
 # ★ 第 8 章：解析的事实源与判据都搬进了 `providers/` 包（A2/A3/A5/A10）。
 from providers import get_provider_profile, list_providers
 from providers.aliases import normalize_provider
@@ -238,25 +241,15 @@ class RequestedProvider(str):
 
 
 def _config_model_config() -> Dict[str, Any]:
-    """从 `$MINI_HOME/config.json` 取 `model` 段（对应真实版 `_get_model_config`）。
+    """从 `config.json` 取 `model` 段（对应真实版 `_get_model_config`）。
 
-    ★ 第 8 章只用到 `model.provider`（名字层的第 2 层）。完整配置层
-      （model / fallback / aux、config 压 env 的顺序）是 A9 的活 —— 它在**这里**扩展。
-    坏配置**不抛**（一个用户的笔误不该让 agent 起不来），按空配置处理。
+    ★ 第 8 章 A9 起：读法**委托给配置层**（`hermes_cli/config.py`）—— 键定义与
+      "坏配置不抛"的口径只存一份，名字层/连接层不再各自解析文件。
+    名字层用 `model.provider`；连接层用 `model.model`（见 `resolve_provider`）。
     """
-    path = get_mini_home() / "config.json"
-    if not path.is_file():
-        return {}
-    try:
-        import json
+    from hermes_cli.config import get_model_config
 
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except Exception:  # noqa: BLE001 —— 坏 JSON 按空配置
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    model_cfg = data.get("model")
-    return model_cfg if isinstance(model_cfg, dict) else {}
+    return get_model_config()
 
 
 def resolve_requested_provider(requested: Optional[str] = None) -> str:
@@ -390,8 +383,15 @@ def resolve_provider(provider: str, model: Optional[str] = None, *,
     if not api_key:
         raise _missing_key_error(profile, base_url)
 
-    model_name = model or profile.default_model or (
-        profile.fallback_models[0] if profile.fallback_models else "")
+    # ── 模型：显式参数 → config（A9）→ `MINI_MODEL`（env）→ provider 默认模型 ──
+    #   ★ 与名字层**同一条顺序**：config 压 env（陈旧的 shell 变量不该盖掉用户存下的选择）。
+    #   ★ `MINI_MODEL` 是**行为设置**（不是凭据），所以直读 `os.environ` 是合规的
+    #     （对照 `agent/secret_scope.py` 的名单：凭据一律走 `get_secret`）。
+    model_name = (model
+                  or get_configured_model()
+                  or os.environ.get("MINI_MODEL", "").strip()
+                  or profile.default_model
+                  or (profile.fallback_models[0] if profile.fallback_models else ""))
     # ★ 第 8 章 A3：api_mode 由 host 探测 + provider 叠加决定，不是入口硬编码。
     api_mode = fallback_api_mode(profile.name, base_url, model_name)
 

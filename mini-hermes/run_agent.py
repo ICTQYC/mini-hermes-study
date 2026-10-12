@@ -11,7 +11,10 @@
   6. 工具执行：单条直连 / 多条并发（结果按原始顺序回填）
   7. agent 级工具提前拦截（todo 不走 registry）
   8. 迭代预算 IterationBudget
-  9. 失败回退（429/5xx/401/403 → 换 fallback provider）
+  9. 失败回退（429/5xx/401/403 → **按序换** fallback provider，链来自 config.json 或构造入参）
+      —— 实现见 agent/fallback.py；本文件的接缝是 `_try_activate_fallback` 与
+      `_post_chat_completions` 的失败分支。
+ 10. 辅助模型路由（压缩摘要经 agent/auxiliary.py 选 provider/model；未配置 = 主模型）
 
 没实现的（后面章节补）：prompt 缓存标记、上下文压缩、记忆落盘、
 流式输出、工具审批的持久化白名单。
@@ -36,12 +39,15 @@ from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 
 import model_tools
+from agent import fallback as _fallback
 from agent.iteration_budget import IterationBudget
 from agent.system_prompt import build_system_prompt
 from tools.todo import AGENT_LEVEL_TOOLS, MAX_TODO_RESULT_CHARS, TodoStore
 
-# 触发回退的 HTTP 状态码
-FALLBACK_STATUS = {401, 403, 408, 409, 429, 500, 502, 503, 504}
+# 触发回退的 HTTP 状态码（★ 第 8 章 A7：判据收敛到 agent/fallback.py 一处；
+# 这里保留同名符号是为了不打破"从 run_agent 读它"的老读法）
+FALLBACK_STATUS = _fallback.FALLBACK_STATUS
+is_fallbackable_status = _fallback.is_fallbackable_status
 
 # ==================================================================== #
 # 连接超时 ≠ 读取超时
@@ -148,6 +154,8 @@ class AIAgent:
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        # ★ 回退链：`None` = **没传**（⇒ 读 config.json 的 `fallback_providers`，A9/A7）；
+        #   `[]` = **显式禁用回退**（真实版同款语义）。链的条目形状见 agent/fallback.py。
         fallback_providers: Optional[List[Dict[str, Any]]] = None,
         max_turns: int = 500,
         # ---- 回调面（对应文档 Callback Surfaces 那节）----
@@ -181,7 +189,28 @@ class AIAgent:
         self.api_key = api_key or spec.get("api_key", "")
         self.model = model or spec.get("model", "")
         self.provider = spec.get("provider", "unknown")
-        self.fallback_providers = fallback_providers or []
+
+        # ══════════════════════════════════════════════════════════════
+        # 第 8 章 A7：回退链（配置是默认来源，构造入参可覆盖）
+        # ══════════════════════════════════════════════════════════════
+        #   ★ 这一章之前，`fallback_providers` 是**形参 + 空列表**——全仓零调用点，
+        #     而模块 docstring 却写着"失败回退"。现在它真的接线了：
+        #       None → 读 config.json（A9 的 get_fallback_chain）
+        #       []   → 显式禁用（真实版同款语义）
+        #   链的状态（索引 / 一次性 latch / 主运行时快照）都挂在实例上 ——
+        #   观察面因此是**可断言的普通属性**（真实版也是这么长的）。
+        if fallback_providers is None:
+            try:
+                fallback_providers = _fallback.chain_from_config()
+            except Exception:  # noqa: BLE001 —— 坏配置不该让 agent 起不来
+                fallback_providers = []
+        self.fallback_providers = list(fallback_providers or [])
+        _fallback.install_chain(self, self.fallback_providers)
+
+        # ★ 当前 client 的**构造入参**。mini 没有长命 client 对象（每次请求按这些值建连接），
+        #   所以"换 client" = 换这 5 个属性 + 这份快照。单一写入口是 `_apply_runtime`，
+        #   保证属性与快照**永不失同步**（真实版是 `_swap_fallback_clients` + `_transport_cache.clear()`）。
+        self._client_kwargs: Dict[str, Any] = self._runtime_client_kwargs()
 
         self.max_turns = max_turns
         self.budget = IterationBudget(max_turns)
@@ -342,6 +371,12 @@ class AIAgent:
     # ------------------------------------------------------------------ #
 
     def _run_conversation_turn(self, messages: List[Dict], task_id: str) -> Dict[str, Any]:
+        # 0. ★ 第 8 章 A7：**按轮次回退** —— 新一轮开始把运行时收回主 provider，并复位
+        #    回退索引 + 一次性 latch（真实版 `restore_primary_runtime()`）。
+        #    为什么必须复位：一次限流/抖动是**瞬时**的，上一轮的兜底 provider 不该
+        #    悄悄变成这一轮的第一选择（那会让"临时兜底"变成"永久降级"，且没有症状）。
+        _fallback.restore_primary_runtime(self)
+
         while True:
             # 每次循环 = 一次"迭代"。先要预算，要不到就收尾。
             if not self.budget.consume():
@@ -649,33 +684,117 @@ class AIAgent:
             raise result
         return result
 
-    def _post_chat_completions(self, api_messages: List[Dict], task_id: str) -> Dict[str, Any]:
-        """带 fallback 的实际请求。"""
-        candidates = [
-            {
-                "provider": self.provider,
-                "base_url": self.base_url,
-                "api_key": self.api_key,
-                "model": self.model,
-            }
-        ] + list(self.fallback_providers)
+    # ------------------------------------------------------------------ #
+    # 运行时（第 8 章 A7：换 provider / 换模型**只经这里**）
+    # ------------------------------------------------------------------ #
 
-        last_error: Optional[Exception] = None
-        for idx, cand in enumerate(candidates):
+    def _runtime_client_kwargs(self) -> Dict[str, Any]:
+        """当前 client 的构造入参（mini 没有长命 client：每次请求按这些值建连接）。
+
+        ★ 为什么单独留一份：回退要换的 5 个属性如果各改各的，迟早有一处漏改
+          （真实版为此专门写了 `_swap_fallback_clients` + 清 `_transport_cache`）。
+          这里用"单一写入口 + 派生快照"把这类失同步变成**不可能**。
+        """
+        return {
+            "provider": self.provider,
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "api_mode": self.api_mode,
+            "model": self.model,
+        }
+
+    def _apply_runtime(self, *, provider: Optional[str] = None, model: Optional[str] = None,
+                       base_url: Optional[str] = None, api_mode: Optional[str] = None,
+                       api_key: Optional[str] = None,
+                       context_length: Optional[int] = None) -> None:
+        """**原地换**运行时（回退的唯一写入口）。
+
+        对应真实版 `chat_completion_helpers.py:1973` 的原地替换，换的是：
+        `model / provider / base_url / api_mode`（+ mini 的 client 凭据 `api_key`）。
+        这里多带一项 **`context_length`**：换了 provider 就是换了模型，而窗口是
+        **模型的属性** —— 不跟着换，压缩阈值就会按上家的窗口算。
+
+        真实版还顺手清了 `_transport_cache`（连接复用会带着旧 host）。mini 每次请求
+        新建连接（`_TwoTimeoutHTTPSConnection`），所以"没有需要清的缓存"是**结构上成立的**，
+        不是漏做 —— 这条差异记在报告里。
+        """
+        if provider is not None:
+            self.provider = provider
+        if model is not None:
+            self.model = model
+        if base_url is not None:
+            self.base_url = str(base_url).rstrip("/")
+        if api_mode is not None:
+            self.api_mode = api_mode
+        if api_key is not None:
+            self.api_key = api_key
+        self._client_kwargs = self._runtime_client_kwargs()
+        if context_length:
+            self.context_length = int(context_length)
+            c = getattr(self, "_compressor_obj", None)
+            if c is not None:
+                c.update_model(self.model, self.provider)
+                c.context_length = int(context_length)
+
+    def _candidate_for(self, runtime: Dict[str, Any]) -> Dict[str, Any]:
+        """`_http_post(cand, messages)` 要的候选形状（只取它真的读的 4 个键）。"""
+        return {
+            "provider": runtime.get("provider", ""),
+            "base_url": runtime.get("base_url", ""),
+            "api_key": runtime.get("api_key", ""),
+            "model": runtime.get("model", ""),
+        }
+
+    def _try_activate_fallback(self, *, reason: str = "", status: Any = None) -> bool:
+        """★ **唯一的回退触发点**（A7）。换成功返回 True；链耗尽 / 无可换候选返回 False。
+
+        接线的规矩（对应真实版三处触发点的共同收口）：
+          · 只在这里换 —— 别的代码不许自己改 provider/model；
+          · 换完**立刻**让调用方 `break`（见 `_post_chat_completions`）：
+            不再锤刚失败的那个 provider；
+          · 链耗尽时**连一句"切换中"都不报**（真实版 `_has_pending_fallback()` 的用法）——
+            报一句换不了的话比不报更坏。
+        """
+        before_provider = self.provider
+        if not _fallback.activate_fallback(self, reason=reason):
+            return False
+        if self.tool_progress_callback:
+            self.tool_progress_callback(
+                "fallback",
+                {"from": before_provider, "status": status if status is not None else reason,
+                 "to": self.provider},
+                "start",
+            )
+        self._emit_status(
+            f"⚠️ 主模型失败（{reason or 'unknown'}）→ 已切到备用 {self.provider}/{self.model}")
+        return True
+
+    def _post_chat_completions(self, api_messages: List[Dict], task_id: str, *,
+                               runtime: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """实际发请求。两种调用形态（**刻意分开**）：
+
+        * `runtime is None` —— **主回合请求**：用当前运行时；失败且**可回退**时按序换 provider。
+          换完**原地生效**，于是这次重发自动走新 provider（这就是 A7 的"接到失败路径"）。
+        * 给了 `runtime`    —— **辅助调用**（A8，压缩摘要）：一次性，用给定运行时；
+          **不走回退链**（真实版：aux 是解析期建 client，没有持久 agent 的
+          `_fallback_index` / `_fallback_activated` 机制）。
+
+        ★ 判据是**二元**的：只有 `is_fallbackable_status(code)` 为真才换 provider。
+          `400` / `422` 这类确定性错误**直接抛** —— 换谁都一样，换了只是把同一个错误
+          再收一次（还搭上一次额外的调用）。
+        """
+        if runtime is not None:
+            return self._http_post(self._candidate_for(runtime), api_messages)
+
+        while True:
             try:
-                return self._http_post(cand, api_messages)
+                return self._http_post(self._candidate_for(self._client_kwargs), api_messages)
             except ApiHTTPError as exc:
-                last_error = exc
-                if exc.code not in FALLBACK_STATUS or idx == len(candidates) - 1:
-                    raise
-                # 429 / 5xx / 401 / 403 → 换下一个 provider 继续这次对话
-                if self.tool_progress_callback:
-                    self.tool_progress_callback(
-                        "fallback",
-                        {"from": cand["provider"], "status": exc.code},
-                        "start",
-                    )
-        raise last_error  # pragma: no cover
+                if not is_fallbackable_status(exc.code):
+                    raise                     # 400 / 422 … → 确定性错误，不回退
+                # 429 / 5xx / 401 / 403 … → 按序换下一个 provider，然后用新运行时重发
+                if not self._try_activate_fallback(reason=f"http_{exc.code}", status=exc.code):
+                    raise                     # 链耗尽 / 全被跳过 → 把原始错误交出去
 
     def _http_post(self, cand: Dict[str, Any], api_messages: List[Dict]) -> Dict[str, Any]:
         """真正发 HTTP 请求。
@@ -945,11 +1064,38 @@ class AIAgent:
             self._compressor_obj = c
         return c
 
+    def _runtime_snapshot(self) -> Dict[str, Any]:
+        """当前运行时的**只读快照**（辅助路由的 `main_runtime` 入参，A8）。
+
+        ★ 为什么是快照而不是传 self：解析辅助运行时**不许**反过来动主运行时
+          （真实版 `resolve_provider_client(main_runtime=...)` 也是只读传参）。
+        """
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "api_mode": self.api_mode,
+            "context_length": getattr(self, "context_length", None),
+        }
+
     def _summary_llm(self, system: str, user: str) -> Optional[str]:
-        """给压缩器用的辅助 LLM 调用 —— 复用同一条 HTTP 路径，不新开通道。"""
+        """给压缩器用的辅助 LLM 调用 —— ★ **经辅助路由层（A8）** 选 provider/model。
+
+        ★ 未配置 `auxiliary.compression` 时解析结果是 `auto` ⇒ **继承主 agent 路由**，
+          与旧的"复用同一条 HTTP 路径、复用主模型"**逐字等价**（默认行为不变）。
+        ★ 配了 `auxiliary.compression.provider` 才走别的 provider —— 这是 A8 接的
+          **唯一一个消费者**（B3：不抄 7800 行的辅助适配器丛林）。
+        ★ 辅助调用是**一次性**的：用解析出来的运行时直接发一次，**不走 agent 的回退链**
+          （真实版：aux 没有持久 agent 的 `_try_activate_fallback` 机制）。
+        """
+        from agent.auxiliary import TASK_COMPRESSION, resolve_auxiliary_runtime
+
+        runtime = resolve_auxiliary_runtime(
+            TASK_COMPRESSION, main_runtime=self._runtime_snapshot())
         resp = self._post_chat_completions(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "compression",
+            "compression", runtime=runtime,
         )
         text, _ = self._parse_response(resp)
         return (text.get("content") or "").strip() or None

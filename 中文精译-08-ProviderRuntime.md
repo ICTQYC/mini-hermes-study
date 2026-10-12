@@ -47,6 +47,8 @@ cron 又悄悄回落到 C"这种局面。所以解析逻辑被抽成一层共享
 
 （原文节名：*Chat-completions reasoning shapes*）
 
+**推理内容该用哪个字段名，业界没统一，导致用 chat-completions 接口的开发者不得不为每家厂商单独适配，很烦。**
+
 任何"OpenAI 兼容"的中转都可能把 `reasoning` / `reasoning_content` 返回成三种完全不同的形状：
 
 - **字符串**；
