@@ -20,6 +20,7 @@
 | 8 | `provider-runtime.md` | ✅ **已实现并跑通**（**providers/ 包**（723 行）+ **两段式解析** + `api_mode` 判定 + `source` + host 门控 + 别名归一（`756b493`）· **回退链** `agent/fallback.py` + **辅助路由** `agent/auxiliary.py` + 配置层 `hermes_cli/config.py`（`a391919`，回退链首次真正接线）· **219 条新契约测试**（106 + 113）· 全套件 **1,063 通过 / 0 失败**（双解释器）· 真跑：`source` 四来源 / host 门控三端点 / 别名归一 · 差异表 18 行 / 差距清单 A 批 10 + B 批 8 · **上游文档 3 处出入**（子代理继承链 / 触发点数 / key 门控）） | 《中文精译-08-ProviderRuntime.md》《源码讲解-08-ProviderRuntime.md》 |
 | 10 | `micro-compaction.md` | ✅ **已实现并跑通**（`agent/micro_compaction.py` **537 行**（`MicroCompactionMixin`）+ 接线三处 · **119 条测试 / 10 组** · 全套件 **1,187 通过 / 0 失败**（双解释器）· 反向验证 **5/5 + 补丁 2/2 干净变红** · 真跑 **5/5 核验通过**（真 DeepSeek，脚本 `demos/ch10_real_run.py`）· 差异表 18 行 / 差距清单 A6 + B9 · ★ 补上「摘要被截断 ⇒ 丢弃半截」判据（`_summary_llm_meta()`，微压缩与批量两条路径）） | 《中文精译-10-MicroCompaction.md》《源码讲解-10-MicroCompaction.md》 |
 | 11 | `state-db-recovery.md` | ✅ **已实现并跑通**（新增 `hermes_state_errors.py` **202** / `hermes_state_fts.py` **219** / `hermes_state_repair.py` **291** / `hermes_cli/sessions_cmd.py` **139**；改 `hermes_state.py`（223→**417**）、`hermes_state_common.py`（270）、`hermes_state_search.py`（317） · **121 条测试 / 12 组** · 全套件 **1,309 / 1,305 通过 / 0 失败**（双解释器）· 反向验证 **5/5 干净变红** · 真跑**两条损坏路径 + 修复**全绿 · 真跑拓出并修掉 1 处真 bug（旧库体检误诊）） |
+| 12 | **小篇合卷**：`codebase-ownership.md` + `completion-backlog-delivery.md` | ✅ **已交付**（精译 **204 行** · 源码讲解 **1,058 行** · **mini 侧无代码实现项**——两篇分别属「地图/约定」与「投递债」型，且 B 篇那套机制在 mini 里连生产者都不存在 · 唯一落地 = 文档级：README 新增「改动 → 该跑哪些测试」归属映射表 · 全套件 **1,309 / 1,305 通过 / 0 失败**） |
 
 ## 章族表（★ 章号怎么数）
 
@@ -35,7 +36,8 @@
 | **第 9 章** | `programmatic-integration` | `中文精译-09-…` / `源码讲解-09-…` | —（mini 未实现：用户 2026-10-12 决定） |
 | 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
 | **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
-| **第 12 章（下一章）** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | 待建 | — |
+| **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
+| **第 13 章（下一章）** | 转 Extending 代表作：`creating-skills`（438 行） | 待建 | — |
 
 三条规则：
 
@@ -77,7 +79,7 @@
 ```text
 位次  页面                              我们的进度
   1   architecture                      ✅ 第 1 章（读文档）
-  2   codebase-ownership                ⬜（与 10 合卷 = 第 12 章）
+  2   codebase-ownership                ✅ 第 12 章（与 10 合卷）
   3   agent-loop                        ✅ 第 2 章
   4   prompt-assembly                   ✅ 第 3 章
   5   context-compression-and-caching   ✅ 第 5 章
@@ -85,7 +87,7 @@
   7   gateway-internals                 ✅ 第 7 章
   8   gateway-session-lifecycle         ✅ 7.1
   9   multiplexing-gateway              ✅ 7.2（多路复用网关；入口层在多 profile 那一篇）
-  10   completion-backlog-delivery       ⬜ 52 行（"投递债"；与 2 合卷 = 第 12 章，**下一章**）
+  10   completion-backlog-delivery       ✅ 第 12 章（与 2 合卷）
  11   session-storage                   ✅ 第 6 章
  12   state-db-recovery                 ✅ 第 11 章（与第 6 章配对）
  13   provider-runtime                  ✅ 第 8 章（= A 的第 4 项）
