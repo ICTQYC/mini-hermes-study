@@ -35,7 +35,7 @@
 | **第 9 章** | `programmatic-integration` | `中文精译-09-…` / `源码讲解-09-…` | —（mini 未实现：用户 2026-10-12 决定） |
 | 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
 | **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
-| **第 12 章（下一章）** | `completion-backlog-delivery` | 待建 | — |
+| **第 12 章（下一章）** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | 待建 | — |
 
 三条规则：
 
@@ -77,24 +77,24 @@
 ```text
 位次  页面                              我们的进度
   1   architecture                      ✅ 第 1 章（读文档）
-  2   codebase-ownership                ⬜
+  2   codebase-ownership                ⬜（与 10 合卷 = 第 12 章）
   3   agent-loop                        ✅ 第 2 章
   4   prompt-assembly                   ✅ 第 3 章
   5   context-compression-and-caching   ✅ 第 5 章
   6   micro-compaction                  ✅ 第 10 章
   7   gateway-internals                 ✅ 第 7 章
   8   gateway-session-lifecycle         ✅ 7.1
-  9   multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
- 10   completion-backlog-delivery       ⬜ 52 行（"投递债"，下一章）
+  9   multiplexing-gateway              ✅ 7.2（多路复用网关；入口层在多 profile 那一篇）
+  10   completion-backlog-delivery       ⬜ 52 行（"投递债"；与 2 合卷 = 第 12 章，**下一章**）
  11   session-storage                   ✅ 第 6 章
  12   state-db-recovery                 ✅ 第 11 章（与第 6 章配对）
  13   provider-runtime                  ✅ 第 8 章（= A 的第 4 项）
- 14   programmatic-integration          ⬜ ← **下一章（第 9 章）**
+  14   programmatic-integration          ✅ 第 9 章（mini 不实现；A1~A11 形状记档在《源码讲解-09》§十一）
 ```
 
 **差额一句话**：A 是"少而精的必读路线"（10 篇），B 是"目录顺序"（14 + Extending 那一片）。
 A 里我们还欠 **adding-providers / acp-internals** 两篇；
-B 里我们还欠 codebase-ownership / completion-backlog-delivery 两篇（其余四篇已交付）。
+B 里只剩 codebase-ownership / completion-backlog-delivery 两篇 —— 正好合成**第 12 章（合卷）**。
 
 （"插件 / 技能 / 工具群"那一族在 developer-guide 的 Extending 分组里，仓库里的占位仍写着"第 10 章"。）
 
