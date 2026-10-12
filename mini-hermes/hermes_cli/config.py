@@ -66,6 +66,22 @@ KEY_AUXILIARY = "auxiliary"             # {<task>: {"provider": str, "model": st
 KEY_AUXILIARY_PROVIDER = "provider"
 KEY_AUXILIARY_MODEL = "model"
 
+# ── compression 段（第 10 章补上 micro_compact 一族）───────────────────────────
+# 与真实版 `compression.*` 键同名同默认（`hermes_cli/config_defaults.py:569-578` +
+# `agent/agent_init.py:1506-1515`）。★ 这是**微压缩**（滚动逐交换摘要）的旋钮，
+# 是第 5 章批量压缩的兄弟开关。
+KEY_COMPRESSION = "compression"
+KEY_MICRO_COMPACT = "micro_compact"
+KEY_MICRO_COMPACT_EVERY_N_TURNS = "micro_compact_every_n_turns"
+KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = "micro_compact_defrag_threshold_tokens"
+KEY_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = "proactive_prune_min_reclaim_tokens"
+
+# 默认值（键不在文件里时就是它们 —— 与真实版逐字对齐）
+DEFAULT_MICRO_COMPACT = False                       # 默认关：每次 pass 打破缓存前缀
+DEFAULT_MICRO_COMPACT_EVERY_N_TURNS = 1             # ≥1，夹取见 get_compression_config
+DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = 2000
+DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = 4096   # 0 = 无最小回收量闸门
+
 # ★ 辅助路由的两个魔法值（真实版 `_normalize_aux_provider` / `_resolve_task_provider_model`）：
 AUX_PROVIDER_AUTO = "auto"   # 继承主 agent 当前路由（未配置时的默认）
 AUX_PROVIDER_MAIN = "main"   # **别名** —— 解析成主 agent 的 provider
@@ -236,12 +252,89 @@ def get_auxiliary_config(task: str, config: Optional[Dict[str, Any]] = None) -> 
     return {KEY_AUXILIARY_PROVIDER: provider, KEY_AUXILIARY_MODEL: model}
 
 
+# ── compression 段（第 10 章的旋钮，A9 的延续）──────────────────────────────
+
+
+def parse_config_int(raw: Any, default: int) -> int:
+    """严格整型转换 —— 与真实版 `agent_init.py:338 _parse_config_int` 逐条对齐。
+
+    ★ 三条刻意的严格：
+      · **拒绝 bool**：YAML 里 `true` 会被解析成 `1`，于是 `micro_compact_every_n_turns: true`
+        会静默变成"每回合一次" —— 一个真值开关不该冒充一个数字。
+      · **拒绝小数**：`2.5` 不是合法的"每 N 回合"。
+      · 字符串尽力 `int()`（配置文件里写 `"3"` 也认），其余一律回落 default。
+    """
+    if isinstance(raw, bool):
+        return default
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw) if raw.is_integer() else default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_flag(raw: Any, default: bool) -> bool:
+    """`compression` 段的宽松真值解析（真实版 `_cfg_flag`）：
+    `str(value).lower() in {"true","1","yes"}`；缺省 key 时给 default。"""
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"true", "1", "yes"}
+
+
+def get_compression_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """`compression` 段里**微压缩相关的四个键**（已夹取，调用方不必再防御）。
+
+    对应真实版 `agent_init.py:1506-1515` 的四次 `max(…, _parse_config_int(...))`：
+
+    | 键 | 默认 | 夹取 |
+    |---|---|---|
+    | `micro_compact` | `False` | 真值解析 |
+    | `micro_compact_every_n_turns` | `1` | `max(1, int)` |
+    | `micro_compact_defrag_threshold_tokens` | `2000` | `max(1, int)` |
+    | `proactive_prune_min_reclaim_tokens` | `4096` | `max(0, int)`（0 = 无闸门） |
+
+    ★ 为什么要**在这一层**夹取而不是在消费处：配置是**数据**（一份、可校验），
+      消费处（压缩器 / 微压缩）只该拿"已经合法"的数 —— 否则每加一个消费者就要重写一遍
+      `max(1, …)`。这与第 8 章 A9 的口径一致。
+    ★ `proactive_prune_min_reclaim_tokens` 是**对照组**：它证明"恢复量闸门"是真实版
+      给**批量剪枝**的旋钮，而微压缩**没有**这个键（第 10 章原文自己点出）。
+    """
+    section = _section(config, KEY_COMPRESSION)
+    return {
+        KEY_MICRO_COMPACT: _config_flag(section.get(KEY_MICRO_COMPACT), DEFAULT_MICRO_COMPACT),
+        KEY_MICRO_COMPACT_EVERY_N_TURNS: max(
+            1, parse_config_int(section.get(KEY_MICRO_COMPACT_EVERY_N_TURNS), DEFAULT_MICRO_COMPACT_EVERY_N_TURNS)
+        ),
+        KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS: max(
+            1, parse_config_int(
+                section.get(KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS),
+                DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS,
+            )
+        ),
+        KEY_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS: max(
+            0, parse_config_int(
+                section.get(KEY_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS),
+                DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS,
+            )
+        ),
+    }
+
+
 __all__ = [
     "CONFIG_FILENAME",
     "KEY_AUXILIARY", "KEY_FALLBACK_MODEL", "KEY_FALLBACK_PROVIDERS", "KEY_MODEL",
+    "KEY_COMPRESSION", "KEY_MICRO_COMPACT", "KEY_MICRO_COMPACT_EVERY_N_TURNS",
+    "KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS", "KEY_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS",
     "AUX_PROVIDER_AUTO", "AUX_PROVIDER_MAIN", "DEFAULT_AUX_PROVIDER", "DEFAULT_FALLBACK_CHAIN",
+    "DEFAULT_MICRO_COMPACT", "DEFAULT_MICRO_COMPACT_EVERY_N_TURNS",
+    "DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS", "DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS",
     "config_path", "load_config",
     "get_model_config", "get_configured_provider", "get_configured_model",
     "get_fallback_chain", "resolve_entry_api_key",
-    "get_auxiliary_config",
+    "get_auxiliary_config", "get_compression_config", "parse_config_int",
 ]

@@ -40,6 +40,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agent.context_engine import ContextEngine
+from agent.micro_compaction import MicroCompactionMixin
 from agent.usage_anchor import UsageAnchor
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -82,6 +83,44 @@ DUPLICATE_MARKER = "[Duplicate tool output — same content as a more recent cal
 SUMMARY_END_MARKER = (
     "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
 )
+
+# ── 摘要标记的三个键（第 10 章补） ─────────────────────────────────────────────
+# 与真实版逐字（`agent/context_compressor.py:226-230`）。★ 下划线前缀是**刻意的**：
+# 出网前的清洗会剥掉 `_` 开头的键（严格 provider 会拒未知键），所以裸键会毒化每个请求。
+COMPRESSED_SUMMARY_METADATA_KEY = "_compressed_summary"
+COMPRESSED_SUMMARY_HAS_USER_TURN_KEY = "_compressed_summary_has_user_turn"
+# 只有 **micro** 标记可被 supersede / defrag / 重水化：批量标记的正文**不在**滚动微摘要里，
+# 重写它 = 毁历史。
+MICRO_COMPACT_MARKER_KEY = "_micro_compact_marker"
+
+
+def is_context_summary_message(msg: Any) -> bool:
+    """这条消息是不是一段压缩摘要（批量或 micro）？
+
+    对应真实版 `ContextCompressor._is_context_summary_message`（`:3761`）。判据按
+    \"元数据 → 内容\"两级：
+      · 带 `_compressed_summary` 键 ⇒ 是（进程内标记）；
+      · 否则看正文头部是否出现压缩头的字样（跨进程恢复时标记键已丢失）。
+    """
+    if not isinstance(msg, dict):
+        return False
+    if msg.get(COMPRESSED_SUMMARY_METADATA_KEY):
+        return True
+    content = msg.get("content")
+    head = content[:400] if isinstance(content, str) else ""
+    return ("[CONTEXT COMPACTION]" in head) or (SUMMARY_END_MARKER in head)
+
+
+def is_micro_marker(msg: Any) -> bool:
+    """可被 supersede 的标记：**既是**摘要标记、**又**带 micro 键。
+
+    ★ 与批量标记的区别是本章的**核心区分**（真实版 `_is_micro_marker`，`:31-33`）：
+      批量标记里含 micro 摘要**没有**的历史，绝不能当\"旧的一版\"丢掉。
+    """
+    return is_context_summary_message(msg) and bool(
+        isinstance(msg, dict) and msg.get(MICRO_COMPACT_MARKER_KEY)
+    )
+
 
 # ── 摘要前后的凭证脱敏（★ 差距清单 #6） ──────────────────────────────────────
 _REDACT_PATTERNS = (
@@ -432,8 +471,12 @@ def validate_tool_pairs(messages: Sequence[Dict[str, Any]]) -> List[str]:
 # 压缩器
 # ════════════════════════════════════════════════════════════════════════════
 
-class ContextCompressor(ContextEngine):
-    """默认引擎：有损摘要。用法见模块 docstring 的四阶段。"""
+class ContextCompressor(MicroCompactionMixin, ContextEngine):
+    """默认引擎：有损摘要。用法见模块 docstring 的四阶段。
+
+    ★ 第 10 章：混入 `MicroCompactionMixin`（滚动微压缩）—— 与真实版同形
+      （`context_compressor.py:1782` `class ContextCompressor(…, MicroCompactionMixin, …)`）。
+    """
 
     def __init__(
         self,
@@ -445,6 +488,9 @@ class ContextCompressor(ContextEngine):
         tail_mode: str = TAIL_MODE,
         max_tokens: Optional[int] = None,
         status_callback: Optional[Callable[[str], None]] = None,
+        micro_compact: bool = False,
+        micro_compact_every_n_turns: int = 1,
+        micro_compact_defrag_threshold_tokens: int = 2000,
     ) -> None:
         if not 0.0 < threshold <= 1.0:
             raise ValueError(f"threshold 必须在 (0, 1] 内，收到 {threshold}")
@@ -463,6 +509,16 @@ class ContextCompressor(ContextEngine):
         self._previous_summary: Optional[str] = None
         # 统计（给 /compress 和测试看，不参与决策）
         self.compaction_count = 0
+        # ── 第 10 章：微型压缩的状态（默认关）──────────────────────────────
+        # 真实版 init 逐字（`context_compressor.py:2459-2470`）。
+        self.micro_compact_enabled = bool(micro_compact)
+        self.micro_compact_every_n_turns = max(1, int(micro_compact_every_n_turns or 1))
+        self.micro_compact_defrag_threshold_tokens = max(
+            1, int(micro_compact_defrag_threshold_tokens or 2000))
+        self._micro_passes = 0
+        self._micro_turns_since_pass = 0
+        self._micro_dirty = False            # 本次 pass 是否真的改了（调用方据此落库）
+        self.reset_micro_compact_state()     # 游标 / 滚动摘要 / 失败记账
 
     # ── 阈值与触发 ──────────────────────────────────────────────────────────
 
@@ -577,6 +633,8 @@ class ContextCompressor(ContextEngine):
         self.context_length = DEFAULT_CONTEXT_LENGTH
         self._previous_summary = None
         self.anchor.clear()
+        # 换模型 = 滚动摘要的 token 口径可能变，游标/摘要一并作废（安全起见）。
+        self.reset_micro_compact_state()
 
     # ── 四阶段 ──────────────────────────────────────────────────────────────
 

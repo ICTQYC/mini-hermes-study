@@ -345,6 +345,19 @@ class AIAgent:
             result = {"error": str(exc)}
             self._log_exception(exc)
 
+        # 3.6 ★ 第 10 章：每回合收尾后的**微压缩**。
+        #     真实版在 `finalize_turn` 的 `_persist_step` 里调（`turn_finalizer.py:508`），
+        #     门是 `not interrupted and not failed`。mini 的收尾点就在这里 ← run_agent
+        #     没有独立的 finalize_turn，回合循环一返回即收尾。
+        #     ★ 只在**正常完成**的回合跑：失败/被中断的回合不该改写已发历史。
+        if (
+            final_response
+            and not result.get("interrupted")
+            and not result.get("error")
+            and not result.get("budget_exhausted")
+        ):
+            self._micro_compact_after_turn(messages)
+
         # ══════════════════════════════════════════════════════════════
         # 唯一的"汇报出口"
         # ══════════════════════════════════════════════════════════════
@@ -1053,13 +1066,24 @@ class AIAgent:
             print(f"（完整 traceback 已写入 {where}；加 --debug 可直接看到）", file=sys.stderr)
 
     def _compressor(self):
-        """惰性建一个 ContextCompressor（第一次用到才建）。"""
+        """惰性建一个 ContextCompressor（第一次用到才建）。
+
+        ★ 第 10 章：把 `compression.micro_compact` 一族配置读进来（A9 配置层）。
+          与真实版 `agent_init.py:1506-1515` 同款 —— 配置在**构造处**一次性读入，
+          压缩器内部不再碰磁盘（保持第 5 章\"纯内存\"的性质）。
+        """
         c = getattr(self, "_compressor_obj", None)
         if c is None:
             from agent.context_compressor import DEFAULT_CONTEXT_LENGTH, ContextCompressor
+            from hermes_cli.config import get_compression_config
+
+            mc = get_compression_config()
             c = ContextCompressor(
                 context_length=int(getattr(self, "context_length", 0) or DEFAULT_CONTEXT_LENGTH),
                 status_callback=self._emit_status,
+                micro_compact=bool(mc["micro_compact"]),
+                micro_compact_every_n_turns=int(mc["micro_compact_every_n_turns"]),
+                micro_compact_defrag_threshold_tokens=int(mc["micro_compact_defrag_threshold_tokens"]),
             )
             self._compressor_obj = c
         return c
@@ -1165,3 +1189,53 @@ class AIAgent:
                 self._emit_status(f"⚠️ 压缩世代落库失败：{type(exc).__name__}: {exc}")
         if len(messages) == before_len:
             self._emit_status("压缩未改变消息条数（只剪了内容）")
+
+    def _micro_compact_after_turn(self, messages: List[Dict]) -> None:
+        """每回合收尾后的微压缩（第 10 章）。
+
+        对应真实版 `agent/turn_finalizer.py:272::_micro_compact_after_turn` ——
+        每回合收尾调一次，把最老的一个未吸收交换折进滚动摘要，**在落盘之前**。
+
+        ★ 三个门（真实版同款）：
+          · 编译器没开微压缩 ⇒ 直接返回（**零 LLM 调用**；默认关是本章的立章前提）；
+          · 摘要调用走 A8 辅助路由（`self._summary_llm`），凭据作用域-aware；
+          · 只有**真的**吸收了（`_micro_dirty`）才落库 —— **失败不落库**。
+        """
+        c = self._compressor()
+        if not getattr(c, "micro_compact_enabled", False):
+            return
+        before = len(messages)
+        try:
+            compacted = c.micro_compact(messages, call_llm=self._summary_llm)
+        except Exception as exc:                      # noqa: BLE001 —— 微压缩不该把回合弄崩
+            self._emit_status(f"⚠️ 微压缩失败：{type(exc).__name__}: {exc}")
+            return
+        if isinstance(compacted, list) and compacted:
+            messages[:] = compacted
+        # ★ 落库只在\"真的改了\"时发生（吸收或 defrag）。失败路径 `_micro_dirty` 为 False。
+        if getattr(c, "_micro_dirty", False):
+            self._persist_micro_compaction(messages)
+            c._micro_dirty = False
+            if len(messages) != before:
+                self._emit_status(f"微压缩：吸收 1 个交换 · {before} → {len(messages)} 条消息")
+            else:
+                self._emit_status("微压缩：defrag 重压了滚动摘要（条数不变）")
+
+    def _persist_micro_compaction(self, messages: List[Dict]) -> None:
+        """把微压缩后的上下文**原子落库**（第 6 章 `record_compaction` 行级归档）。
+
+        ★ 为什么不落库会坏：旧交换行仍 `active=1`，下次 `--resume` 会**同时**载入
+          \"旧交换 + 新摘要\" ⇒ 摘要吸收的东西**双重加载**（真实版
+          `_sync_micro_compact_to_db` 的注释逐字理由，`:343-346`）。
+        ★ 与真实版的差异（清单 B1）：真实版用 rewind-style **部分**归档
+          （`archive_and_compact(tail_count=len-1)`）；mini 用第 6 章既有的
+          `record_compaction`（老世代整份归档 + 新世代重插）。同样原子、同样不双载 ——
+          只是粒度不同（mini 的 `record_compaction` 已把 system 挡在消息表之外，故排除）。
+        """
+        if self.session_db is None:
+            return
+        try:
+            self.session_db.record_compaction(
+                self.session_id, [m for m in messages if m.get("role") != "system"])
+        except Exception as exc:                      # noqa: BLE001
+            self._emit_status(f"⚠️ 微压缩世代落库失败：{type(exc).__name__}: {exc}")
