@@ -25,7 +25,7 @@
 | 真实 | `hermes_state_messages.py` | **1364** | `archive_and_compact`（原子软归档 + 插入） |
 | 真实 | `hermes_cli/config_defaults.py` | **2922** | 四个 `compression.*` 默认值的出处 |
 | 真实 | `scripts/micro_compaction_report.py` | **171** | §9 那条日志报告器 |
-| mini | `agent/micro_compaction.py` | **504** | 同形 `MicroCompactionMixin` + 11 个模块级函数（本章主体） |
+| mini | `agent/micro_compaction.py` | **531** | 同形 `MicroCompactionMixin` + 10 个模块级函数（本章主体） |
 | mini | `agent/context_compressor.py` | 改动 **`+60 / −2`** | 三个键常量 + `is_micro_marker` + mixin 混入 + 三个构造参数 |
 | mini | `hermes_cli/config.py` | 改动 **`+94 / −1`** | 四个 `compression.*` 键 + 严格整型夹取 |
 | mini | `run_agent.py` | 改动 **`+75 / −1`** | 回合收尾钩 `_micro_compact_after_turn` + 落库 |
@@ -128,7 +128,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 > (possibly modified) list and syncs the session DB via ``archive_and_compact`` (the
 > append-only flush alone would double-load on resume).
 
-**要害**：三种结局里**两种不花 LLM 钱**。这不是优化，是「默认关 + 便宜开关」能不能成立的前提 —— 用户把频率设成每回合一次，也不该在没活干的回合上白烧一次调用。
+**要害**：三种结局里**只有 no-op 不花 LLM 钱**（defrag 也要一次辅助调用）。这不是优化，是「默认关 + 便宜开关」能不能成立的前提 —— 用户把频率设成每回合一次，也不该在没活干的回合上白烧一次调用。
 
 ### 0.4 不变式（user 永不被吸收 · 角色交替 · 提示词字节稳定 · 头部/尾部不碰）
 
@@ -140,7 +140,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
    > Boundary must close the turn: a mid-turn stop at tail_start would put the assistant marker
    > beside assistant/tool rows. Any other role is a safe splice (avoids wedging the cursor).
    于是 `[user][marker][user]` 恒成立。
-3. **提示词字节稳定**。微压缩**只在中段干活** —— 它从不碰 `messages[0]`，也从不重建系统提示词；头部由 `_protect_head_size`（`agent/context_compressor.py:4041`）划出，`_next_exchange`（`agent/micro_compaction.py:284`）把可压缩窗口**从它之后**起算。系统提示词一旦被重写，provider 的缓存前缀就整体作废。
+3. **提示词字节稳定**。微压缩**只在中段干活** —— 它从不碰 `messages[0]`，也从不重建系统提示词；头部由 `_protect_head_size`（`agent/context_compressor.py:4041`）划出，`_next_exchange`（`agent/micro_compaction.py:282`）把可压缩窗口**从它之后**起算。系统提示词一旦被重写，provider 的缓存前缀就整体作废。
 4. **头部 / 尾部不碰**。窗口的两端都由第 5 章既有的算法划（`_align_boundary_forward` `:4016` / `_find_tail_cut_by_tokens` `:4343`），微压缩**只决定窗口内吞哪一个交换**，从不另起一套 tail 预算。
 
 还有一条**只对标记**的约束，它是本章最容易被写坏的地方（`agent/micro_compaction.py:382-383`）：
@@ -222,12 +222,12 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | 4 | 滚动摘要 + 游标恢复（A2） | 只留一份累积摘要；游标失效则扫转写本最后一条标记重建（`:39-60` / `:292-301`），**不另落盘状态** | ✅ 已抄：`_resolve_micro_cursor`（`:292`）/ `rolling_summary_from_marker`（`:119`） | 已对齐 |
 | 5 | 一回合一个交换 + no-op（A3） | `n_messages >= 4` + `if exchange is None: return messages`（`:216-218`） | ✅ 已抄（`:473-477`）：no-op 零 LLM 调用 | 已对齐 |
 | 6 | 失败记账（A4） | `_record_micro_failure`（`:265-280`）+ 常量 `3`（`agent/context_compressor.py:646`） | ✅ 已抄：`_record_micro_failure`（`:395`）+ `MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES`（`:58`） | 已对齐 |
-| 7 | 标记形状与 supersede（A5） | `_splice_micro_compact_result`（`:372-390`）+ `_is_micro_marker`（`:31-33`）+ 三键常量（`agent/context_compressor.py:226-230`） | ✅ 已抄：`splice_micro_marker`（`:193`）/ `make_micro_marker`（`:152`）/ `is_micro_marker`（`agent/context_compressor.py:114`）+ 同名三键常量（`:90-94`） | 已对齐 |
+| 7 | 标记形状与 supersede（A5） | `_splice_micro_compact_result`（`:362-390`）+ `_is_micro_marker`（`:31-33`）+ 三键常量（`agent/context_compressor.py:226-230`） | ✅ 已抄：`splice_micro_marker`（`:193`）/ `make_micro_marker`（`:152`）/ `is_micro_marker`（`agent/context_compressor.py:114`）+ 同名三键常量（`:90-94`） | 已对齐 |
 | 8 | 头部/尾部保护（A6） | 复用压缩器的 `_protect_head_size`（`agent/context_compressor.py:4041`）/ `_align_boundary_forward`（`:4016`）/ `_find_tail_cut_by_tokens`（`:4343`） | ✅ 已抄：复用第 5 章 `determine_boundaries`（`agent/context_compressor.py:884`）+ `tail_token_budget`（`:569`），**未另起一套** | 已对齐 |
 | 9 | 尾部预算口径 | 默认 `tail_mode=lean`：`max(10_000, min(25_000, ctx×0.025))`（`agent/context_compressor.py:1927-1931`，常量 `:757`） | 已对齐（第 5 章已做同公式） | 已对齐 |
 | 10 | defrag | `_needs_defrag` / `_defrag_rolling_summary`（`:158-193`）：**就地重写最新 micro 标记**，另加 `pop(_DB_PERSISTED_MARKER)` + `_flush_scan_cursor_invalidated` 去失效有界 flush 游标（`:182-188`） | ✅ 已抄主体（`_needs_defrag` `:409` / `_defrag_rolling_summary` `:415`）；**无** flush 游标失效那套（mini 每消息即时落库、无此游标） | 架构性 |
 | 11 | 落库归档 | `archive_and_compact(..., tail_count=len-1)` —— rewind-style **部分**归档（`hermes_state_messages.py:567`） | 用第 6 章既有的 `record_compaction` **整份**归档（`run_agent.py:1265`）；同样原子、同样不双载，粒度不同 | 架构性 |
-| 12 | 遥测 | `_emit_micro_compaction_telemetry`（`:309-343`）：**17 字段** JSON 行 + `passes_total` / `tokens_saved_total` 跨会话累计 | ⬜ 没做（量级）：`status_callback` 吐一行人话（`run_agent.py:1247-1249`），无累计、无 `occupancy_pct` | 量级 |
+| 12 | 遥测 | `_emit_micro_compaction_telemetry`（`:309-342`）：**19 字段** JSON 行 + `passes_total` / `tokens_saved_total` 跨会话累计 | ⬜ 没做（量级）：`status_callback` 吐一行人话（`run_agent.py:1247-1249`），无累计、无 `occupancy_pct` | 量级 |
 | 13 | 回收量闸门 | **没有** —— 只有频率旋钮 `micro_compact_every_n_turns`；对比剪枝有 `proactive_prune_min_reclaim_tokens`（默认 4096，`config_defaults.py:568`） | 同：**没有**（mini 的 `proactive_prune_min_reclaim_tokens` 键只做了默认值/夹取，未接剪枝路径） | 已对齐 |
 | 14 | 与批量压缩的互操作 | 标记格式相同；只有 micro 标记可被 supersede/defrag/rehydrate（`agent/context_compressor.py:228-230`） | ✅ 已抄：`is_micro_marker` 只认带 micro 键的标记（`agent/context_compressor.py:114-122`）；批量标记永不被丢 | 已对齐 |
 | 15 | 跨进程 resume 回标 | `_resolve_compact_cursor` 会把扫到的**最后一条标记（含批量）**就地打上 `MICRO_COMPACT_MARKER_KEY`（`:55-57`），从而让它可被 supersede | ⏭ 不抄（B4）：mini **只读回正文**、**不回标** —— 回标会让批量标记可被 supersede，风险大 | 不抄 |
@@ -264,7 +264,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 默认值 | `micro_compact=False`（`config_defaults.py:573`，真值解析 `agent_init.py:1507`） | 已对齐（`config.py:296` + `run_agent.py:1231` 同默认） |
+| 默认值 | `micro_compact=False`（`config_defaults.py:573`，真值解析 `agent_init.py:1507`） | 已对齐（`config.py:309-316` + `run_agent.py:1231` 同默认） |
 | 回收量闸门 | 主动剪枝有 `proactive_prune_min_reclaim_tokens=4096`（`config_defaults.py:566-568`）；微压缩**没有** | ⏭ 不抄（微压缩只有频率旋钮） |
 | 与 checkpoint 互斥 | `checkpoint_required` 为真时**强制关微压缩**（`agent_init.py:1880-1886`，因它无 checkpoint hook） | ⬜ 没做（mini 无 checkpoint 概念） |
 
@@ -397,7 +397,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 ```
 要害：这是全模块**唯一**一个“拿到了正常响应、也拿到了内容，却仍然拒收”的出口。它防的不是网络故障，是**语义半成品** —— 一段被截断的合并长得像成功，一旦吸收就永久污染那份每回合都发出去的滚动摘要。`return None` 让控制流落进下面那段失败计数（`:265-280`，注释逐字 *Track consecutive failures at the same cursor to avoid busy-looping every turn.*），于是同一个交换**下一回合还会被重试**，而不是被当成“这个交换处理完了”。
 
-**③ mini 的实现（现状）**：`agent/micro_compaction.py::MicroCompactionMixin._record_micro_failure`（`:395-405`）+ 常量 `MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3`（`:58`）—— 与真实版 `context_compressor.py:646` 同值同语义。`_micro_summarize_one` 有三种返回 `None`：没接调用方 / 调用抛异常 / 返回空（`:365-381`）。入口里 `updated is None` ⇒ 记账后 `return messages`（`:494-496`），**只有**成功分支才置 `_micro_dirty = True`（`:506`；初值 `agent/context_compressor.py:520`）。回落盘在 `run_agent._micro_compact_after_turn`（`:1240-1247`）：`_micro_dirty` 为假就**完全不碰** `session_db`。已对齐。测试：`tests/test_micro_compaction.py:303 test_failure_does_not_absorb_or_persist`、`:314 test_summarize_exception_is_failure_not_crash`、`:321 test_three_consecutive_failures_push_cursor`。
+**③ mini 的实现（现状）**：`agent/micro_compaction.py::MicroCompactionMixin._record_micro_failure`（`:395-405`）+ 常量 `MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3`（`:58`）—— 与真实版 `context_compressor.py:646` 同值同语义。`_micro_summarize_one` 有四种返回 `None`：没接调用方 / 调用抛异常 / 返回空（`:365-381`）。入口里 `updated is None` ⇒ 记账后 `return messages`（`:494-496`），**只有**成功分支才置 `_micro_dirty = True`（`:506`；初值 `agent/context_compressor.py:520`）。回落盘在 `run_agent._micro_compact_after_turn`（`:1240-1247`）：`_micro_dirty` 为假就**完全不碰** `session_db`。已对齐。测试：`tests/test_micro_compaction.py:303 test_failure_does_not_absorb_or_persist`、`:314 test_summarize_exception_is_failure_not_crash`、`:321 test_three_consecutive_failures_push_cursor`。
 
 **④ 与真实版的差别**：
 
@@ -475,7 +475,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 归档粒度 | rewind-style **部分**归档 + `tail_count=len-1`（`hermes_state_messages.py:567-627`） | 整份世代归档 + 整份重插（`record_compaction`）—— 粒度不同，结果同：不双载 |
+| 归档粒度 | rewind-style **部分**归档 + `tail_count=len-1`（`hermes_state_messages.py:567-628`） | 整份世代归档 + 整份重插（`record_compaction`）—— 粒度不同，结果同：不双载 |
 | “已持久化”盖戳 | `stamp_db_persisted_markers` / `_DB_PERSISTED_MARKER`（`context_compressor.py:311-319`）使随后追加落盘跳过它们 | ⏭ 不抄（B3）：mini 逐条即时 append、不逐回合全表重扫 ⇒ 无需盖戳 |
 | 落库闸门 | 无 dirty 概念，靠 `_micro_compact` 内部只在成功后调 `_sync...` | `_micro_dirty` 布尔（`micro_compaction.py:460 / :506`），调用方依此决定是否落库 |
 | DB 步骤失败 | 记 log、会话继续，代价是下次批量压缩前恢复双载（`:356-360`） | 同款语义，经 `status_callback` 示意（`run_agent.py:1267-1268`） |
@@ -507,7 +507,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 ```
 要害：注释第一句 *commit only when the reclaim is meaningful* 就是“**等一次更大的胜利**”那句话的原文。而 `agent/micro_compaction.py` 全文里 `reclaim` **零命中** —— 微压缩没有任何对应的收获量判断，它把“能不能提交”交给**频率**而不是**收获量**。把这两段并排读，本节的核心差异一眼可见：一边是“量够才动”，一边是“少动”。
 
-**③ mini 的实现（现状）**：开关与夹取均已抄 —— `hermes_cli/config.py`：`DEFAULT_MICRO_COMPACT = False`（`:80`）、`DEFAULT_MICRO_COMPACT_EVERY_N_TURNS = 1`（`:81`）、`DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = 2000`（`:82`）、`DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = 4096`（`:83`），`_parse_config_int` 拒绝 bool / 小数（`:259-265`）。**频率门**在 `agent/micro_compaction.py:464-470`（`every_n > 1` 才计数，no-op 不会把它卡住）。**标记互操作**也成立：`make_micro_marker`（`:152-166`）带 `COMPRESSED_SUMMARY_METADATA_KEY` + `MICRO_COMPACT_MARKER_KEY`，而批量标记走第 5 章的同一把 `COMPRESSED_SUMMARY_METADATA_KEY`。已对齐；微压缩侧**同样没有** min_reclaim 闸门。测试：`tests/test_micro_compaction.py:557 test_config_defaults_and_clamping`、`:290 test_cadence_gate_every_n`。
+**③ mini 的实现（现状）**：开关与夹取均已抄 —— `hermes_cli/config.py`：`DEFAULT_MICRO_COMPACT = False`（`:80`）、`DEFAULT_MICRO_COMPACT_EVERY_N_TURNS = 1`（`:81`）、`DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = 2000`（`:82`）、`DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = 4096`（`:83`），`parse_config_int` 拒绝 bool / 小数（`:259-265`）。**频率门**在 `agent/micro_compaction.py:464-470`（`every_n > 1` 才计数，no-op 不会把它卡住）。**标记互操作**也成立：`make_micro_marker`（`:152-166`）带 `COMPRESSED_SUMMARY_METADATA_KEY` + `MICRO_COMPACT_MARKER_KEY`，而批量标记走第 5 章的同一把 `COMPRESSED_SUMMARY_METADATA_KEY`。已对齐；微压缩侧**同样没有** min_reclaim 闸门。测试：`tests/test_micro_compaction.py:557 test_config_defaults_and_clamping`、`:290 test_cadence_gate_every_n`。
 
 **④ 与真实版的差别**：
 
@@ -558,7 +558,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | **A2** | 滚动摘要 + 内存游标：只留**一份**累积摘要；游标丢失时扫描转写本里**最后一条标记**恢复，不额外落盘状态 | `micro_compaction.py:39-60`、`:292-301` | `MicroCompactionMixin._resolve_micro_cursor`（:292-316）+ `rolling_summary_from_marker`（:119-139） | ✅ 已抄（f261aa2） |
 | **A3** | 一回合最多吸收**一个**交换 + no-op 零代价（没可吸收交换 / 少于 4 条 ⇒ 一次模型调用都不花） | `micro_compaction.py:199-218` | `MicroCompactionMixin.micro_compact`（:446-477） | ✅ 已抄（f261aa2） |
 | **A4** | 失败**不吸收、不落盘**；同一交换**连续 3 次失败**就把游标推过它 | `micro_compaction.py:265-280` + 常量 `context_compressor.py:646` | `_record_micro_failure`（:395-405）+ `run_agent._micro_compact_after_turn`（:1243-1245，只在 `_micro_dirty` 时落库） | ✅ 已抄（f261aa2） |
-| **A5** | 标记形状：`role="assistant"` + 三键；supersede 只丢**带 micro 键的**旧标记，**批量标记绝不能丢**；丢后合并相邻纯文本 user 行 | `micro_compaction.py:372-390`、`:27-33` + `context_compressor.py:226-230` | `make_micro_marker`（:152-166）/ `splice_micro_marker`（:193-214）/ `merge_adjacent_user_turns`（:169-190）+ 三个常量（`context_compressor.py:90-94`） | ✅ 已抄（f261aa2） |
+| **A5** | 标记形状：`role="assistant"` + 三键；supersede 只丢**带 micro 键的**旧标记，**批量标记绝不能丢**；丢后合并相邻纯文本 user 行 | `micro_compaction.py:362-390`、`:31-33` + `context_compressor.py:226-230` | `make_micro_marker`（:152-166）/ `splice_micro_marker`（:193-214）/ `merge_adjacent_user_turns`（:169-190）+ 三个常量（`context_compressor.py:90-94`） | ✅ 已抄（f261aa2） |
 | **A6** | 头部/尾部保护**沿用第 5 章那一套**（`_protect_head_size` + `_find_tail_cut_by_tokens`）；外加 defrag + 原子归档 | `micro_compaction.py:282-289`、`:158-193`、`:343-360` | `_next_micro_exchange`（复用 `determine_boundaries` :320-338）/ `_defrag_rolling_summary`（:415-442）/ `_persist_micro_compaction`（`run_agent.py:1251-1268`，走 `record_compaction`） | ✅ 已抄（f261aa2） |
 
 ### B 批（不抄 / 没做）
@@ -566,11 +566,11 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | # | 条目 | 真实出处 | 理由 | mini 现状 |
 |---|---|---|---|---|
 | **B1** | `archive_and_compact(..., tail_count=len-1)` 的 **rewind 式部分归档** | `micro_compaction.py:352` + `hermes_state_messages.py:567` | **① 基座**：mini 没有「部分活跃行 / 携带尾部」的概念 | ⏭ 用第 6 章 `record_compaction` **整份世代归档**（老世代 active=0 全归档 + 新世代重插），同样原子、同样不双载，只是粒度不同 |
-| **B2** | `_emit_micro_compaction_telemetry` 的 **17 字段 JSON 遥测** + `tokens_saved_total` 跨会话累计 | `micro_compaction.py:309-341` | **② 规模**：mini 用 `status_callback` 的**一行人话**代替（第 5 章同款口径） | ⏭ `run_agent.py:1247` 只发 `微压缩：吸收 1 个交换 · N → M 条消息` / defrag 一行 |
+| **B2** | `_emit_micro_compaction_telemetry` 的 **19 字段 JSON 遥测** + `tokens_saved_total` 跨会话累计 | `micro_compaction.py:309-342` | **② 规模**：mini 用 `status_callback` 的**一行人话**代替（第 5 章同款口径） | ⏭ `run_agent.py:1247` 只发 `微压缩：吸收 1 个交换 · N → M 条消息` / defrag 一行 |
 | **B3** | `_flush_scan_cursor_invalidated` / `_DB_PERSISTED_MARKER` / `stamp_db_persisted_markers` | `micro_compaction.py:182-188` + `context_compressor.py:246,311-319` | **① 基座**：那套是「有界 flush 扫描游标」的产物 | ⏭ mini 每消息**即时落库**、无该游标，defrag 直接改写标记即可（`_defrag_rolling_summary` 注释 :425-427 写明） |
 | **B4** | 跨进程 resume 时把**批量标记回标**成 micro 标记（rehydrate 升级） | `micro_compaction.py:55-57` | **③ 用不上的复杂度**：回标会让批量标记变成可被 supersede ⇒ 有毁历史风险 | ⏭ mini 只**读回**摘要正文（`rolling_summary_from_marker`），**不回标** |
 | **B5** | `aux_interrupt_protection()` 上下文管理器 + `main_runtime` 五字段透传 | `micro_compaction.py:118,129-132` | **① 基座**：mini 的辅助调用是**同步一次性**（`agent/auxiliary.py`），无 aux 线程中断语义 | ⏭ 摘要调用走 `run_agent._summary_llm` 直接调，无中断保护壳 |
-| **B6** | `_render_micro_marker_content` 里的 `SUMMARY_PREFIX` **上百行长引导块**（别工具调用 / 别收尾 等指令） | `context_compressor.py:181-220`、`micro_compaction.py:396` | **② 规模**：mini 用第 5 章的 `COMPACTION_HEADER` + `SUMMARY_END_MARKER` **两行** | ⏭ `render_micro_marker_content`（:146-149）就两行，够用 |
+| **B6** | `_render_micro_marker_content` 里的 `SUMMARY_PREFIX` **上百行长引导块**（别工具调用 / 别收尾 等指令） | `context_compressor.py:181-221`、`micro_compaction.py:396` | **② 规模**：mini 用第 5 章的 `COMPACTION_HEADER` + `SUMMARY_END_MARKER` **两行** | ⏭ `render_micro_marker_content`（:146-149）就两行，够用 |
 | **B7** | 遥测**报告脚本** `scripts/micro_compaction_report.py`（171 行：聚合 outcome / occupancy / 净省 token / 平均交换大小 / 耗时） | `scripts/micro_compaction_report.py` | **② 规模**：它是把 B2 的 JSON 日志变成答案的工具 | ⬜ 没做（量级）：mini 没有遥测面，也就没有可聚合的日志行 |
 | **B8** | **原生 Responses 服务端压缩**联动（`codex_responses_native` / `codex_responses_compact_threshold`，把服务端 `context_management=[{"type":"compaction",...}]` 与本地压缩串起来） | `agent/native_compaction.py`（352 行）+ `agent_init.py:1469,1896` | **③ 用不上的复杂度**：那条路要 `gpt-5.6` + 直连 OpenAI/Codex 后端，且把本地压缩降为 fallback | ⏭ 不抄（理由）：mini 只有一个 provider，没有服务端压缩可联动 |
 | **B9** | 与**网关侧会话维护**的两层分工：网关会话卫生强制压缩（`hygiene_hard_message_limit` / `hygiene_timeout_seconds`）+ `compression.checkpoint_required` 与 `micro_compact` **互斥**（武装时强制关微压缩，因为它没有 checkpoint hook） | `hermes_cli/config_defaults.py:579-584` + `agent_init.py:1880-1886` | **① 基座**：mini 无网关、无会话卫生层、无 checkpoint 门 | ⏭ 不抄（理由）：这两个旋钮在 mini 没有宿主 |
@@ -753,7 +753,7 @@ def _micro_compact_after_turn(agent, messages, final_response, logger) -> None:
     rolling summary before persist, amortizing compression across turns."""
 ```
 
-**A-28** `agent/turn_finalizer.py:281-284` —— 严格 `is True` + 两道门（checkpoint 武装 / persist-disabled 都不跑）。
+**A-28** `agent/turn_finalizer.py:277-281` —— 严格 `is True` + 两道门（checkpoint 武装 / persist-disabled 都不跑）。
 ```
 # Strict `is True` + callable gates: plugin context engines and MagicMock
 # compressors pass duck checks and would wipe the transcript. Never run while

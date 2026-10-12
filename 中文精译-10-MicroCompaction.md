@@ -2,7 +2,7 @@
 
 > **原文**：`website/docs/developer-guide/micro-compaction.md`（**406 行**，官方侧边栏 `developer-guide`；
 > 副标题逐字：*How micro-compaction amortizes context compression cost: triggers, tail sizing, the cached-prefix trade-off*）。
-> **本篇定位**：精译为主（看懂\"压缩的成本可以分期付 —— 它的触发、尾部尺寸、以及那份缓存前缀代价\"）。
+> **本篇定位**：精译为主（看懂"压缩的成本可以分期付 —— 它的触发、尾部尺寸、以及那份缓存前缀代价"）。
 > 它是第 5 章《上下文压缩与缓存》的**兄弟篇**：同一件事的另一条入口。差异与源码深挖留给《源码讲解-10》。
 > **📌 行号锚**：真实源码 `$HOME/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
 > **本章出入**：轻量核对 3 处（见附录 C）—— 只核**可指认的数字 / 引文 / 字段**（默认值、引文出处、遥测字段），细节不逐条对。
@@ -13,7 +13,7 @@
 
 ## 0. 这一章在回答什么
 
-一句话：**压缩的成本可以\"分期付款\"付出去 —— 不必等窗口装满再吃一次长停顿，而是每回合吸收一点；代价是每回合都打断一次提示词缓存前缀。**
+一句话：**压缩的成本可以"分期付款"付出去 —— 不必等窗口装满再吃一次长停顿，而是每回合吸收一点；代价是每回合都打断一次提示词缓存前缀。**
 
 （原文开篇 tagline 逐字：*A way to amortize the cost of compression.*）
 
@@ -39,7 +39,7 @@
 
 **一回合一个交换。** 无论对话多长，每回合的成本都**保持有界**。
 
-**交换（exchange）**是一整轮 agent 回合：一条 assistant 消息，连同它的工具结果以及后续的 assistant 迭代，直到下一条 user 消息为止。在工具密集的工作里，**大头 token 就住在这儿** —— 一次文件读取或一条命令的输出，把周围的散文比得微不足道 —— 所以\"一次吸收一个交换\"这件事本身是划算的。取**整轮**（而不是单独一组 assistant+tools）还能让转写本的角色交替**严格保持合法**：摘要标记是一条 assistant 角色的消息，而一整轮**两端总是被 user 消息夹住**。
+**交换（exchange）**是一整轮 agent 回合：一条 assistant 消息，连同它的工具结果以及后续的 assistant 迭代，直到下一条 user 消息为止。在工具密集的工作里，**大头 token 就住在这儿** —— 一次文件读取或一条命令的输出，把周围的散文比得微不足道 —— 所以"一次吸收一个交换"这件事本身是划算的。取**整轮**（而不是单独一组 assistant+tools）还能让转写本的角色交替**严格保持合法**：摘要标记是一条 assistant 角色的消息，而一整轮**两端总是被 user 消息夹住**。
 
 > 📌 **译注（补充，2026-10-12）：`exchange`（交换）到底指哪一段？**
 >
@@ -93,7 +93,7 @@
 
 一个交换**故意**从 *assistant* 消息开始。微型压缩一路**直接走过** user 消息去够到它，所以**你打进去的内容永远不会被摘要** —— 无论会话跑多久、压缩触发多少次，你的提示词在整个会话里**保持逐字**。
 
-这是整个设计里**最有用的性质**，值得把它为什么说清楚。assistant 产出的大体是**\"它做了什么\"的记述**：它读了这个文件、跑了那条命令、拿到了这个结果。这类叙述**摘要之后几乎不损失什么** —— \"它是这么做成的\"压过之后和完整版的信息量差不多。你的指令是**另一种东西**。它们是一切其余内容所**派生自的意图**，而且**无法从后续的工作里重建出来**。把\"用现成的 retry helper，别新加一个\"改写成一份摘要，正是**六轮之后 agent 满怀信心地做了你叫它别做的事**的那种翻车方式。
+这是整个设计里**最有用的性质**，值得把它为什么说清楚。assistant 产出的大体是**"它做了什么"的记述**：它读了这个文件、跑了那条命令、拿到了这个结果。这类叙述**摘要之后几乎不损失什么** —— "它是这么做成的"压过之后和完整版的信息量差不多。你的指令是**另一种东西**。它们是一切其余内容所**派生自的意图**，而且**无法从后续的工作里重建出来**。把"用现成的 retry helper，别新加一个"改写成一份摘要，正是**六轮之后 agent 满怀信心地做了你叫它别做的事**的那种翻车方式。
 
 所以这种**不对称是故意的**：压缩派生物，保留真相之源。代价是中间段能压到多小有个**地板**，因为 user 回合会累积、且**永不被吸收**。实践中这个地板很低 —— 一条提示词通常只占单条工具结果成本的一丁点 —— 但它**确实**是个地板。如果你习惯粘贴 10–20K token 的提示词，那份重量**按设计就是会留在上下文里**。
 
@@ -120,7 +120,7 @@
 
 ### 滚动摘要
 
-它不保存一堆\"逐交换\"的摘要，而是**恰好只有一份持续累积的摘要**，每个新交换都被**并入**它。摘要器被要求：把新材料的**决策、需求、文件路径和悬而未决的问题**折进去、丢掉不再相关的细节、并**保持既有结构**；它还被**显式要求**把遇到的任何凭据替换成 `[REDACTED]`。
+它不保存一堆"逐交换"的摘要，而是**恰好只有一份持续累积的摘要**，每个新交换都被**并入**它。摘要器被要求：把新材料的**决策、需求、文件路径和悬而未决的问题**折进去、丢掉不再相关的细节、并**保持既有结构**；它还被**显式要求**把遇到的任何凭据替换成 `[REDACTED]`。
 
 因为这份摘要是**累积的**，转写本里**只保留最新那条标记**。更早的标记是**严格冗余的** —— 当前摘要已经包含了它们持有的一切 —— 所以它们在被取代时就被丢掉。这件事比听起来更重要：把它们留在原地会叠起同一段文本的**近似重复副本**，每份都带着各自的标题和结束标记脚手架，于是转写本**每个回合都在变长，而不是变短**。
 
@@ -128,13 +128,13 @@
 
 把东西往一份摘要里并得太勤，它就会**变松垮** —— 啰嗦、而且比它承载的材料所应有的更大。当滚动摘要越过一个 token 阈值（默认 **2000**）时，下一次 pass 就**碎片整理（defrag）**：一次辅助调用把这份滚动摘要**本身**重新摘要成一份新鲜的紧凑版本，转写本里那条摘要标记被**原地重写**。
 
-碎片整理**从不触碰**转写本的结构 —— 不吸收、不拼接任何消息，游标**不动**，user 回合**不受影响**。它只处理累积的摘要文本、**从不**处理对话消息，所以\"你的消息永不被压缩\"这条保证**在它身上依然成立**。
+碎片整理**从不触碰**转写本的结构 —— 不吸收、不拼接任何消息，游标**不动**，user 回合**不受影响**。它只处理累积的摘要文本、**从不**处理对话消息，所以"你的消息永不被压缩"这条保证**在它身上依然成立**。
 
 ### 与会话数据库保持同步
 
 光在内存里拼接还不够。Hermes 的常规会话落盘是**只追加的**，所以那些原始行会**保持标记为 active**，一次恢复就会**把摘要和它替换掉的消息都加载进来** —— 直接把会话顶过上下文上限。
 
-所以每次 pass 还会调用 `archive_and_compact`，它**原子地**把 active 行**软归档**、并插入压缩后的那一组。这些消息随后被**盖戳为\"已持久化\"**，使紧跟其后的那次只追加落盘**跳过它们**。如果那个数据库步骤失败，会记一条日志、会话继续；在下一批批量压缩清理之前，恢复会**双重加载**。
+所以每次 pass 还会调用 `archive_and_compact`，它**原子地**把 active 行**软归档**、并插入压缩后的那一组。这些消息随后被**盖戳为"已持久化"**，使紧跟其后的那次只追加落盘**跳过它们**。如果那个数据库步骤失败，会记一条日志、会话继续；在下一批批量压缩清理之前，恢复会**双重加载**。
 
 ### 当摘要器失败时
 
@@ -177,9 +177,9 @@ compression:
 
 一个长命对话每个回合都复用一段**被缓存的提示词前缀**，而**被缓存的输入 token 按未缓存价格的一小部分计费**。那份折扣**只在前缀不变时才存活**。**一次微型压缩 pass 会重写已经发出去的历史**，这会让**从重写点往后的前缀作废** —— 所以开着微型压缩时，你是**每个回合**都打断一次缓存，而不是每次批量压缩才打断一次。
 
-这正是**主动剪枝（proactive prune）刻意避开**的同一份成本。那条路把自己挡在 `compression.proactive_prune_min_reclaim_tokens`（默认 **4096**）之后，恰恰是为了让它的重写保持**低频** —— 按那句配置注释的说法，*\"one big episodic break instead of a tiny break every tool iteration.\"*（**一次大的阶段性打断，而不是每个工具迭代来一次小打断。**）
+这正是**主动剪枝（proactive prune）刻意避开**的同一份成本。那条路把自己挡在 `compression.proactive_prune_min_reclaim_tokens`（默认 **4096**）之后，恰恰是为了让它的重写保持**低频** —— 按那句配置注释的说法，*"one big episodic break instead of a tiny break every tool iteration."*（**一次大的阶段性打断，而不是每个工具迭代来一次小打断。**）
 
-微型压缩**没有**等价的*回收量*闸门 —— 一次 pass 不管吸收的那一个交换**碰巧**省了多少，大的小的都提交。它有的是一个*频率*旋钮 `micro_compact_every_n_turns`。调高它会让打断**更稀、更阶段性**，这与剪枝那道闸门**靠另一条路**服务的是同一个目的 —— 只不过它是**通过\"少吸收\"到达那里**，而不是**通过\"等一次更大的胜利\"**。如果你想要剪枝的确切语义，给微型压缩加一个回收阈值是**显而易见的后续动作，而它目前还不存在**。
+微型压缩**没有**等价的*回收量*闸门 —— 一次 pass 不管吸收的那一个交换**碰巧**省了多少，大的小的都提交。它有的是一个*频率*旋钮 `micro_compact_every_n_turns`。调高它会让打断**更稀、更阶段性**，这与剪枝那道闸门**靠另一条路**服务的是同一个目的 —— 只不过它是**通过"少吸收"到达那里**，而不是**通过"等一次更大的胜利"**。如果你想要剪枝的确切语义，给微型压缩加一个回收阈值是**显而易见的后续动作，而它目前还不存在**。
 
 所以诚实的说法是**一种成本换另一种成本，不是省钱**：
 
@@ -219,7 +219,7 @@ auxiliary:
 | 7B 4-bit instruct，本地（MLX，Apple Silicon） | 每 pass 约 31 秒；那台机器同时在跑别的工作 |
 | 大型 MoE 推理模型，远程 GPU | **还要**明显更慢 —— 在摘要任务上花思考 token |
 
-规律是：**一个小、快、非推理的 instruct 模型通常是正确的形状**，而一个更大或\"更聪明\"的模型在这里**往往更差而不是更好**。它落在哪里取决于**你手上有什么硬件去跑它**。
+规律是：**一个小、快、非推理的 instruct 模型通常是正确的形状**，而一个更大或"更聪明"的模型在这里**往往更差而不是更好**。它落在哪里取决于**你手上有什么硬件去跑它**。
 
 如果 pass 感觉太慢，你的选项按效果**大致**排序是：挑一个更快或更小的压缩模型；给它一台**竞争更少**的宿主；或者把微型压缩**关掉**、回到批量压缩。
 
@@ -227,7 +227,7 @@ auxiliary:
 
 ## 9. Measuring it —— 度量它
 
-微型压缩**根本上不是**一个省 token 或省时间的优化，用\"省了多少 token\"去评判它会**低估**它。它真正买到的是两样东西：
+微型压缩**根本上不是**一个省 token 或省时间的优化，用"省了多少 token"去评判它会**低估**它。它真正买到的是两样东西：
 
 1. **长停顿被摊销了。** 同样的摘要工作照做，但变成**回合之后的小增量**，而不是会话中段的一次停顿。
 2. **你的上下文活得更久。** 因为中间段被**持续回收**，占用保持低，而不是锯齿摆动到阈值。一个会话能跑**远得多** —— 常常是**无限期** —— 才需要一次硬压缩。
@@ -248,7 +248,7 @@ micro compaction telemetry: {"event":"micro_compaction","outcome":"absorbed",
 
 `occupancy_pct` 是 `tokens_after` 占压缩阈值的比例 —— 那个**余量**数字。模型的窗口还没解析出来时它是 **null**：遥测**只读缓存过的值**，因为解析它可能发出一次**同步的 `/models` 探测**，而遥测**绝不能**成为挡住一个回合的东西。
 
-`tokens_delta` 在 pass 把转写本**缩小**时为负。`tokens_saved_total` 和 `passes_total` **跨会话累积**，所以**整段运行可以从它的最后一行总结出来**。payload 里**不出现任何转写本内容** —— 只有计数。
+`tokens_delta` 在 pass 把转写本**缩小**时为负。`tokens_saved_total` 和 `passes_total` **在整个会话里累积**，所以**整段运行可以从它的最后一行总结出来**。payload 里**不出现任何转写本内容** —— 只有计数。
 
 把一份日志变成答案：
 
@@ -314,15 +314,15 @@ Micro-compaction: skipping exchange at cursor 12 after 3 consecutive failures
 | 压缩（行级） | compaction | 把多行历史**合并 / 替换**成更少行的那个动作（本特性每回合做一次，故也叫行级） |
 | 吸收 | absorb | 把某个交换折进滚动摘要、并在转写本里用一条摘要标记替换它 |
 | 滚动摘要 | rolling summary | 唯一一份持续累积的摘要；每个新交换**并入**它，而不是各自单独存一份 |
-| 摘要标记 | summary marker | 转写本里携带当前滚动摘要的那条 assistant 角色消息（就是那条\"摘要\"行） |
-| 游标 | cursor | \"第一条尚未被吸收的消息\"的索引；每次成功 pass 推过他刚摘要过的交换 |
+| 摘要标记 | summary marker | 转写本里携带当前滚动摘要的那条 assistant 角色消息（就是那条"摘要"行） |
+| 游标 | cursor | "第一条尚未被吸收的消息"的索引；每次成功 pass 推过他刚摘要过的交换 |
 | 碎片整理 | defrag | 滚动摘要越过 token 阈值（默认 2000）时，一次辅助调用把摘要**本身**再摘成紧凑版 |
 | 转写本 | transcript | 整个对话的完整消息记录，即那份 `messages` 列表本身 |
 | 头部 | head | 系统提示词 + 开头几条消息；**逐字**保留 |
 | 尾部 | tail | 最近消息里按 **token 预算**划出的一个窗口；**逐字**保留 |
 | 中间段 | middle | 头部与尾部之间那块；微型压缩**只**在这里干活 |
 | 占用率 | occupancy | 窗口被填到多满，占**压缩阈值**的百分比（余量指标） |
-| 缓存前缀 | prompt-cache prefix | provider 每回合复用的\"从第一个字节起的最长公共前缀\"；被缓存输入的折扣**只在它不变时**存活 |
+| 缓存前缀 | prompt-cache prefix | provider 每回合复用的"从第一个字节起的最长公共前缀"；被缓存输入的折扣**只在它不变时**存活 |
 | 辅助模型 | auxiliary model | 干摘要这类杂活的副模型（配在 `auxiliary.compression` 下） |
 
 ---
@@ -330,7 +330,7 @@ Micro-compaction: skipping exchange at cursor 12 after 3 consecutive failures
 ## 附录 B · 本篇提到的实现文件（锚 `f5d1926110`，实测规模）
 
 行数一律 `git show f5d1926110:<路径> | wc -l` 实测。原文只按**路径**点名了 `scripts/micro_compaction_report.py` 一个；
-其余是按原文点名的**函数 / 配置键 / 角色**（`finalize_turn`、`archive_and_compact`、\"the context compressor\"、三个 `micro_compact*` 键）落到锚点上的**宿主文件**。
+其余是按原文点名的**函数 / 配置键 / 角色**（`finalize_turn`、`archive_and_compact`、"the context compressor"、三个 `micro_compact*` 键）落到锚点上的**宿主文件**。
 
 | 文件 | 实测 | 角色 |
 |---|---|---|
@@ -345,12 +345,12 @@ Micro-compaction: skipping exchange at cursor 12 after 3 consecutive failures
 
 ## 附录 C · 本篇与上游源码的出入（轻量核对，2026-10-12）
 
-本篇可指认的数字 / 引文在锚点 `f5d1926110` 上基本都能命中 —— `micro_compact` 默认 `False`、`micro_compact_every_n_turns` 默认 `1` 且\"小于 1 夹到 1\"、`micro_compact_defrag_threshold_tokens` 默认 `2000`、`proactive_prune_min_reclaim_tokens` 默认 `4096`、\"同一交换连续失败三次即跳过\" = `_MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3`、\"user 回合永不被吸收\" = `_find_one_exchange` 的 docstring 逐字 *\"user turns are never absorbed\"*、\"微型压缩没有回收量闸门\" = `agent/micro_compaction.py` 里 `reclaim` **零命中**。三处值得记下的：
+本篇可指认的数字 / 引文在锚点 `f5d1926110` 上基本都能命中 —— `micro_compact` 默认 `False`、`micro_compact_every_n_turns` 默认 `1` 且"小于 1 夹到 1"、`micro_compact_defrag_threshold_tokens` 默认 `2000`、`proactive_prune_min_reclaim_tokens` 默认 `4096`、"同一交换连续失败三次即跳过" = `_MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3`、"user 回合永不被吸收" = `_find_one_exchange` 的 docstring 逐字 *"user turns are never absorbed"*、"微型压缩没有回收量闸门" = `agent/micro_compaction.py` 里 `reclaim` **零命中**。三处值得记下的：
 
-1. **§7 那句被标为\"配置注释\"的引文不是逐字命中的。** 原文写 *\"one big episodic break instead of a tiny break every tool iteration.\"*，并称这是 *\"the words of the config comment\"*；实测锚点源码里**没有**这个逐字串。`hermes_cli/config_defaults.py:560-568` 的注释只说到 *\"the min_reclaim gate below keeps those breaks episodic\"*；更接近的完整措辞在**用户指南文档** `website/docs/user-guide/configuration.md`（*\"keeps those cache breaks episodic and amortized … instead of firing on every tool iteration\"*），那是一份**文档**、不是配置文件里的注释。→ 语义无误，**出处标注（\"config comment\"）对不上**。
+1. **§7 那句被标为"配置注释"的引文不是逐字命中的。** 原文写 *"one big episodic break instead of a tiny break every tool iteration."*，并称这是 *"the words of the config comment"*；实测锚点源码里**没有**这个逐字串。`hermes_cli/config_defaults.py:560-568` 的注释只说到 *"the min_reclaim gate below keeps those breaks episodic"*；更接近的完整措辞在**用户指南文档** `website/docs/user-guide/configuration.md`（*"keeps those cache breaks episodic and amortized … instead of firing on every tool iteration"*），那是一份**文档**、不是配置文件里的注释。→ 语义无误，**出处标注（"config comment"）对不上**。
 
-2. **§9 那张真实会话表里的\"尾部预算 64,000 token（窗口的 16%）\"不是当前默认路径的数字。** `64,000 = threshold_tokens(320K) × target_ratio(0.20)`，这正是 **`tail_mode: legacy`** 的尾部预算公式；而 `agent/context_compressor.py:1928-1934` 显示**默认 `tail_mode` 是 `lean`**：`max(10_000, min(25_000, context_length × 0.025))`，对同一个 **400K 窗口**算出来是 **10,000**（常量见 `:757-758` 的 `LEAN_TAIL_FLOOR_TOKENS/CAP_TOKENS`）。→ 这个例子、以及\"回收只在越过尾部预算之后才起步\"那句，只在 **legacy** 尾部尺寸下复现；文档**没声明**它用的 tail_mode，读源码时别把 64K 当默认。
+2. **§9 那张真实会话表里的"尾部预算 64,000 token（窗口的 16%）"不是当前默认路径的数字。** `64,000 = threshold_tokens(320K) × target_ratio(0.20)`，这正是 **`tail_mode: legacy`** 的尾部预算公式；而 `agent/context_compressor.py:1928-1934` 显示**默认 `tail_mode` 是 `lean`**：`max(10_000, min(25_000, context_length × 0.025))`，对同一个 **400K 窗口**算出来是 **10,000**（常量见 `:757-758` 的 `LEAN_TAIL_FLOOR_TOKENS/CAP_TOKENS`）。→ 这个例子、以及"回收只在越过尾部预算之后才起步"那句，只在 **legacy** 尾部尺寸下复现；文档**没声明**它用的 tail_mode，读源码时别把 64K 当默认。
 
 3. **§9 那条遥测 JSON 是示意行，不是逐字复刻。** 实际发射点 `ContextCompressor._emit_micro_compaction_telemetry`（`agent/micro_compaction.py:309-343`）用的是 `json.dumps(..., sort_keys=True)`（键**按字母序**），并且**总是**带上文档示例里省略的 `session_id`、`messages_before` / `messages_after`、`cursor`、`main_model`、`aux_model`。→ 字段名与含义都对得上，**顺序与完整度是示例性的**（原文那行末尾本就带 `...}` 表示截断）。
 
-**未核实一行**：§0 那句 *\"knowledge gets a little earlier than you may be used to\"* **看着像脱了一个词**（按上文正常应为 \"gets stale / second-hand earlier\"）。中文按\"知识会比你习惯的更早一点开始变旧\"译；源码侧无对照（它是散文断言、不是常量），**标为未核实**，未做修补。
+**未核实一行**：§0 那句 *"knowledge gets a little earlier than you may be used to"* **看着像脱了一个词**（按上文正常应为 "gets stale / second-hand earlier"）。中文按"知识会比你习惯的更早一点开始变旧"译；源码侧无对照（它是散文断言、不是常量），**标为未核实**，未做修补。
