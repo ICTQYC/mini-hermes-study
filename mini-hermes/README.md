@@ -16,7 +16,8 @@
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 14 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
 | 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试**（该章交付时点；现为 214 条） · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
-| 8 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-07b-GatewaySessionLifecycle.md》《源码讲解-07b-GatewaySessionLifecycle.md》 |
+| 7.1 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-07b-GatewaySessionLifecycle.md》《源码讲解-07b-GatewaySessionLifecycle.md》 |
+| 8 | `provider-runtime.md` | ✅ **已实现并跑通**（**providers/ 包**（723 行）+ **两段式解析** + `api_mode` 判定 + `source` + host 门控 + 别名归一（`756b493`）· **回退链** `agent/fallback.py` + **辅助路由** `agent/auxiliary.py` + 配置层 `hermes_cli/config.py`（`a391919`，回退链首次真正接线）· **219 条新契约测试**（106 + 113）· 全套件 **1,063 通过 / 0 失败**（双解释器）· 真跑：`source` 四来源 / host 门控三端点 / 别名归一 · 差异表 18 行 / 差距清单 A 批 10 + B 批 8 · **上游文档 3 处出入**（子代理继承链 / 触发点数 / key 门控）） | 《中文精译-08-ProviderRuntime.md》《源码讲解-08-ProviderRuntime.md》 |
 
 ## 章族表（★ 章号怎么数）
 
@@ -28,7 +29,8 @@
 | **第 7 章 · 网关（主线）** | `gateway-internals` | `中文精译-07-…` / `源码讲解-07-…` | `ch07-gateway` |
 | └ 扩展 **7.1**（旧称第 8 章） | `gateway-session-lifecycle` | `中文精译-07b-…` / `源码讲解-07b-…` | `ch08-gateway-session-lifecycle` |
 | └ 扩展 **7.2**（旧称第 9 章） | `multiplexing-gateway` | `中文精译-07c-…` / `源码讲解-07c-…` | `ch09-multiplexing-gateway` |
-| **第 8 章（下一章）** | `provider-runtime` | `中文精译-08-…` / `源码讲解-08-…` | `ch08-provider-runtime` |
+| **第 8 章** | `provider-runtime` | `中文精译-08-…` / `源码讲解-08-…` | `ch08-provider-runtime` |
+| **第 9 章（下一章）** | `programmatic-integration` | 待建 | — |
 
 三条规则：
 
@@ -56,7 +58,7 @@
 1  architecture                       ✅ 第 1 章（读文档，未实现）
 2  agent-loop                         ✅ 第 2 章
 3  prompt-assembly                    ✅ 第 3 章
-4  provider-runtime                   ⬜ ★ 唯一"两份口径都点名、我们都没做"的一篇
+4  provider-runtime                   ✅ 第 8 章（★ 唯一"两份口径都点名"的一篇，已还）
 5  adding-providers                   ⬜
 6  tools-runtime                      ✅ 第 4 章
 7  session-storage                    ✅ 第 6 章
@@ -76,19 +78,19 @@
   5   context-compression-and-caching   ✅ 第 5 章
   6   micro-compaction                  ⬜ 被跳过（独立支线 406 行）
   7   gateway-internals                 ✅ 第 7 章
-  8   gateway-session-lifecycle         ✅ 第 8 章
+  8   gateway-session-lifecycle         ✅ 7.1
   9   multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
  10   completion-backlog-delivery       ⬜ 52 行（"投递债"）
  11   session-storage                   ✅ 第 6 章
  12   state-db-recovery                 ⬜ 107 行（与第 6 章配对）
- 13   provider-runtime                  ⬜（= A 的第 4 项）
- 14   programmatic-integration          ⬜
+ 13   provider-runtime                  ✅ 第 8 章（= A 的第 4 项）
+ 14   programmatic-integration          ⬜ ← **下一章（第 9 章）**
 ```
 
 **差额一句话**：A 是"少而精的必读路线"（10 篇），B 是"目录顺序"（14 + Extending 那一片）。
-A 里我们还欠 **provider-runtime / adding-providers / acp-internals** 三篇；
+A 里我们还欠 **adding-providers / acp-internals** 两篇；
 B 里我们还欠 codebase-ownership / micro-compaction / multiplexing-gateway /
-completion-backlog-delivery / state-db-recovery / provider-runtime / programmatic-integration 七篇。
+completion-backlog-delivery / state-db-recovery / programmatic-integration 六篇。
 
 （"插件 / 技能 / 工具群"那一族在 developer-guide 的 Extending 分组里，仓库里的占位仍写着"第 10 章"。）
 
