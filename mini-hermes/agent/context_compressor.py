@@ -643,6 +643,7 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         messages: List[Dict[str, Any]],
         *,
         call_llm: Optional[Callable[[str, str], Optional[str]]] = None,
+        call_llm_meta: Optional[Callable[[str, str], Tuple[Optional[str], Optional[str]]]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
     ) -> List[Dict[str, Any]]:
         """执行压缩。返回新的消息列表（**不改传进来的那份**）。
@@ -650,6 +651,10 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         `call_llm(system_prompt, user_prompt) -> str | None` 是注入点：
         agent 传进来的实现去发辅助 LLM 调用；测试传假函数。
         返回 None 表示**摘要失败**（见 `generate_summary`）。
+
+        `call_llm_meta(system_prompt, user_prompt) -> (str | None, finish_reason | None)`
+        是**新注入点**（默认 None，旧调用不变）：透出 `finish_reason`，于是
+        "摘要被截断（`length`）"能当失败处理（见 `generate_summary`）。给了就优先用它。
         """
         status = status_callback or self.status_callback or (lambda _t: None)
         before, src = self.current_tokens(messages)
@@ -707,7 +712,9 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         # ── 阶段三：摘要
         content_tokens = estimate_messages_tokens_rough(middle)
         budget = self.summary_token_budget(content_tokens)
-        summary = self.generate_summary(middle, call_llm=call_llm, budget_tokens=budget, status_callback=status)
+        summary = self.generate_summary(middle, call_llm=call_llm,
+                                        call_llm_meta=call_llm_meta,
+                                        budget_tokens=budget, status_callback=status)
         if summary is None:
             # ★ 原文点名的静默降级点。mini 版照样降级（不能因为摘要失败就不压缩，
             #   否则超窗的会话永远修不好），但**必须把这件事说出来**。
@@ -742,16 +749,23 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         middle: Sequence[Dict[str, Any]],
         *,
         call_llm: Optional[Callable[[str, str], Optional[str]]],
+        call_llm_meta: Optional[Callable[[str, str], Tuple[Optional[str], Optional[str]]]] = None,
         budget_tokens: int,
         status_callback: Optional[Callable[[str], None]] = None,
     ) -> Optional[str]:
         """把中间段交给辅助 LLM 摘要。
 
-        ★ 三种返回 None 的情况，都要让调用方知道（不能静默）：
-          ① 没接 `call_llm`（构造时就没给辅助调用方 —— 测试、或"不想为摘要多打一次
+        ★ 四种返回 None 的情况，都要让调用方知道（不能静默）：
+          ① 两个注入点都没接（构造时就没给辅助调用方 —— 测试、或"不想为摘要多打一次
              LLM 调用"的调用方）；
           ② 调用抛异常；
-          ③ 调用返回空。
+          ③ **摘要被截断**（`finish_reason == "length"`）—— 拿到的是一条**半截合并**，
+             HTTP 200、**有内容**，所以"返回空"那条判据抓不住它（真实版逐字原因见
+             `agent/micro_compaction.py:141-146`）。当**失败**处理：返回 None、不写进历史。
+          ④ 调用返回空。
+
+        ★ `call_llm_meta`（默认 None，旧调用不变）：透出 `finish_reason` 的注入点，
+          给了就**优先**用它；只给了 `call_llm` 时 finish 未知、不判截断（行为不变）。
 
         ⚠️ 这里原来写的是"比如 `--no-summary` 模式或测试" —— 而 `--no-summary`
            这个命令行参数**从来不存在**（整个仓库没有任何地方读它）。
@@ -762,7 +776,7 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         ★ 迭代式再压缩：有 `_previous_summary` 时指令是**更新**而不是重写。
         """
         status = status_callback or self.status_callback or (lambda _t: None)
-        if call_llm is None:
+        if call_llm is None and call_llm_meta is None:
             status("摘要跳过：没有提供辅助 LLM 调用（压缩将不带摘要）")
             return None
 
@@ -787,10 +801,18 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         if self._previous_summary:
             user = REWRITE_INSTRUCTION.format(previous=self._previous_summary) + "\n\n" + user
 
+        finish: Optional[str] = None
         try:
-            text = call_llm(system, user)
+            if call_llm_meta is not None:
+                text, finish = call_llm_meta(system, user)
+            else:
+                text = call_llm(system, user)        # 旧注入点：finish 未知
         except Exception as exc:                                  # noqa: BLE001
             status(f"摘要调用抛异常：{type(exc).__name__}: {exc}")
+            return None
+        # ★ 摘要被**截断** ⇒ 半截合并 ⇒ 与"空内容"同一条失败路径：丢弃、不写进历史。
+        if isinstance(finish, str) and finish.strip() == "length":
+            status("摘要被截断（finish_reason=length）⇒ 丢弃半截、当失败处理（不写进历史）")
             return None
         text = (text or "").strip()
         if not text:

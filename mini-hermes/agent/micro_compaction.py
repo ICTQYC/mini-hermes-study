@@ -340,7 +340,9 @@ class MicroCompactionMixin:
     # ── 摘要一次（失败返回 None，绝不抛）────────────────────────────────────
 
     def _micro_summarize_one(
-        self, exchange_text: str, *, call_llm: Optional[Callable[[str, str], Optional[str]]],
+        self, exchange_text: str, *,
+        call_llm: Optional[Callable[[str, str], Optional[str]]],
+        call_llm_meta: Optional[Callable[[str, str], Tuple[Optional[str], Optional[str]]]] = None,
     ) -> Optional[str]:
         """把一个交换并进滚动摘要（经**辅助 LLM**，失败返回 `None`）。
 
@@ -348,14 +350,31 @@ class MicroCompactionMixin:
         `run_agent._summary_llm` 会经 `agent/auxiliary.py`（A8）选 provider/model，
         凭据走作用域-aware `get_secret`。微压缩**复用**这条路由，不另起一套。
 
-        ★ 三种返回 `None`：没接调用方 / 调用抛异常 / 返回空 —— 都不吸收、留着重试。
+        `call_llm_meta(system, user) -> (str | None, finish_reason | None)` 是**新注入点**，
+        经 `run_agent._summary_llm_meta` 透出 `finish_reason`。**优先**用它（能拿到
+        finish ⇒ 能判截断）；两者都给了也以它为准。
+
+        ★ **截断判据**（真实版 `agent/micro_compaction.py:141-146` 逐字原因）：
+          `finish_reason.strip() == "length"` 表示输出是一条**半截合并** ——
+          HTTP 200、**有内容**，所以"返回空"那条判据抓不住它。此时**直接返回 `None`**：
+          丢弃半截、不计入滚动摘要、不吸收，让调用方照常记失败、留着重试。
+
+        ★ 四种返回 `None`：没接调用方 / 调用抛异常 / **被截断（length）** / 返回空
+          —— 都不吸收、留着重试。
         """
-        if call_llm is None:
+        if call_llm is None and call_llm_meta is None:
             return None
         system, user = build_micro_summary_prompt(self._micro_rolling_summary, exchange_text)
+        finish: Optional[str] = None
         try:
-            text = call_llm(system, user)
+            if call_llm_meta is not None:
+                text, finish = call_llm_meta(system, user)
+            else:
+                text = call_llm(system, user)        # 旧注入点：finish 未知
         except Exception:                                        # noqa: BLE001
+            return None
+        # ★ 摘要被**截断** ⇒ 半截合并 ⇒ 丢弃（HTTP 200 且"有内容"，只能靠 finish 判）。
+        if isinstance(finish, str) and finish.strip() == "length":
             return None
         text = (text or "").strip()
         if not text:
@@ -396,6 +415,7 @@ class MicroCompactionMixin:
     def _defrag_rolling_summary(
         self, messages: List[Dict[str, Any]], *,
         call_llm: Optional[Callable[[str, str], Optional[str]]],
+        call_llm_meta: Optional[Callable[[str, str], Tuple[Optional[str], Optional[str]]]] = None,
     ) -> bool:
         """就地重压滚动摘要并改写**最新那条 micro 标记**（转写本形状不变）。
 
@@ -410,7 +430,8 @@ class MicroCompactionMixin:
         if not old_summary.strip():
             return False
         self._micro_rolling_summary = ""
-        fresh = self._micro_summarize_one(old_summary, call_llm=call_llm)
+        fresh = self._micro_summarize_one(old_summary, call_llm=call_llm,
+                                          call_llm_meta=call_llm_meta)
         self._micro_rolling_summary = fresh or old_summary
         if not fresh:
             return False
@@ -425,12 +446,16 @@ class MicroCompactionMixin:
     def micro_compact(
         self, messages: List[Dict[str, Any]], *,
         call_llm: Optional[Callable[[str, str], Optional[str]]] = None,
+        call_llm_meta: Optional[Callable[[str, str], Tuple[Optional[str], Optional[str]]]] = None,
     ) -> List[Dict[str, Any]]:
         """跑一轮微压缩。返回（可能改过的）列表。
 
         ★ **不改传进来的那份**是第 5 章的契约；但这里为对齐真实版的\"游标记账\"，
           内部改动是本对象的状态（游标/摘要），返回**新列表**由调用方写回历史。
         ★ `dirty` 标志：本次**真的**吸收/defrag 了 → 调用方据此落库（失败不落库）。
+        ★ `call_llm_meta`（新，默认 None）：透出 `finish_reason` 的注入点。给了就
+          **优先**用它 —— 摘要被截断（`finish_reason == "length"`）时判为失败、丢弃半截。
+          旧调用方只传 `call_llm` 时行为不变（finish 未知、不判截断）。
         """
         self._micro_dirty = False
         if not getattr(self, "micro_compact_enabled", False):
@@ -454,7 +479,8 @@ class MicroCompactionMixin:
 
         # defrag 就地改摘要/标记（不 splice、不推游标），而不是吸收本回合。
         if self._needs_defrag():
-            if self._defrag_rolling_summary(messages, call_llm=call_llm):
+            if self._defrag_rolling_summary(messages, call_llm=call_llm,
+                                            call_llm_meta=call_llm_meta):
                 self._reset_micro_failures()
                 self._micro_passes += 1
                 self._micro_dirty = True
@@ -463,7 +489,8 @@ class MicroCompactionMixin:
         # 本次摘要是否**累积**（含更早的 micro 标记）—— 摘要前捕获。
         cumulative = bool(self._micro_rolling_summary.strip())
         exchange_text = serialize_exchange(messages[exchange_start:exchange_end])
-        updated = self._micro_summarize_one(exchange_text, call_llm=call_llm)
+        updated = self._micro_summarize_one(exchange_text, call_llm=call_llm,
+                                            call_llm_meta=call_llm_meta)
         if updated is None:
             self._record_micro_failure(exchange_start, exchange_end)
             return messages                                    # ★ A4：失败不吸收、不落库

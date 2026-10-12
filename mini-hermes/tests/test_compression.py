@@ -434,6 +434,33 @@ def test_iterative_recompression_asks_to_update() -> None:
     check("上一次的摘要正文出现在指令里", calls and _OK_SUMMARY[:20] in calls[0])
 
 
+def test_batch_summary_truncated_is_failure() -> None:
+    """★ 批量路径：`finish_reason == "length"` ⇒ 当**失败**（返回 None、不写进历史）。
+
+    截断时 HTTP 200、**有内容**，所以"返回空"那条判据抓不住它 —— 只有 finish 判得住。
+    """
+    seen = []
+    c = ContextCompressor(context_length=40_000, protect_last_n=2,
+                          status_callback=seen.append)
+    msgs = build_prose_history(turns=12, chars=3000)
+    out = c.compress(msgs, call_llm_meta=lambda s, u: ("半截批量摘要（被截断）", "length"))
+    check("★ 截断 ⇒ 没记住摘要（`_previous_summary` 仍为空）", c._previous_summary is None)
+    check("★ status 说了『无摘要』（与空内容同一条失败路径）",
+          any("无摘要" in s for s in seen), str([s for s in seen if "摘要" in s][:3]))
+    check("★ 半截正文**没**进压缩后的历史",
+          not any("半截批量摘要" in str(m.get("content")) for m in out))
+
+
+def test_batch_summary_stop_is_success() -> None:
+    """★ 批量路径：`finish_reason == "stop"` ⇒ 正常采用（写进历史 + 记为上次摘要）。"""
+    c = ContextCompressor(context_length=40_000, protect_last_n=2)
+    msgs = build_prose_history(turns=12, chars=3000)
+    out = c.compress(msgs, call_llm_meta=lambda s, u: (_OK_SUMMARY, "stop"))
+    check("★ 正常结束 ⇒ 摘要被采用（`_previous_summary` 有内容）", bool(c._previous_summary))
+    check("★ 摘要正文进了压缩后的历史",
+          any("搭 FastAPI 项目" in str(m.get("content")) for m in out))
+
+
 # ══════════════════════════════════════════════════════════ 6. 契约
 
 def test_output_always_has_valid_tool_pairs() -> None:
@@ -904,10 +931,13 @@ GROUPS = [
      [test_prune_only_touches_long_tool_results_outside_tail, test_prune_has_a_size_floor,
       test_duplicate_tool_results_are_deduped]),
     ("5. 摘要与降级",
-     "角色避免连续同角色 / **摘要失败要说出来** / 迭代式『更新它』/ **注入防线 + 凭证脱敏** / **结束标记**",
+     "角色避免连续同角色 / **摘要失败要说出来** / 迭代式『更新它』/ **注入防线 + 凭证脱敏** / **结束标记** / "
+     "**批量截断（length）当失败、stop 当成功**",
      [test_summary_role_avoids_consecutive_same_role,
       test_system_prompt_gets_the_compaction_note,
       test_summary_failure_is_announced_not_silent,
+      test_batch_summary_truncated_is_failure,
+      test_batch_summary_stop_is_success,
       test_iterative_recompression_asks_to_update,
       test_summary_prompt_defends_against_injection_and_redacts,
       test_summary_end_marker,

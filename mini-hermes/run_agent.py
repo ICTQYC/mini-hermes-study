@@ -1103,15 +1103,24 @@ class AIAgent:
             "context_length": getattr(self, "context_length", None),
         }
 
-    def _summary_llm(self, system: str, user: str) -> Optional[str]:
-        """给压缩器用的辅助 LLM 调用 —— ★ **经辅助路由层（A8）** 选 provider/model。
+    def _summary_llm_meta(self, system: str, user: str) -> tuple[Optional[str], Optional[str]]:
+        """给压缩器用的辅助 LLM 调用 —— ★ 返回 `(文本, finish_reason)`。
 
-        ★ 未配置 `auxiliary.compression` 时解析结果是 `auto` ⇒ **继承主 agent 路由**，
-          与旧的"复用同一条 HTTP 路径、复用主模型"**逐字等价**（默认行为不变）。
-        ★ 配了 `auxiliary.compression.provider` 才走别的 provider —— 这是 A8 接的
-          **唯一一个消费者**（B3：不抄 7800 行的辅助适配器丛林）。
-        ★ 辅助调用是**一次性**的：用解析出来的运行时直接发一次，**不走 agent 的回退链**
-          （真实版：aux 没有持久 agent 的 `_try_activate_fallback` 机制）。
+        ★ 与 `_summary_llm` **同一套路由/请求路径**（`resolve_auxiliary_runtime(
+          TASK_COMPRESSION, ...)` + `self._post_chat_completions(...)`）；区别只在于
+          它**额外透出 `finish_reason`**。`_summary_llm` 就是调它、丢掉第二项。
+
+        ★ **为什么要透出 `finish_reason`**：摘要被**截断**时（`finish_reason == "length"`）
+          拿到的是一份**半截合并** —— HTTP 200、**有内容**，所以"返回空"那条判据
+          **抓不住它**。调用方（微压缩 / 批量压缩）据 `finish_reason.strip() == "length"`
+          ⇒ **丢弃结果、不吸收、留着重试**（真实版 `agent/micro_compaction.py:141-146`
+          逐字：*A length stop means a partial merge; leave the exchange unabsorbed so a
+          later pass retries.*）。不去接这条判据，半截摘要会被当成好摘要存进滚动摘要、
+          此后每轮都带着缺一截的摘要跑。
+
+        ★ `finish_reason` 直接从**原始响应**取，**不经** `_parse_response` ——
+          后者会顺手记 usage；usage 记账只能算一次，别在两层里各调一次。
+          这里只读 `choices[0].finish_reason`，不碰记账。
         """
         from agent.auxiliary import TASK_COMPRESSION, resolve_auxiliary_runtime
 
@@ -1122,7 +1131,23 @@ class AIAgent:
             "compression", runtime=runtime,
         )
         text, _ = self._parse_response(resp)
-        return (text.get("content") or "").strip() or None
+        finish = ((resp.get("choices") or [{}])[0].get("finish_reason") or "") or None
+        return ((text.get("content") or "").strip() or None), finish
+
+    def _summary_llm(self, system: str, user: str) -> Optional[str]:
+        """给压缩器用的辅助 LLM 调用 —— ★ **经辅助路由层（A8）** 选 provider/model。
+
+        ★ 未配置 `auxiliary.compression` 时解析结果是 `auto` ⇒ **继承主 agent 路由**，
+          与旧的"复用同一条 HTTP 路径、复用主模型"**逐字等价**（默认行为不变）。
+        ★ 配了 `auxiliary.compression.provider` 才走别的 provider —— 这是 A8 接的
+          **唯一一个消费者**（B3：不抄 7800 行的辅助适配器丛林）。
+        ★ 辅助调用是**一次性**的：用解析出来的运行时直接发一次，**不走 agent 的回退链**
+          （真实版：aux 没有持久 agent 的 `_try_activate_fallback` 机制）。
+        ★ **签名与行为不变**（已有 1,156 条测试靠它）：路由逻辑搬到 `_summary_llm_meta`，
+          这里只取文本。想要 `finish_reason` 的调用方改接那条 *_meta 注入点。
+        """
+        text, _ = self._summary_llm_meta(system, user)
+        return text
 
     def _persist_message(self, msg: Dict[str, Any], *, tool_name: Optional[str] = None) -> None:
         """把一条消息**追加**进会话库（第 6 章）。
@@ -1177,7 +1202,8 @@ class AIAgent:
         # ★ **原地**替换（对应原文 §3.2 的 in-place compaction）：
         #   压缩不换会话 id、不改"这段对话的身份"，只把实时消息列表重写一遍。
         before = [dict(m) for m in messages]
-        messages[:] = c.compress(messages, call_llm=self._summary_llm)
+        messages[:] = c.compress(messages, call_llm=self._summary_llm,
+                                 call_llm_meta=self._summary_llm_meta)
         # ★ 第 6 章接线：压缩 = **原地压缩的落库形式** ——
         #   老世代整体归档（active=0/compacted=1），压缩后的上下文作为新世代插入。
         #   于是"同一条消息出现在两个世代里"是**正常现象**（真实版明文警告别当重复删）。
@@ -1206,7 +1232,8 @@ class AIAgent:
             return
         before = len(messages)
         try:
-            compacted = c.micro_compact(messages, call_llm=self._summary_llm)
+            compacted = c.micro_compact(messages, call_llm=self._summary_llm,
+                                        call_llm_meta=self._summary_llm_meta)
         except Exception as exc:                      # noqa: BLE001 —— 微压缩不该把回合弄崩
             self._emit_status(f"⚠️ 微压缩失败：{type(exc).__name__}: {exc}")
             return

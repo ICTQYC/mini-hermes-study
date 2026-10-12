@@ -135,6 +135,21 @@ def _none_llm():
     return _llm, calls
 
 
+def _meta_llm(text, finish):
+    """返回 (call_llm_meta, calls) —— calls 记录每次 (system, user)。
+
+    `call_llm_meta` 形状：`(system, user) -> (text | None, finish_reason | None)`，
+    用来模拟 `run_agent._summary_llm_meta` 透出 `finish_reason`。
+    """
+    calls = []
+
+    def _llm(system, user):
+        calls.append((system, user))
+        return text, finish
+
+    return _llm, calls
+
+
 def _fresh(payload_chars: int = 4000, **kw) -> tuple:
     c = ContextCompressor(context_length=64_000, micro_compact=True, **kw)
     return c, build_history(payload_chars=payload_chars)
@@ -322,6 +337,57 @@ def test_three_consecutive_failures_push_cursor() -> None:
     check("★ 第 4 次尝试的是一个**新的**交换（游标推过了第一个）",
           c._micro_last_failure_cursor > ex_start,
           f"last_failure_cursor={c._micro_last_failure_cursor} > ex_start={ex_start}")
+
+
+def test_truncated_summary_is_discarded() -> None:
+    """★ `finish_reason == "length"` ⇒ 半截合并 ⇒ 丢弃、不吸收、留着重试。
+
+    与"摘要返回空"是**两条不同的**判据：截断时 HTTP 200、**有内容**，只有 finish 判得住。
+    """
+    c, msgs = _fresh()
+    llm, calls = _meta_llm("半截摘要（被截断）", "length")
+    out = c.micro_compact(msgs, call_llm_meta=llm)
+    check("确实调了一次（截断发生在拿到响应之后）", len(calls) == 1, f"calls={len(calls)}")
+    check("★ 截断 ⇒ 消息列表原样返回（丢弃半截、不吸收）", out is msgs)
+    check("没造任何 micro 标记", sum(1 for m in out if is_micro_marker(m)) == 0)
+    check("★ 截断不置 dirty（调用方据此**不落库**）", c._micro_dirty is False)
+    check("★ 半截没进滚动摘要（仍为空）", c._micro_rolling_summary == "")
+    check("★ 失败计数 +1（照常记失败、留着重试）", c._micro_consecutive_failures == 1,
+          f"failures={c._micro_consecutive_failures}")
+
+
+def test_stop_finish_summary_is_absorbed() -> None:
+    """★ `finish_reason == "stop"` ⇒ 正常结束 ⇒ 照常吸收。"""
+    c, msgs = _fresh()
+    llm, calls = _meta_llm("## Goal\n完整摘要正文", "stop")
+    out = c.micro_compact(msgs, call_llm_meta=llm)
+    check("确实调了一次", len(calls) == 1, f"calls={len(calls)}")
+    check("★ 正常结束 ⇒ 恰好吸收一条 micro 标记",
+          sum(1 for m in out if is_micro_marker(m)) == 1,
+          f"标记 {sum(1 for m in out if is_micro_marker(m))} 条")
+    check("★ 正常吸收 ⇒ dirty 为 True（调用方据此落库）", c._micro_dirty is True)
+    check("滚动摘要写入了完整正文", "完整摘要正文" in c._micro_rolling_summary)
+    # 同时给了旧 call_llm 与新 call_llm_meta ⇒ **优先** meta（能判截断）。
+    c2, msgs2 = _fresh()
+    meta, meta_calls = _meta_llm("来自 meta 的摘要", "stop")
+    old, old_calls = _recording_llm("来自旧 call_llm 的摘要")
+    c2.micro_compact(msgs2, call_llm=old, call_llm_meta=meta)
+    check("★ 两个注入点都给了 ⇒ 用 meta（判得了截断的那个）",
+          len(meta_calls) == 1 and len(old_calls) == 0,
+          f"meta={len(meta_calls)} old={len(old_calls)}")
+    check("吸收的是 meta 的摘要", "来自 meta 的摘要" in c2._micro_rolling_summary)
+
+
+def test_legacy_call_llm_still_absorbed() -> None:
+    """③ 兼容性回归：只给旧 `call_llm`（finish 未知）时照常吸收，**不**被当成截断。"""
+    c, msgs = _fresh()
+    llm, calls = _recording_llm("## Goal\n旧注入点的摘要")
+    out = c.micro_compact(msgs, call_llm=llm)
+    check("★ 只有旧 call_llm ⇒ 照常吸收一条标记",
+          sum(1 for m in out if is_micro_marker(m)) == 1,
+          f"标记 {sum(1 for m in out if is_micro_marker(m))} 条")
+    check("旧注入点也置 dirty", c._micro_dirty is True)
+    check("签名兼容：不传 call_llm_meta 不报错", len(calls) == 1)
 
 
 # ══════════════════════════════════════════════════════════════════ 5. 标记形状
@@ -550,6 +616,11 @@ class _StubAgent:
     def _summary_llm(self, system, user):
         return self._llm(system, user)
 
+    def _summary_llm_meta(self, system, user):
+        # 接线后 `_micro_compact_after_turn` 会同时传 call_llm_meta；这里给一个
+        # finish="stop" 的桩，等价于"没被截断"（旧 call_llm 的行为）。
+        return self._llm(system, user), "stop"
+
     def _emit_status(self, text):
         self.statuses.append(text)
 
@@ -647,10 +718,14 @@ GROUPS = [
       test_noop_pass_calls_model_zero_times,
       test_cadence_gate_every_n]),
     ("4. 失败（A4）",
-     "失败**不吸收**/不落库 · 异常被吞 · **连续 3 次失败把游标推过**",
+     "失败**不吸收**/不落库 · 异常被吞 · **连续 3 次失败把游标推过** · "
+     "**截断（finish_reason=length）当失败、丢弃半截** · stop 正常吸收 · 旧注入点兼容",
      [test_failure_does_not_absorb_or_persist,
       test_summarize_exception_is_failure_not_crash,
-      test_three_consecutive_failures_push_cursor]),
+      test_three_consecutive_failures_push_cursor,
+      test_truncated_summary_is_discarded,
+      test_stop_finish_summary_is_absorbed,
+      test_legacy_call_llm_still_absorbed]),
     ("5. 标记形状（A5）",
      "assistant 角色 + 三键 · supersede **只丢 micro 标记** · 相邻 user 合并 · 游标从拼装后推",
      [test_marker_shape_and_keys,
