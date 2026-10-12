@@ -292,7 +292,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 ## §一 Overview —— 一进程 vs 一 profile
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 一个网关进程**服务所有 profile**：默认 profile 之外，每个被服务的具名 profile 各持一套 **适配器、凭据、会话库、cron 心跳**；与此同时，全进程**共用**一个事件循环、一个 HTTP 监听、一把进程锁、一个状态面。「各自持有」与「全局共用」的边界，全部由一条硬约束划出：
 
@@ -300,7 +300,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 把这条约束落地的关键布局是**两张适配器表**：`self.adapters` 永远是**默认 profile 的**那一张；次级 profile 的适配器进 `self._profile_adapters[profile][platform]`。这个「默认在明、次级在暗」的分层后面到处复现 —— 配对 store、状态面、平台状态键都照这套摆。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 两张表的声明，以及点明要害的那句注释（逐字）：
 
@@ -313,11 +313,11 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 要害是后半句 **`self.adapters stays the default's map`**：默认 profile 不是「第一个 profile」，而是一个**轴心** —— 次级全都挂在它下面。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 两张适配器表**已对齐**：`self.adapters` 是活动 profile 的，次级进 `self._profile_adapters[名字][平台]`（`gateway/run.py:64 / :82`；表逻辑在 `gateway/run_adapters.py`，**213 行**）。服务集合先过一道边界再落账 —— `gateway/run.py:242` 的 `self.served_homes = self.servable_homes()`；启动次级适配器、以及给所有适配器设 `multiplex_note`（`@<profile>` 提示语**只在多路复用开着时出现**）在 `gateway/run.py:259-268`。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -331,13 +331,13 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 ## §二 The mode flag —— 开关的三道来源
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 多路复用开关 `gateway.multiplex_profiles` 也接受顶层写法，**默认开**；解析顺序是 **env > config.yaml > unset**。要害在**三态**而不是布尔：`None`（未设置，等 boot 裁决）/ `True` / `False`。**空白与未识别都不算覆盖** —— 它们回落成 `None`，把决定权交回下层，而不是被当成 `False` 把功能关掉。配置里留 `None` 是刻意的：它是一个**待 boot 裁决的请求**，不是结论；所有读者都按真值判断，所以未决的 `None` 永远不会「不小心」开启多路复用。
 
 另一处易错点在 `unset` 的处理：别的进程**不猜** unset 的默认，而是先读**活着的那个网关**记录的 `served_profiles`，再读显式开关 —— 否则「还没迁移」会被误读成「已经在多路复用」。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐字）：
 
@@ -351,11 +351,11 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害是 **`Blank is deliberately ``None``, not ``False``**：托管部署里一个只被 provision、还没填值的 secret 到达时是 `""`；若把 `""` 当成 `False`，它就会**盖掉** config.yaml 里的显式开启。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `gateway/multiplex_mode.py`（**298 行**）实现了同形状的三态：命令行 `--multiplex` / `--no-multiplex` / 不给（=`None`），外加 `MINI_MULTIPLEX_PROFILES` 覆盖（用真值词表，**空白与未识别词不算覆盖**），再由裁决函数 `resolve_multiplex_mode()` 收口；`gateway_cmd.py` 的旗标是同一个 dest、`default=None`。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 三态与「空白不算覆盖」这一层，mini 与真实版对齐；差的只是**来源渠道**与**防御对象**：mini 的配置面只有 `config.json` + 命令行旗标，**没有托管部署**（没人往容器里塞 `MINI_*` 空值），所以「空白 ≠ False」在 mini 里**暂时没有受害者** —— 这条防御是照着机制抄的，不是被踩出来的。
 
@@ -363,11 +363,11 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §三 启动预检与裁决（原文散落，本文归拢）
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 「默认开」必须配一个**预检**，否则一次安装里两个进程会抢同一个 bot token —— 那不是报错，是**间歇性错乱**。预检的六条（逐字见 §0.2）按**短路顺序**排：最便宜、最能排除大类的排前面，把昂贵的宿主探测留到后面。裁决结果要记下**来源**（`config` / `default` / `guard` 三种之一），并**落盘 + 分级打日志**：`guard` 且单 profile 记 info，其它 `guard` 记 warning。最后一条纪律：**预检崩了不许拖垮网关** —— 异常被兜住，网关退回 standalone，而不是陪着一起挂。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 「为什么单 profile 那条排第一」写在注释里（逐字）：
 
@@ -381,13 +381,13 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害是 **`Cheap and first`**：单 profile 的第 1 条既最省钱，又能把嵌入式 / test runner 挡在后面那些**昂贵的 service-manager 探测**之前 —— 顺序本身就是设计。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `gateway/multiplex_mode.py`（**298 行**）以 `resolve_multiplex_mode()` 定三段来源（显式 → env → 预检），`implicit_multiplex_blocker()` 只有三条检查（① 非默认 profile 自己的网关 ② 服务集合 < 2 ③ 有 secondary 还在跑网关），`record_multiplex_decision()` 把裁决与理由写进状态文件；**预检抛异常 → standalone + warning**，同样不许把网关带走。
 
 ★ mini 另有一条**真实版没有**的检查 **1b**：本进程 home 不是本机默认家 → 只服务自己（理由见 §九）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 **真实版六条预检，mini 三条** —— 两条不适用、一条自加，理由都写在代码注释里：
 
@@ -404,7 +404,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §四 Scope composition —— 作用域绑在「活动」上
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 每个入站事件，在**任何 profile 自己的代码跑起来之前**，先合成**三个**上下文局部作用域，回合结束再反序拆掉：
 
@@ -420,7 +420,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 **作用域绑在「profile 的活动」上，不是「回合」上** —— 这是本章最容易看漏的一句：它不仅包住 agent 回合，还包住**适配器的建 / 连 / 重连、入站预处理、slash 命令、通知、热重载、平台监听**。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 核心那个 contextmanager 的 docstring，把「三个作用域 + 为什么不改 `os.environ`」一并说清（逐字）：
 
@@ -436,11 +436,11 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害是两个词：**`contextvar`**（所以能穿过 `copy_context()` 抵达 agent 工作线程）与 **`without mutating os.environ`**（所以子进程永远不会继承到跨 profile 的凭据）。调用点铺得很开 —— **15 个文件、30+ 处**，从适配器建 / 连 / 重连、启动期、回合与后处理、入站预处理、每条 slash 命令、通知派发，一直铺到缓存淘汰 / 目标 / 热重载、HTTP 入口（完整清单见附录 A）。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `gateway/profile_scope.py:35` 的 `profile_runtime_scope()` 只做**两件**（home + 密钥），`finally` **反序**复位；docstring 已引真实版那句话解释「为什么不改 `os.environ`」。产品级调用点**4 处**：入站 `run_inbound.py:46`（**一律**套，含活动 profile）、回合 `run_turn.py:84`（按**这条消息的家**）、次级适配器的**建**与**连** `run_adapters.py:150/162`（`hydrate_secrets=False`）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 真实版 **30+ 调用点**（适配器 / 启动 / 入站 / 回合 / slash / 通知 / 热重载……），mini **4 处** —— 差额全部来自「mini 没有那个子系统」（通知 / 热重载 / 控制面 / 终端策略），不是漏套。
 
@@ -456,7 +456,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §五 密钥作用域：一份凭据该不该被另一个 profile 读到
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 多路复用的网关让**一个进程服务多个 profile**。这里最诱人也最危险的一步，是把某个 profile 的 `.env` 直接并进 `os.environ` —— 一旦这么做，**A 的密钥会泄漏进 B 的回合**，而且进程启动的**每一个子进程**都会继承它。真实版于是把「作用域」做成**上下文局部**的东西，而不是往进程环境里写：
 
@@ -467,7 +467,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 一句话因果：「用错别 profile 的凭据」是一种**静默故障，肉眼看不出来**；这套机制要的就是「要么读到正确的那份、要么响亮地炸」，**绝不允许悄悄回落到进程环境**。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 上面四条，真实版压在 `agent/secret_scope.py:143-171` 的一段 docstring 里（逐字）：
 
@@ -486,14 +486,14 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害在最后三行 —— *"must stay a `.env` overlay, not a blindfold"*：作用域是**叠加层、不是眼罩**，单 profile 部署靠 systemd / `op run` 把凭据注进进程环境，所以没作用域时**仍该读** `os.environ`（不读会害得 cron 401）。真正把关死的是 *"With no scope … ACTIVE raises (fail closed)"*：**多路复用开着又没有作用域 = 直接抛**，不给回落的机会。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `agent/secret_scope.py`（**135 行**）把骨架照抄了：`GLOBAL_ENV_EXACT`（**19 项精确名**，两族：进程身份 / shell 与解释器）＋ `GLOBAL_ENV_PREFIXES`（**0 个**）＋ `is_global_env()`；`get_secret` 是**四分支**（全局白名单 → 当前作用域 → 兜底 `os.environ`；多路复用下无作用域则抛 `UnscopedSecretError`）。两处刻意的取舍：
 
 - ★ **前缀 0 个是刻意的**（真实版有 3 个前缀，这里相反）：mini 的凭据就住在 `MINI_*`（`MINI_SEARCH_API_KEY`、`MINI_TAVILY_API_KEY`）—— **加一个 `MINI_` 前缀 = 把凭据放行**，这是这份名单最容易犯的错，代码注释里逐字写了理由（`API_SERVER_KEY is a credential: NOT here.` 的等价物：**凭据一律不进名单**）。
 - ★ **fail-closed 得真有消费者才算数**：`get_secret` 原先**没有产品级调用点**（凭据都直读 `os.environ`）；现在 `hermes_cli/runtime_provider.py` 与 `tools/web_search.py` 的凭据读取都走作用域，于是「多路复用下没有作用域」从理论变成**会当场炸的真路径**。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -509,7 +509,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §六 三处「相邻缝」：作用域权威还得管住的三处非回合边界
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 「作用域权威」这条规则不只管**回合**（一轮对话），还要管三处**不是回合**的边界 —— 它们平时不在视线里，一旦漏掉就是同一种病：凭据在进程里串了。三处的机制分别是：
 
@@ -519,7 +519,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 **为什么必须有 (a) 这道闸**：(b)/(c) 都建立在「读取经作用域」之上，可一旦别人的 `.env` 已经进了 `os.environ`，**任何直接读 `os.environ` 的代码（包括子进程）就绕过了作用域** —— fail-closed 管的是「读」，管不了「灌」。所以闸必须落在**加载器**这一层，而不是等读取时再拦。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 (a) 那条规则，真实版写在 `hermes_cli/env_loader.py:334-336` 的注释里（逐字）：
 
@@ -531,13 +531,13 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害是 **"expose its credentials to sibling turns and every spawned child"** —— 一句话点明「灌进 `os.environ`」为什么不只是当下这一轮的事：**兄弟回合和每个子进程都会看到它**。后半句 "Unscoped startup loads keep the normal path" 是边界：**只在有覆盖时跳**，普通的启动期加载照旧。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 - **(a) 已加闸**：`hermes_cli/runtime_provider.py` 的 `_multiplex_dotenv_boundary_active()` —— **多路复用开 且 有 profile-home 覆盖** → 跳过进程级 `.env` 加载（每个 home 只记一次跳过日志，防刷屏）；判据照抄真实版 `env_loader.py:340` 那一行 `is_multiplex_active() and get_hermes_home_override() is not None`。
 - **(b) 无消费者**：mini 没有 `${VAR}` / `${env:VAR}` 展开能力（全仓 grep 零命中）→ 这一缝在 mini 不存在。
 - **(c) 未取证的半件**：mini 的 `.env` 写入路径（`profile_cmd` / `runtime_provider`）**没核**它是否也写 `os.environ`。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 缝 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -551,7 +551,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §七 HERMES_HOME 覆盖：这一轮到底在哪个家干活
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 `hermes_constants.py` 里有一个**上下文局部的覆盖**（一个 `ContextVar`）：`get_hermes_home()` **先查它、再查 `HERMES_HOME`**、最后落平台默认。于是所有走它解析路径的东西（配置、`state.db`、技能、记忆、SOUL、会话、看板、插件发现、MCP 启动）都自动跟着当前 profile 走。用 contextvar 而不是改 `os.environ`，理由很直接：**`os.environ` 是进程里所有线程共享的**，改它等于把「现在是谁」变成一份全局状态，并发跑的两个回合会互相看到对方的 home。
 
@@ -562,7 +562,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 还有一条**一次性告警**：声明了 profile 却没设 `HERMES_HOME` 时会**静默落到默认 home**，这条路径发出一次警告。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 两条函数各自的 docstring 把「顺序」和「为什么用 contextvar」一次说清（逐字）：
 
@@ -579,11 +579,11 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害两句：`get_hermes_home()` 那句就是**解析顺序**（覆盖 → 环境变量 → 平台默认）；`set_hermes_home_override()` 那句 *"Deliberately does not mutate `os.environ` (shared by every thread in the process)"* 是**为什么非得 contextvar** —— 进程里所有线程共用 `os.environ`，改它就不是「这一轮的 home」而是「所有人的 home」了。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `hermes_constants.py:43-48` 的解析顺序 = 覆盖 → `MINI_HOME` → `~/.mini-hermes` ✅（与真实版同序）。**缺**三件：`hermes_home_key()` 的等价物（全仓只有一处**注释**提到它）、`get_process_hermes_home()` 的等价物、那条一次性告警。另有一处细节不同：**只有** env/默认分支会 `mkdir`，override 分支不建目录（`:43-45`）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -603,7 +603,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §八 共享 bot 路由表：一条消息该进哪个 profile
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 多路复用的前提是「**一条消息进来时得先判它是哪个 profile 的**」。真实版把这层判断放在一张**配置里的路由表**上，规则很朴素：
 
@@ -615,7 +615,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 最后那条为什么要命：Telegram 里**每个 bot 看到的私聊 `chat_id` 都是同一个 `user_id`**。没有 `bot_profile` 这层，一条原本写给「共享 bot」的 `chat_id` 规则，会把同一个用户**发给专属 bot 的私聊**也一并改判到别的 profile（上游 `#104933` 就是这么发现的）。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 模块 docstring 一句就把上面五条说全了（逐字）：
 
@@ -631,13 +631,13 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 打分与「合取」各落一处：`specificity = 2*公会 + 4*聊天 + 8*线程`（所以线程最重）；`matches()` 的**最后一行**是 `return not (guild_id and guild_id != guild)` —— 前面的 `chat_id` 分支**只提前返回 False、从不提前返回 True**，公会与聊天才是真 AND（这是回归修复，注释写着 *"previously chat_id was checked first and returned True before guild_id was ever consulted"*）。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 **还没有路由表**：现在「一个进程多个 bot 各走各的」靠的是**收它的那个 bot 自己的身份**（适配器的 `owner_profile`，§十一 的三段解析）—— 默认 bot 的消息归默认 profile，`lab` bot 的归 `lab`。这覆盖了「一个人一个 bot」，覆盖不了「**按聊天/线程把消息改判到别的 profile**」。
 
 > 📌 别被同名函数骗到：`SessionRouter.route()`（`gateway/session_state.py:95`）是**会话归属**（复用 / 软恢复 / 硬擦除后新建），跟「跨 profile 的消息路由」是两层东西。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -652,7 +652,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 ## §九 服务集合的单闸口：哪些 profile 被网关服务、由谁说了算
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 `profiles_to_serve(...)` 是「这个网关服务哪些 profile」的**唯一闸口** —— 它返回「默认 profile ＋ 每一个**有效**的具名 profile 目录」。这一个函数同时给**五个面**把关：**适配器启动**、**cron 心跳**、**`/p/<profile>/` HTTP 准入**、**路由资格**、**运行时状态面**。
 
@@ -660,7 +660,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 还有一条必须记住的边界：**枚举本身不许有副作用**（`#94590`）。「列一下服务谁」这个动作必须**纯粹是读目录** —— 否则它凭空造出一个目录，而**目录一存在，下一次枚举就会把它当活 profile**。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 函数 docstring 一句就说全了上面所有事（逐字）：
 
@@ -676,13 +676,13 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 要害是两个词：**single chokepoint**（判据只此一处，别在别的地方再写一遍「哪些该服务」），以及 **"never creates a profile dir"**（这个只读动作**不许有副作用**）。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `hermes_cli/profiles.py:235-249 profiles_to_serve(multiplex=False)` **已有**，docstring 也记了「默认永远排第一」的两条后果 —— **共享入口的平台只在默认 profile 上跑**，**在默认 profile 停网关会把所有被服务的 profile 一起停掉**。`list_profiles()`（`:196-200`）是裸 `iterdir()`。
 
 ★ 网关侧另加了一层**边界**（mini 自有，真实版没有对应物）：`gateway/run_adapters.py:63 servable_homes()` —— **home 不是本机默认家 → 只服务自己**，且只加 `profiles/` 下的具名 profile。理由具体：`profiles_root()` 是 **HOME 锚定**的（`Path.home()`，刻意不看 `MINI_HOME`），`MINI_HOME` 指到别处时照抄真实版那句 `profiles_to_serve(True)` 会**越界到用户真实的家**（实测踩过：测试进程替用户的 `default` ＋ `lab` 建了适配器）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -696,13 +696,13 @@ mini 额外要守的一条：`profiles_root()` 是 HOME 锚定，所以测试必
 
 ## §十 每个 profile 自己的库：句柄不许冻结在构造那一刻
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 `SessionStore` **不把数据库句柄冻结在构造那一刻**。句柄按解析出的 `state.db` 路径缓存，**每一次读取都经 `_db` 重新按当前 HERMES_HOME 覆盖解析**。配对（pairing）存储**按被服务的 profile 各造一个**。
 
 为什么不能冻结：多路复用的网关用**一个进程**服务所有 profile。句柄如果在 `__init__` 里绑死到进程自己的 root home，那么**每个 profile 的行都会落进 root 的 `state.db`**。更糟的是这**不报错** —— 行里仍带着正确的 `profile_name`，数据上看不出来，只是桌面端会把某个 profile 的会话列在默认 bot 底下（`#88532`）。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 （`gateway/session.py:789-800`，`#88532` 注释，逐字）：
 
@@ -714,7 +714,7 @@ mini 额外要守的一条：`profiles_root()` 是 HOME 锚定，所以测试必
 
 要害是 **never bound once**：句柄**只缓存、不冻结**，路径在**每次调用时**重解 —— 这就是 `#88532` 的整个修法。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 网关侧**已经**按 home 缓存句柄：
 
@@ -730,7 +730,7 @@ def _db_for(self, home: Path):
 
 docstring 写明它的目的：作用域绑好之后，「替次级 profile 干活」的代码不用自己传 home，于是**没法传错**。`hermes_state.SessionDB` 自己**构造时把路径固化**（`hermes_state.py:83-95`），在 mini 的结构里没问题 —— 因为 `_db_for` 每次**显式**传路径。**缺**两件：`_profile_home_for_key` 的「**只 memoize 命中**」（mini 没有 profile→home 的 miss 语义），以及配对存储的 profile 维度（mini 的配对白名单是全局一份）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -744,7 +744,7 @@ docstring 写明它的目的：作用域绑好之后，「替次级 profile 干�
 
 ## §十一 每条会话线：两个 bot 同处一个聊天为什么会互相顶掉
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 先讲清它防的那件事。一个进程多路复用时，**同一个人可以同时跟两个 bot 说话**。会话键如果只按「平台＋聊天」算，两个 bot 会算出**同一个键** —— 于是它们共用：
 
@@ -755,7 +755,7 @@ docstring 写明它的目的：作用域绑好之后，「替次级 profile 干�
 
 命名空间从哪来：适配器身上带一个 `_owner_profile`（**配置适配器时就装好，早于任何入站事件**），`_session_key_profile` 的解析顺序是 **① 来源盖章（`source.profile`）→ ② owner profile → ③ store 解析器**。批处理、活跃会话跟踪、忙会话守卫**全部按 lane 分键** —— 键不同，三条线才分得开。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 那段 docstring 把「为什么要有命名空间」一次讲透（逐字）：
 
@@ -770,11 +770,11 @@ docstring 写明它的目的：作用域绑好之后，「替次级 profile 干�
 
 要害是 **"so two profiles serving the same chat never collide"** —— 命名空间存在的**唯一理由**就是这一句；`main~` 那一段说的是**怎么保证不撞**（不靠约定、靠字母表）。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 mini 把「这条消息归哪个 bot」放在两处解析：`gateway/adapters/base.py:111 _session_key_profile()` 做**三段解析**（路由章 → bot owner → `None`），`gateway/adapters/base.py:131` 在**入站口盖章**（`handle_message` 的第一步，早于任何业务逻辑）。平台语法那一端是 `gateway/adapters/console.py:100 _maybe_feed_profile()` —— `@<profile> 文本` = 「这条消息是那个 bot 收到的」。两个 bot 同处一个聊天时，各自的 `@<profile>` 让它们算出**两个不同的键**，于是互不顶掉。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 - 真实版按 `(平台, 聊天, 线程, **接收它的 bot**)` 查**路由表**；mini **还没有路由表**（A7 没做），所以「哪个 bot 收到」由**平台语法**表达（console 的 `@<profile>`）—— **同一个判别项，不同入口**。
 - 两条必须守住的性质（都有断言 ＋ 反向验证）：**同聊天两个 bot = 两个键**（否则第 8 章的单槽覆盖会把另一个 bot 的消息顶掉）；**默认 profile 的键逐字节不变**（`main:…`，归一后仍是 `None`）。
@@ -783,7 +783,7 @@ mini 把「这条消息归哪个 bot」放在两处解析：`gateway/adapters/ba
 
 ## §十二 每 profile 适配器与 fail-soft 启动：哪些失败只该跳过、不该带走网关
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 多路复用的网关要为**每个被服务的 profile** 起适配器，失败处理分三档：
 
@@ -793,7 +793,7 @@ mini 把「这条消息归哪个 bot」放在两处解析：`gateway/adapters/ba
 
 为什么必须 fail-soft：适配器是**进程级共享资源**。某个平台凭据缺失、监听端口被别处占了，这些都**只影响那一个平台**；如果它们能中止整个启动，一个坏平台就会**连带**把其它所有 profile 一起拖死。反过来，`MultiplexConfigError` 是**配置本身错了**（例如两个 profile 抢同一个凭据/监听）—— 继续跑只会造出一个**行为不明**的网关，所以必须**上抛、中止**。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `_start_secondary_profile_adapters()` 的 docstring 一句话说清它的位置（逐字）：
 
@@ -805,11 +805,11 @@ mini 把「这条消息归哪个 bot」放在两处解析：`gateway/adapters/ba
 
 要害在 **"the only point seeing every profile's credentials together"**：凭据/监听的冲突**只有这里**看得全，所以「拒绝重复认领」只能落在这里；函数返回的是**连上的数量**（不是列表）。逐平台的跳过分支（无凭据 / relay-whatsapp 共享入口 / mirror 平台 / 适配器建不出 None / 重复认领 / connect 失败）都写在这一族函数里 —— 行号与日志原文全部见附录 A 追加。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.py:64`）与每 profile 的 `self._profile_adapters`（`gateway/run.py:82`）。活动适配器连接是 **fail-soft**（`gateway/run.py:250-256`：连不上只跳过 ＋ 说出来），随后 `self._start_secondary_profile_adapters()`（`gateway/run.py:259`）逐 profile 建连 —— `gateway/run_adapters.py:102` 逐个走「跳过活动/已建 → 建 → 连」，每个 profile 都**在自己的作用域里**连。`@<profile>` 的落点是 `gateway/run_adapters.py:193 profile_feed()`，未知 profile 返回 `False`（**调用方必须说出来**，不许静默丢）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 - **跳过要说出来**：mini 是 `_adapter_note()`（`[MULTIPLEX]` 前缀 ＋ `adapters_log()` 观测面），没有真实版那么细的 info/warning 分级 —— 差在**日志系统**的规模，**机制一致**。
 - **重复认领拒绝 / 占用端口的 shared-listener**：⬜ 没做（B8/B2，**基座缺失**：mini 适配器没有 token，也没有 HTTP 监听）。
@@ -819,7 +819,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 ## §十三 Control plane：桌面插件隔着 ws 够到网关的那扇门
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 桌面插件**没有别的门** —— 它只能通过 **ws JSON-RPC** 够到网关，于是 profile 的枚举与配置必须落在一层 RPC 方法上，住在 `tui_gateway/methods_profiles.py`。这一层一共**六个方法**（`list` / `create` / `describe` / `configure` / `set_asset` / `get_asset`，外加一个 `remember_onboarding`），每个方法自带方法级错误码（5061…5066 + 5067）。
 
@@ -830,7 +830,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 ★ 一处**诚实的不一致**：`_hermes_home_scope` 的调用点只有 **5 处**（`:294/:313/:327` create 的辅助、`:436` describe、`:574` configure 的 config 段）—— 这不是遗漏：`set_asset`/`get_asset`/`ui_meta`/`model` 直接读写 `profile_dir`（它们的目标本来就是"那个 profile 的目录"，不依赖 config 解析）。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 资产那几行的纪律（逐字）：
 
@@ -845,11 +845,11 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 要害是那行注释 **"format is sniffed, the declared mime is never trusted"** —— 上传者给的 mime 会撒谎、扩展名也会撒谎，所以**只认魔数**；三行连起来就是资产写入的全部顺序：**先验真、再限量、最后原子落盘**。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 **还没有控制面**：mini 的命令面是 argparse 子命令（`gateway run|status|stop|hooks` + `profile create|list|show`），**没有 ws/HTTP 服务、没有方法表、也没有"资产"这个概念**。profile 的枚举与配置走 CLI 参数与本机目录扫描，不经任何 RPC。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 差的不是几个方法，是**整扇门**：真实版这条链是"桌面 → ws → 网关"，mini 没有桌面插件这扇门（基座不存在）；它也没有"资产（头像）"这类二进制写入（概念不存在）。`tui_gateway/` 那层 **686 行**的 RPC 层，对一个没有 RPC 消费者的 CLI 是**净负担**（B7）。
 
@@ -859,7 +859,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 ## §十四 Failure modes：一个「坏东西」的四条出路（降级 / 丢弃 / 跳过 / 中止）
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 四种"坏"对应**四种处置，不能互换**（表见 §0.5）。把这四条出路摊开看，判据其实是同一条线：**它坏在哪、坏得多彻底** ——
 
@@ -876,7 +876,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 - **降级不是"拒绝"**：`run_adapters.py:1139` 给二级的占端口适配器打 `adapter._shared_listener_profile = profile_name`（**不 bind**）；只有两个 MIRROR 平台被直接**跳过**（`:551`）。
 - **跳过只罚坏的、不带连坐**：热重载时 `run_profile_reconcile.py:125-129` 捕到 `MultiplexConfigError` 只落一条 `[MULTIPLEX] Profile '%s' not served: %s` 的 error 日志，别的 profile 照常服务。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 "拒绝 → 丢弃"是一条**跨文件的消费链** —— 抛点、翻译点、消费点各在一处（**代码行逐字**，行尾中文是位置摘要）：
 
@@ -892,14 +892,14 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 要害在 `platforms/base.py` 那条注释：**这个拒绝标记在"授权之前"就被消费掉**。抛点有两处（密钥一处、路由一处），消费点也有两处：`run_inbound.py` 见到标记就 **warning + return None（丢弃）**；`run_adapters.py` 的 `_stamp_routed_profile` 捕到则 **return False（不丢弃，交给上层）**。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `authz.py` 的四层默认拒绝（第 7 章）**不覆盖**这些。**mini 的处置与真实版不同，而且是刻意的**：
 
 - **没有 `MultiplexConfigError` 等价物**：真实版"配置错 → 启动中止"，mini 是**降级为 standalone 继续起**（`gateway/multiplex_mode.py:132 implicit_multiplex_blocker()` 的预检 + `:222-260` 的裁决落盘）—— 判据：mini 的配置来源是 env 与目录扫描，**没有"把 fleet 折进一个进程"那种需要中止的配置错**，能降级就不该让网关起不来。
 - **"拒绝 → 丢弃"这条链还没有**（因为还没有路由表，A7 没做）—— 现在只有"**未知 profile 而被丢弃**"这一种：console 的 `@<profile>` 命中不到适配器时**明说被丢弃**（`adapters/console.py:100`），绝不静默吞掉。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -914,7 +914,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 ## §十五 Known limitations：还没 profile 化的进程级状态
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 有些状态天生是**进程级**的，不按 profile 分家 —— 文档列了五行（MCP 发现 / `TERMINAL_*` / 内置工具注册表 / provider·能力注册表 / HTTP 监听·relay·进程锁）。它们的共同危险是：**一个进程服务多个 profile 时，先到的那个 profile 会把这格状态占为己有**，后面的 profile 看到的是别人的东西 —— 而且**不报错**。
 
@@ -922,7 +922,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 **另一处**（文档没写、但属于同一族）：`serves_routed_profile()` 的 docstring 逐字说 **MCP 注册表作用域与 `check_fn` 缓存键都跟随这个判据**（*"so a served profile's view never aliases the launch profile's (#111151)"*）—— 这两处的"按 profile 分家"是**显式对齐**过的。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 "每 profile 一次发现"就写在这段注释里（逐字）：
 
@@ -939,7 +939,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 要害是 **`hermes_home_key()`**：它跟着 context-local 的 HERMES_HOME 覆盖走，所以"分桶的键"表达的是**当前正在替谁干活**，而不是进程启动时的那个 home。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 这五格在 mini 的现状（对照真实版）：
 
@@ -959,7 +959,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 - **`check_fn` 缓存**：真实版按 `hermes_home_key()` 分键；mini **不分键** —— 这才是真隐患（见 ④）。
 - **监听 / relay / 进程锁**：真实版一进程一份；mini 的**进程锁已经按 home 分**（用 PID 指纹判活），这一格是齐的。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 唯一的真问题是 **`check_fn` 缓存不分键**。它现在没爆，是因为 mini 的 `check_fn` 只查"这台机器有没有 `bash`/`grep`"这类**与 profile 无关**的事实。但 mini 第 4 章已经给了 `check_fn` 一个**带 state 的形态**（TTL + 抖动保护 + 失败宽限）—— 一旦将来出现"按 profile 变化的可用性"（比如"这个 profile 配了搜索 key"），**A 的结论会被 B 复用**。所以这一格迟早要跟 `hermes_home_key()` 对齐（A10，`hermes_home_key` 进缓存键，~10 行）。
 
@@ -967,7 +967,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 ## §十六 Non-goals：这条边界管的是 profile，不是人
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 这一节不是机制，是**边界声明**。三句话划清：
 
@@ -977,7 +977,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 一句话：**"多路复用让两个 profile 不串味" ≠ "同一 profile 里两个用户不串味"** —— 前者归这一章，后者归授权层。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 Hermes 把"谁能不能进"这件事**放在了多路复用之外的授权层**：
 
@@ -986,11 +986,11 @@ Hermes 把"谁能不能进"这件事**放在了多路复用之外的授权层**�
 
 也就是说：多路复用只负责"这条事件归哪个 profile"，"谁是终端用户、能不能进"一律由授权层判。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 mini 的授权是**四层默认拒绝**（第 7 章）＋**单一**配对白名单，落在 `gateway/authz.py` —— 形状与真实版的四层 `authz_mixin` 对齐，少的只是"每 profile 一份 `PairingStore`"这一层（mini 只有一份）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 两边其实都**把授权放在多路复用之外**（Hermes 在 `authz_mixin` + `PairingStore`，mini 在 `authz.py`），差别只在粒度。要记住的不是"谁多一层"，而是**别把安全责任放错层**：`authz_mixin.py` / `pairing.py` / `authz.py` 管的是"人和权限"，多路复用管的是"事件归哪个 profile"。mini 的授权线在第 7 章已定性，**本章不动**，这里只把这条边界的判断留在文档里。
 

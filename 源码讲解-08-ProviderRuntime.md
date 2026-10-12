@@ -203,7 +203,7 @@
 
 ## §一 两段式解析
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 解析这件事被拆成两段，各答一个不同的问题。
 
@@ -217,7 +217,7 @@
 
 最后是 **`source`** 这一栏：它把「这次的结果是怎么来的」（显式 / config / env / auto）**落成数据**，而不是只留在日志里。这和前面几章反复出现的同一取向一致——**把裁决理由落成数据，让「为什么用了这个端点」变成可回答的**。名字层产出的名字自带 `.source`，门面把它原样带进 dict。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `hermes_cli/runtime_provider.py:410-419`（真实侧，锚 `f5d1926110`）：
 
@@ -236,7 +236,7 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 
 要害有两处：**返回值是一个字符串**（不是 dict）——这就是「名字段」的全部产物；以及 docstring 里那句 *Config beats the env… not a stale shell/.env override* ——「config 压 env」是**写进注释的判据**，不是实现细节。第三层读 env 用的是 `get_secret_str` 而非裸 `os.environ`，这一点在 §四 展开。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 **✅ 已抄（756b493）**。`mini-hermes/hermes_cli/runtime_provider.py`（441 行）就是这一道形状：
 
@@ -260,7 +260,7 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 
 顺序与真实版逐字一致：config 压 env。`MINI_INFERENCE_PROVIDER` 用 `os.environ` 直读是**刻意的**——它是行为设置不是凭据（凭据一律走 `get_secret`，见 §四）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -273,7 +273,7 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 
 ## §二 注册表与插件式懒注册
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 这一层解决的是「供应商数据住在哪、谁来改」的问题。答案是：**每个供应商一份声明式画像（`ProviderProfile`），注册表是唯一事实源**。
 
@@ -285,7 +285,7 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 
 最后一句别记错：**`providers/` 包只是「取用口」，不是「数据库」**——它就是个很薄的小包（注册表接口 + `ProviderProfile`），真正的供应商数据住在各家自己的插件目录里。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `providers/__init__.py:14-27`（真实侧）：
 
@@ -303,7 +303,7 @@ Each plugin directory contains:
 
 这段注释一句话讲清三件事：**懒发现**（首次 lookup 才扫两处）、**last-writer-wins**（用户插件覆盖内建，第三方不改仓库就能顶）、**插件目录的形状**（`__init__.py` 里注册 + `plugin.yaml` 清单）。放在 `providers/__init__.py` 顶部而不是某个函数里，因为这是整个包的对外契约。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 **✅ 已抄（756b493）**。`mini-hermes/providers/` 是个 9 文件、共 723 行的包：
 
@@ -327,7 +327,7 @@ for profile in list_providers():
 
 注册 3 家画像 → 任何 `register_provider()` 进来的新画像**自动出现**在这个视图里，就是「唯一事实源」的可见证据。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -341,7 +341,7 @@ for profile in list_providers():
 
 ## §三 `api_mode` 三值与按 host 判定
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 `api_mode` 是「这一家用哪种 API 形状说话」，三个取值：**`chat_completions`**（OpenAI 兼容，最常见，也是默认兜底）、**`anthropic_messages`**（Anthropic 原生 Messages）、**`codex_responses`**（OpenAI Responses）。
 
@@ -361,7 +361,7 @@ for profile in list_providers():
 
 mini 里还有一层：`VALID_API_MODES`（认识的协议）与 `IMPLEMENTED_API_MODES`（真跑得起来的协议）**是两回事**。选中的模式**没实现**时怎么报错，本身就是设计的一部分——见下。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `hermes_cli/runtime_provider.py:88-92`（真实侧）：
 
@@ -377,7 +377,7 @@ _HOST_MANDATED_API_MODES = {
 
 要害：这是一张**按 hostname 强制协议**的小表，注释同时点明它**镜像**了 `providers.py::host_mandated_api_mode`——「判据只有一份，两处必须同步」。表里每个 entry 都是「这个主机只讲这一种协议」，是 §① 判据的第 ① 步。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 **✅ 已抄（756b493）**。`mini-hermes/providers/api_mode.py`（170 行）把整条判据搬了过来：
 
@@ -397,7 +397,7 @@ require_implemented_api_mode(self.api_mode)
 
 `require_implemented_api_mode()`（`:56`）对未实现模式抛 **`UnsupportedApiMode`**（`RuntimeError` 子类，`:49`），报错里写清「mini 认识哪几种、只实现了哪种、要动哪个文件（`run_agent.py::_build_api_messages`）」。以前这里是裸抛 `NotImplementedError`（只有一行「需要格式转换层」），现在把**指引**写进错误里——「跑到发请求才炸、炸得没头没脑」换成了「能照着修的报错」。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -410,7 +410,7 @@ require_implemented_api_mode(self.api_mode)
 
 ## §四 凭据的 host 门控
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 同时存在多把钥匙时（`OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_API_KEY`），要防一件很具体的事：**别把错的 key 发给错的端点**——那就是凭据泄漏。上游为此出过一个安全公告（**GHSA-76xc-57q6-vm5m**）。
 
@@ -420,7 +420,7 @@ require_implemented_api_mode(self.api_mode)
 
 最后一块拼图是**读 key 的通道**：凭据一律走 **scope-aware 的 `get_secret_str`**（来自 `agent.secret_scope`），**不裸读 `os.environ`**。原因与多 profile 有关——`.env` 里的 key **不能**被并进 `os.environ`（否则 profile A 的 key 会漏给 profile B）。作用域解析的语义是：能命中就命中；命中不了返回默认值，**绝不回落去读别人的 environ**；处在多路复用下且没有作用域时，直接**抛错（fail-closed）**。于是「A 的回合拿不到 B 的 key」是被结构保证的，不是靠自觉。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `hermes_cli/runtime_provider.py:317-326`（真实侧）：
 
@@ -439,7 +439,7 @@ def _host_gated_env_key_candidates(base_url: str, *, ollama: bool) -> list:
 
 要害两点：docstring 里那句 *match on HOST, not substring*（判据的**口径**）+ 附上的安全理由 *leaks credentials (GHSA-76xc-57q6-vm5m)*，这是把「为什么这么写」钉在代码里的写法。第二点：每把 key 都包在 `if <host 命中> else ""` 里——**空串代表「这把 key 不该发给这个端点」**，调用方用 `next(非空)` 取第一把，于是「门控」和「优先级」用同一个候选列表就表达完了。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 **✅ 已抄（756b493）；凭据走 scope-aware 已对齐（7.2 章 A6）**。`mini-hermes/providers/host_gate.py`（121 行）：
 
@@ -458,7 +458,7 @@ return bool(hostname and dom) and (hostname == dom or hostname.endswith("." + do
 
 比 `domain in base_url` 安全——后者会让 `evil.com/moonshot.ai` / `moonshot.ai.evil` 蒙混过关。消费者在连接层：`_resolve_api_key()`（`runtime_provider.py:307`）把候选拼成「显式 key → **端点没被换时才用**的声明 key（`:322`）→ host 门控候选」，那个 `if not explicit_base_url` 的守卫正是 A5 的安全语义——把已声明密钥发到被 `--base-url` 换成的陌生域名，就是泄漏。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -471,7 +471,7 @@ return bool(hostname and dom) and (hostname == dom or hostname.endswith("." + do
 
 ## §五 自定义端点的两条路
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 一个「自己接」的端点有两种身份，对应两条进入解析链的路，**都先于通用路径**被评估。
 
@@ -481,7 +481,7 @@ return bool(hostname and dom) and (hostname == dom or hostname.endswith("." + do
 
 两条路的共同点：端点信息（`base_url`）先于凭据被定下来，凭据候选里复用 §四 的 host 门控（`key_candidates_for`）。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `hermes_cli/runtime_provider_custom.py:163-179`（真实侧）：
 
@@ -503,7 +503,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 要害：**新式 `providers:` 先查，命中即返回；查不到才回落 legacy `custom_providers:`**（`:169-179`）——两种配置写法都活着，且新式优先。开头的 `_shadowed_by_builtin` 守卫保证具名自定义端点**不遮蔽**同名内建供应商。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 - 具名自定义端点（读 `providers:` / legacy `custom_providers:`）—— **⬜ 没做（量级）**：`mini-hermes` 的 `hermes_cli/config.py`（247 行）只读 `model` / `fallback_providers` / `auxiliary` 三处，**没有** `providers:` 字典的读取（`providers.py` 也没有 `resolve_user_provider` 那样的入口）。
 - 裸 custom 的**本地端点绕过** —— **⬜ 没做（量级）**：`providers/aliases.py:28` 把 `ollama/vllm/llamacpp…` 归一到 `custom`，但注册表里**没有** `custom` 画像，于是连接层报「未知 provider」，不假装支持。
@@ -518,7 +518,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 实测：`get_provider_profile("custom")` 返回 `None`，`normalize_provider("ollama")` 返回 `"custom"` —— 别名归一存在，但落地的画像不在，所以这条路径止于报错。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -531,7 +531,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 ## §六 辅助模型的独立路由
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 **辅助任务**（auxiliary task）指那些"不干主对话、但也要调模型"的活：看图（视觉）、网页抓取后的摘要、**上下文压缩的摘要**、技能中心（skills hub）操作、MCP 辅助操作、记忆刷写。它们是独立的一类调用，不是主对话的一个回合。
 
@@ -546,7 +546,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 但注意：辅助路由**不另开一套解析** —— 它与回退链共用同一个 provider 路由器（见 §九）。这一点决定了"辅助任务能用另一个 provider"不意味着"认证/端点/协议各写一遍"。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `agent/auxiliary_client.py:546`（`_normalize_aux_provider` 的 `"main"` 支路）：
 
@@ -562,7 +562,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 要害在这七行：`main` 不是"再选一次模型"，而是**查主 agent 是谁**；查不到时给一个始终存在的通用画像 `custom`，而不是凭空造一个名字。最后一行把归一交回别名表（§八），保证 `main` 与普通名字走同一条归一。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `agent/auxiliary.py` **147 行**。mini 目前只接了**一个**消费者：上下文压缩的摘要调用（`TASK_COMPRESSION`，`auxiliary.py:48`；调用点 `run_agent._summary_llm`，`run_agent.py:1082`）。三件事各有落点：
 
@@ -583,7 +583,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 （`auxiliary.py:118-123`。测试 `test_auto_inherits_main_runtime_exactly` 逐字段盯着这条不变量。）一处**刻意差别**：主 provider 为空时 mini 退化为 `"auto"`（`auxiliary.py:89-90`），不是真实版的 `"custom"` —— mini 的注册表里**没有** custom 画像，返回 `"custom"` 只会在连接层变成"未知 provider"报错；退化到 `auto` 保留了同一语义（"解析不出主 provider 时，不乱造一个新 provider"）。消费者侧 `_summary_llm`（`run_agent.py:1094-1099`）用解析出的运行时**一次性**发一次请求，**不走回退链**。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -596,7 +596,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 ## §七 回退链
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 **回退链**（fallback chain）是一串 `(provider, model)` 条目：主模型出错时**按顺序**尝试。它的状态是**三件套**：`_fallback_chain`（链）、`_fallback_index`（索引）、`_fallback_activated`（一次性 latch）。
 
@@ -620,7 +620,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 - **子代理默认继承父链**。`_resolve_child_fallback_chain`（`tools/delegate_tool_config.py:417`）的判据是：pinned 子代理（覆盖了 provider / 端点 / model）**不借**父链；**未 pinned 的子代理默认继承**父链（`fallback_providers` 缺省 / null 时）；只有**显式** `fallback_providers: []` 才把回退断掉。所以"不支持回退"的子代理 = **pinned 或显式 `[]` 的**，不是"所有子代理"。
 - **辅助任务也有自己的回退**，只是发生位置不同 —— 它在**解析期**串行试链（见 §六①），不走 `_try_activate_fallback`，所以"没走主机制"被误读成了"没有回退"。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `tools/delegate_tool_config.py:417`（`_resolve_child_fallback_chain`，这段注释逐字否掉了文档的说法）：
 
@@ -642,7 +642,7 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg, pinned):
 
 要害：第一句注释就写明"**未 pinned 的子代理继承它**"，断链要**显式** `[]`。"子代理不支持回退"这个说法的正确版本是"**pinned 或显式 `[]` 的子代理**不支持回退"。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `agent/fallback.py` **269 行**。判据二元且**只存一份**：`FALLBACK_STATUS`（`fallback.py:51`）与 `NON_FALLBACK_STATUS`（`fallback.py:57`），后者旁边逐条注明 `400` / `404` / `422` **为什么**不可回退。状态按真实版的形状**直接挂在 agent 实例**上（`_fallback_chain` / `_fallback_index` / `_fallback_activated`），观察面因此是**可断言的普通属性**：
 
@@ -663,7 +663,7 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg, pinned):
 - **接线点只有一处**：`_post_chat_completions` 的失败分支（`run_agent.py:789-797`），判据是 `is_fallbackable_status(exc.code)` —— 真才换并**重发**，假就**直接抛**；
 - **凭据隔离**：`resolve_entry_api_key`（`config.py:198`）逐条自解析自己的 key，作为 `explicit_api_key` 传给共享路由器 `resolve_provider`（`fallback.py:230`）。mini **没有**凭据池，所以"清主 pool"这一步**结构上不存在**（不是漏做）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -677,7 +677,7 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg, pinned):
 
 ## §八 配置层与别名归一
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 **配置**是用户在 config 里存下的意图；**解析**是运行时把它变成要 POST 的 URL/key。两者必须分开：前者是数据（一份、可去重、可校验），后者是行为（可被显式参数 / 环境变量覆盖）。配置层这一节管三个键族：
 
@@ -693,7 +693,7 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg, pinned):
 
 ★ **为什么 config 必须压 env**：一个陈旧的 `export HERMES_INFERENCE_PROVIDER=…`（上一次 shell 里留下的）**不该**悄悄盖掉用户刚在 `hermes model` 里选好、存进 config 的端点。原文逐字：*"Config beats the env so chat uses the endpoint the user last saved, not a stale shell/.env override."*
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `hermes_cli/fallback_config.py:89`（`get_fallback_chain` 的 docstring）：
 
@@ -710,7 +710,7 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 要害：一段注释把四条规则一次说清 —— **主源**、**保序**、legacy **追加**、按**三元组**去重；末句 "fresh dict copies" 保证调用方**改不动**配置本体。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 `hermes_cli/config.py` **247 行**。**键定义集中一处**（`KEY_*` 常量），别处不许再拼字符串。回退链的读法在这里：
 
@@ -728,7 +728,7 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 **别名归一**在 `providers/aliases.py`（**63 行**）。**config 压 env** 落在两处：名字层 `resolve_requested_provider`（`runtime_provider.py:255`）先 config 后 env；连接层的 model 一栏（`runtime_provider.py:390-394`）是 显式 → config → `MINI_MODEL` → 画像默认 —— 与名字层同一条顺序。坏配置**永不抛**（`config.py:96`：非 dict / 坏 JSON 按 `{}` 处理）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -741,7 +741,7 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 ## §九 为什么这层必须共享
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 同一份解析要服务**多个入口**：CLI（`hermes chat`）、TUI、网关（消息平台）、cron（在全新会话里跑）、ACP 编辑器会话，以及**辅助模型调用**。这几个入口的**触发时机、进程模型、有没有人坐在前面**都不一样，但"用哪个模型"的答案**必须一致** —— 不能出现"CLI 用的是 A 端点、网关用的是 B 端点、cron 又悄悄回落到 C"这种局面。所以解析逻辑被抽成**一层共享运行时**，而不是各入口各写一遍。
 
@@ -749,7 +749,7 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 再往前一层：辅助任务与**回退链**都从**同一个** provider 路由器过（注释称它 "centralized provider router"）。好处具体是三条：认证 / `base_url` / headers / `api_mode` 只在一处映射，**不重复 provider→key 映射**；走 scope-aware 的 `get_secret`（多 profile 下不会串味）；MoA / anthropic-wire / Codex 适配只维护一处。**不共享的代价是可预见的漂移**：有的入口记得 host 门控、有的忘了，凭据就可能发错端点 —— 这类 bug 没有症状，只有一个泄漏面。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `agent/auxiliary_client.py:4411`（"centralized provider router" 那段注释）：
 
@@ -760,7 +760,7 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 要害：两句把"唯一入口"和"别 ad-hoc 读 auth env"写在同一处 —— 共享这件事**不是性能优化，是防泄漏的前提**；一旦允许各自读 env，§六的辅助路由与 §七的回退链就都会各拿一份可能不对的凭据。
 
-### ③ mini 的实现（现状）
+**③ mini 的实现（现状）**
 
 mini 的共享接缝在**连接层** `resolve_provider`（`hermes_cli/runtime_provider.py:344`）—— 生产入口都调它这一处：CLI（`cli.py:85`）、网关（`gateway/run.py:133`）、doctor（`doctor.py:76`）、**辅助路由**（`agent/auxiliary.py:130`）、**回退链**（`agent/fallback.py:230`）。回退链正是从它过的：
 
@@ -776,7 +776,7 @@ mini 的共享接缝在**连接层** `resolve_provider`（`hermes_cli/runtime_pr
 
 mini **没做**运行中 `/model` 切换：模型选择是**启动参数**（`--provider` / `--model`）+ config，**没有运行中切换的消费者** —— CLI 只在构造 `AIAgent` 时解析一次，网关没有 `/model` 斜杠命令。一个没有调用者的 `switch_model()` 纯函数在 mini 里就是一句空承诺（`run_agent.py:14` 那处"承诺了却跑不起来"的教训）。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -788,7 +788,7 @@ mini **没做**运行中 `/model` 切换：模型选择是**启动参数**（`--
 
 ## §十 真问题与收据
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 这一节不是新机制，而是把真实版那几个"不做就会坏"的硬理由摆出来 —— mini 实现时踩到的坑基本都能追到它们：
 
@@ -796,7 +796,7 @@ mini **没做**运行中 `/model` 切换：模型选择是**启动参数**（`--
 - **连接缓存**：换 provider 要清 `_transport_cache` —— 复用连接会把**旧 host** 的句柄带过去。
 - **每轮复位**：临时兜底不能变永久降级（否则只在账单和延迟里看得出来）。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `agent/chat_completion_helpers.py:1770`（`_rebind_fallback_credential_pool` 的 docstring）：
 
@@ -808,7 +808,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 
 要害：把"不重绑"的后果压成一句话 —— 恢复路径会**改错凭据并覆盖回退端点**。这类 bug 没有症状，只有错账，所以它值得一条**注释加一条测试**一起守。
 
-### ③ mini 的实现（现状）+ 真跑收据
+**③ mini 的实现（现状）+ 真跑收据**
 
 **实现时炸过 / 发现的真问题**：
 
@@ -823,7 +823,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 - **host 门控实跑**：`key_candidates_for(base_url)` 对 `https://api.openai.com/v1` / `https://openrouter.ai/api/v1` / `https://api.deepseek.com/v1` 各自**只给该域名**的候选（deepseek 端点经 host 反推拿到 `DEEPSEEK_API_KEY`）。
 - **别名归一实跑**：`claude→anthropic`、`codex→openai-codex`、`deep-seek→deepseek`、`ollama→custom`、`whatever→whatever`。
 
-### ④ 与真实版的差别
+**④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -951,19 +951,19 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 
 正文按原文照译，这里给事实。三条都**不影响主结论** —— 文档的机制描述是对的，只是三处措辞比源码松。
 
-### ① 「子代理与辅助任务不继承回退链」—— 源码是"**未 pinned 就继承**"
+**① 「子代理与辅助任务不继承回退链」—— 源码是"**未 pinned 就继承**"**
 
 - **文档怎么说**：回退链不适用于子代理与辅助任务。
 - **源码怎么算**：`tools/delegate_tool_config.py:417-426 _resolve_child_fallback_chain()` 的 docstring 逐字（附录 A 有全文）：pinned 子代理（自己覆盖了 provider / 端点 / model）**不借**父链；**未 pinned 默认继承**；显式 `[]` 断链。辅助任务不是"没有回退"，而是走**解析期**它自己那条链，不走主 agent 的运行时机制。
 - **对学习者意味着什么**：判据是"**这条链归谁管**"——归同一配置块（route 的所有者）管，不是"子代理一律没有"。调 `delegation.*` 时按 pinned 与否理解。
 
-### ② 「三处触发点」—— 实测 **6 个模块 / 11 处调用点**
+**② 「三处触发点」—— 实测 **6 个模块 / 11 处调用点****
 
 - **文档怎么说**：`_try_activate_fallback()` "is called from three places in the turn phases"（`turn_api_error.py` / `turn_response_check.py` / `turn_recovery.py`）。
 - **源码怎么算**：这三处之外还有 `agent/turn_api_call.py:258`、`agent/turn_empty_response.py:271`、`agent/turn_truncation.py:213` 与 `:600`；`turn_api_error.py` 自己就有 `:330` 与 `:359`。上游把"至少 5 处"写成了断言：`tests/agent/test_prompt_cache_ttl_propagation.py:256` —— `assert seen >= 5, "expected the retry-loop _try_activate_fallback sites"`。
 - **对学习者意味着什么**：文档那三条是**按原因归纳的三类**，不是调用点清单。要改回退行为时**按原因找判据，别按位置数调用点** —— 这正是 mini 把判据收敛到 `agent/fallback.py` 一处的理由。
 
-### ③ 「`OPENAI_API_KEY` 用于自定义端点，并作为兜底」—— 源码比这句话严格
+**③ 「`OPENAI_API_KEY` 用于自定义端点，并作为兜底」—— 源码比这句话严格**
 
 - **文档怎么说**：三把 key 里 `OPENAI_API_KEY` 兼作"自定义端点/兜底"。
 - **源码怎么算**：`runtime_provider.py:317-326 _host_gated_env_key_candidates()` 把三把 key **都只挂自己的权威域名**，其余给空串；自定义端点走 `_host_derived_api_key()`（从 host 反推 `<VENDOR>_API_KEY`）。docstring 附安全理由：*"Sending OPENAI/OPENROUTER/OLLAMA keys to an unrelated endpoint leaks credentials (GHSA-76xc-57q6-vm5m); match on HOST, not substring."*

@@ -164,7 +164,7 @@
 
 ## §一 路由状态机：这条消息该用哪个会话
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 `SessionStore.get_or_create_session()` 是**唯一**的决策点。它按**固定优先级**回答一个问题：
 
@@ -180,7 +180,7 @@
 **没有第 7 条。** 没有"空闲太久就开新的"、没有"每天换一个"、没有"消息数超了就换" ——
 这是本章最重要的一条不变量（§二）。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/session.py`（`get_or_create_session` 的决策段）：
 
@@ -196,7 +196,7 @@
 同一个 `session_key` 的并发调用会共享同一个 owner 的结果（"一段会话只能被创建一次"），
 而且**全部阻塞 IO 都在锁外**。文档那张状态图只是它的**逻辑内核**。
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 `gateway/session_state.py::SessionRouter.route()` —— 逐条对齐上面那六个出口：
 
@@ -234,7 +234,7 @@
 内存副本必然会漂。mini 的 `self._session_ids` 现在只是**观察面**（`/sessions` 与测试看），
 不再是权威。
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 - **单飞没抄**（差异表 #2）：mini 是线程模型，同一会话的并发已经被第 1 级守卫挡住
   （一把锁 + 忙时排队），所以"并发创建同一会话"这种情况在 mini 里**构造不出来**。
@@ -248,7 +248,7 @@
 
 ## §二 显式边界：时间永不轮转
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 每次"会话换了"，都必须能指出**是谁要求的**：
 
@@ -263,7 +263,7 @@
 真实版有一条专门的不变量注释在 `session.py`（`SessionResetPolicy` 那类东西）里，
 把"时间"从轮转的判据里排除出去。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/session.py:1099-1107`（自动重置那一段，**不是**用户主动 `/new`）：
 
@@ -278,7 +278,7 @@
 （`run.py:3971` 那条注释就在维护一份 reason 词表：
 `# Reasons set by _stop_impl() on force-interrupt; "restart_interrupted" by suspend_recently_active()`）。
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 mini 把这条不变量落成**三件东西**（光写文档不算数）：
 
@@ -300,7 +300,7 @@ mini 把这条不变量落成**三件东西**（光写文档不算数）：
 （一次优雅关闭之后，网关知道的**所有**会话都变成"刚刚活跃"，下次脏启动会把它们全标成待恢复）。
 现在关闭路径**不 touch**，并有断言守着：`（前提）关闭没有把 updated_at 刷新成"刚刚活动"`。
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 mini 一开始就**没有**时间轮转（第 7 章的 `_open_session` 只做"按键找回"），
 所以这一节的改动不是"抄一个机制"，而是**把一条隐式性质变成显式不变量**：
@@ -311,7 +311,7 @@ mini 一开始就**没有**时间轮转（第 7 章的 `_open_session` 只做"�
 
 ## §三 硬擦除 vs 软擦除：优先级与"不许覆盖"
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 两个标志位，语义完全不同：
 
@@ -320,7 +320,7 @@ mini 一开始就**没有**时间轮转（第 7 章的 `_open_session` 只做"�
 | `suspended`（硬） | 卡死循环升级（文档还说 `/stop`，实测不成立） | **换新会话**，旧会话 `end_reason="suspended"` | **不能被软标记撤回** |
 | `resume_pending`（软） | 崩溃恢复 / drain 超时 | **复用同一个会话**，标记留到这一轮跑完 | 不许覆盖硬擦除 |
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/session_lifecycle.py`（`mark_resume_pending` 的 docstring 逐字）：
 
@@ -338,7 +338,7 @@ Will NOT override `suspended=True`
 因为 mini 的调用方（`run_startup`）要用它去 `bump_stuck_loop_counts`。这算一处**小差异**，
 理由写在 §四 ④。）
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 ```python
     def mark_resume_pending(self, session_id: str, reason: str) -> None:
@@ -383,7 +383,7 @@ Will NOT override `suspended=True`
                 gw_status.clear_one_stuck_loop_count(self.home, key)
 ```
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 - **`was_auto_reset` / `auto_reset_reason` / `reset_had_activity` 三个字段没抄**（差异表 #8）：
   它们的消费者是"重置后重注入话题/技能"和"客户端附件重发"。mini 没有话题、没有技能注入、
@@ -399,7 +399,7 @@ Will NOT override `suspended=True`
 
 ## §四 重启恢复：四个动作的顺序
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 ```text
 网关启动
@@ -414,7 +414,7 @@ Will NOT override `suspended=True`
 ★ 顺序不能换：① 决定"要不要做"，② 决定"谁需要"，③ 决定"谁已经病态"，④ 才动手。
 把 ④ 放在 ③ 前面，就会先把一个**病态会话**接着跑起来，然后才挂起它 —— 白跑一轮。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/run_shutdown.py:1889`（写标记）与 `:1892`（**不打标记**的那条路）：
 
@@ -449,7 +449,7 @@ Will NOT override `suspended=True`
                 continue
 ```
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 `gateway/run_startup.py::_recover_sessions()` —— 四步，每步都写进**收据**：
 
@@ -487,7 +487,7 @@ Will NOT override `suspended=True`
   恢复     ⚠️ 1 个会话跨 3+ 次重启仍活跃 → 已挂起（下次访问换新会话）：main:console:dm:console-1
 ```
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 **第 ④ 步 mini 有意做得不一样**，原因写进了模块 docstring：
 
@@ -507,7 +507,7 @@ Will NOT override `suspended=True`
 
 ## §五 卡死循环：恢复机制必须有自己的退出条件
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 崩溃恢复有一个**致命循环**：
 
@@ -524,7 +524,7 @@ Will NOT override `suspended=True`
    会话正常跑完一轮 → 清掉它自己那条（不是只加不减）
 ```
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/run.py:3968-3971`（**逐字**，连注释一起）：
 
@@ -554,7 +554,7 @@ or None when the file is missing/unreadable (no exists() pre-check needed)
 ★ 这是"**少一次竞态**"的写法：`if exists(): read()` 之间文件可能被删掉 ——
 直接读、读不到当空，只有一次系统调用窗口。
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 `gateway/status.py`（标记文件的家，名字照抄真实版）：
 
@@ -586,7 +586,7 @@ def read_stuck_loop_counts(home: Path) -> Dict[str, int]:
 升级判定在 `session_state.suspend_stuck_loop_sessions(counts, threshold=3)`，
 **清空由调用方做**（照真实版分工：返回被挂起的键，调用方清文件）。
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 这一条**全抄**。有一处**实现顺序**值得一提（它是本章第 4 个真 bug，见 §十一）：
 
@@ -616,7 +616,7 @@ mini 最初写的是
 
 ## §六 两层队列：两种意图，两种结构
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 一个会话同时只能跑一轮。忙的时候又来了消息，**两种用户意图必须分开**：
 
@@ -628,7 +628,7 @@ mini 最初写的是
 晋升顺序：**先溢出、后单槽**。理由是承诺的先后 —— 溢出里的东西是用户**显式**排的队，
 被接受的那一刻就承诺了"会做"；单槽里只是"最新的那条普通消息"。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/run_busy.py:57-73`（**逐字**，docstring + 实现）：
 
@@ -667,7 +667,7 @@ mini 最初写的是
         queued_event._gateway_accepted = True        # run_busy.py:55（另一处在 :314）
 ```
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 `gateway/run_busy.py::SessionQueues`（两层，方法名对齐真实版语义）：
 
@@ -733,7 +733,7 @@ mini 最初写的是
 （「最新」= 单槽，会被后来的普通消息顶掉；「已承诺」= /queue 排的，按序都会跑）
 ```
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 全抄。唯一"改形"的地方：真实版把队列挂在**适配器的 `_pending_messages`**（+ 溢出在
 runner 侧）；mini 把两层都收进一个 `SessionQueues` 对象（挂适配器上），
@@ -745,7 +745,7 @@ runner 通过 `_queue_depth` / `_promote_queued_event` 读它 —— **方法名
 
 ## §七 agent 缓存：三条"不许淘汰"
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 > ### 先说清「热着」是什么意思（这一段的初版写得不准，见下面的更正记录）
 >
@@ -786,7 +786,7 @@ memory_high_mb                  进程内存过线 → 按 LRU 放到线下
 | ② | 还没落盘的 | `transcript_persistence_caught_up` —— 丢了就是丢了这一轮对话 |
 | ③ | 最近 N 个 | LRU 保护带 |
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `run_agent_cache.py:782`（配置语义里那条**最容易读错**的注释）：
 
@@ -824,7 +824,7 @@ _AGENT_CACHE_MAX_SIZE = 128
 the cache may stay over cap until the next insert       # 没人可放时宁可暂时超上限
 ```
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 `gateway/agent_cache.py`：`CacheEntry(busy=…, pending_flush=…)` + 三条保护：
 
@@ -877,7 +877,7 @@ the cache may stay over cap until the next insert       # 没人可放时宁可�
             self._agent_cache.mark_busy(key, False)
 ```
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 - **抄的是生命周期，不是收益**（诚实项）：真实版缓存的是"历史 + 提示词缓存都还活着"的
   agent（那里有真金白银：prompt cache 命中率）。mini 的 `AIAgent` **每轮按
@@ -898,7 +898,7 @@ the cache may stay over cap until the next insert       # 没人可放时宁可�
 
 ## §八 内存压力与后台巡检：只放资源，不结束对话
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 ```text
 _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
@@ -911,7 +911,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 ★ 三件事的共同点：**它们都在丢东西**（缓存、内存、老记录），
 而丢的东西必须是**可从库里重建的**。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/run_watchers.py:40-71`（**逐字**，含那条 #80764 注释）：
 
@@ -936,7 +936,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 
 ★ `max_age > 0` 就是**开关语义**：默认 0 = **不剪**（运维没说要留多久，就别自动删）。
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 `gateway/run_watchers.py::_session_housekeeping_tick()` —— 一个 tick 返回**收据**：
 
@@ -972,7 +972,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 ★ 为什么用"记债"而不是"静默跳过"：静默跳过会让"开关打开了但什么都没发生"
 看起来像**正常工作**。记债之后，`/status`/日志/测试都能看出"这条路还没铺完"。
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 - **剪枝没实现**（差异表 #21）：mini 的存储层（第 6 章）**没有删除路径** ——
   没有 `prune_old_entries`、没有 `DELETE FROM sessions/messages`、没处理 FTS 索引与血缘。
@@ -987,7 +987,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 
 ## §九 进程边界：关掉会话 vs 关掉进程
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 **进程退出不是对话边界。** 关闭/重启时真实版只做两件事：
 
@@ -998,7 +998,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 
 其余会话**什么都不做** —— 保持 open，下次启动按普通复用接着用。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 `gateway/run_shutdown.py:1654`、`:1704`：
 
@@ -1011,7 +1011,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 
 ★ 函数名里 `_mark_running_sessions_` 就是范围声明：**只有正在跑的**。
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 第 7 章的 mini 写的是：
 
@@ -1050,7 +1050,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 | 空闲时间、每日边界、内存压力 | ❌ **不会** |
 | 进程退出 / 重启 | ❌ **不会**（只打"待恢复"标记） |
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 这条不是"抄不来"，是**第 7 章抄错了**（当时把"进程收尾"顺手写成了"结束所有会话"）。
 第 8 章修掉之后多出两条断言守着：
@@ -1067,7 +1067,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 
 ## §十 与上下文压缩的接缝：轮转 ≠ 结束对话
 
-### ① Hermes 怎么做的
+**① Hermes 怎么做的**
 
 第 5 章的会话维护（session hygiene）压完历史会做三件事，本章关心**第三件**：
 
@@ -1080,7 +1080,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 第 6 章的存储层再往前一步：如果压缩产生的是**新会话行**（轮转），
 新行带 `parent_session_id` 指回旧行（血缘），旧行 `active=0`。
 
-### ② 读 Hermes 的代码
+**② 读 Hermes 的代码**
 
 真实版 `gateway/run_turn.py`（会话维护之后那一句）：
 
@@ -1091,7 +1091,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 ★ 为什么压缩要淘汰 agent：agent 手里那本"内存里的历史"刚被压过 ——
 留着它，下一轮可能拿**旧历史**再发一遍（等于压缩白做，还多花一次钱）。
 
-### ③ mini 的实现
+**③ mini 的实现**
 
 **mini 没有这条调用，而且这不是偷懒** —— 差异在**压缩住在哪一层**：
 
@@ -1113,7 +1113,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 "同一个会话用同一个 agent 对象"，而历史每轮现读。**这条接缝 mini 是空的** ——
 不是漏了，是**没有那个风险**。
 
-### ④ mini 为什么没做成这样 / 值不值得改
+**④ mini 为什么没做成这样 / 值不值得改**
 
 **不做，但要把风险写在最显眼的地方**：
 
