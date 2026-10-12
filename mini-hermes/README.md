@@ -19,6 +19,7 @@
 | 7.1 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-07b-GatewaySessionLifecycle.md》《源码讲解-07b-GatewaySessionLifecycle.md》 |
 | 8 | `provider-runtime.md` | ✅ **已实现并跑通**（**providers/ 包**（723 行）+ **两段式解析** + `api_mode` 判定 + `source` + host 门控 + 别名归一（`756b493`）· **回退链** `agent/fallback.py` + **辅助路由** `agent/auxiliary.py` + 配置层 `hermes_cli/config.py`（`a391919`，回退链首次真正接线）· **219 条新契约测试**（106 + 113）· 全套件 **1,063 通过 / 0 失败**（双解释器）· 真跑：`source` 四来源 / host 门控三端点 / 别名归一 · 差异表 18 行 / 差距清单 A 批 10 + B 批 8 · **上游文档 3 处出入**（子代理继承链 / 触发点数 / key 门控）） | 《中文精译-08-ProviderRuntime.md》《源码讲解-08-ProviderRuntime.md》 |
 | 10 | `micro-compaction.md` | ✅ **已实现并跑通**（`agent/micro_compaction.py` **537 行**（`MicroCompactionMixin`）+ 接线三处 · **119 条测试 / 10 组** · 全套件 **1,187 通过 / 0 失败**（双解释器）· 反向验证 **5/5 + 补丁 2/2 干净变红** · 真跑 **5/5 核验通过**（真 DeepSeek，脚本 `demos/ch10_real_run.py`）· 差异表 18 行 / 差距清单 A6 + B9 · ★ 补上「摘要被截断 ⇒ 丢弃半截」判据（`_summary_llm_meta()`，微压缩与批量两条路径）） | 《中文精译-10-MicroCompaction.md》《源码讲解-10-MicroCompaction.md》 |
+| 11 | `state-db-recovery.md` | ✅ **已实现并跑通**（新增 `hermes_state_errors.py` **200** / `hermes_state_fts.py` **219** / `hermes_state_repair.py` **291** / `hermes_cli/sessions_cmd.py` **139**；改 `hermes_state.py`（223→**417**）、`hermes_state_common.py`（270）、`hermes_state_search.py`（317） · **121 条测试 / 12 组** · 全套件 **1,309 / 1,305 通过 / 0 失败**（双解释器）· 反向验证 **5/5 干净变红** · 真跑**两条损坏路径 + 修复**全绿 · 真跑拓出并修掉 1 处真 bug（旧库体检误诊）） |
 
 ## 章族表（★ 章号怎么数）
 
@@ -32,8 +33,9 @@
 | └ 扩展 **7.2**（旧称第 9 章） | `multiplexing-gateway` | `中文精译-07c-…` / `源码讲解-07c-…` | `ch09-multiplexing-gateway` |
 | **第 8 章** | `provider-runtime` | `中文精译-08-…` / `源码讲解-08-…` | `ch08-provider-runtime` |
 | **第 9 章** | `programmatic-integration` | `中文精译-09-…` / `源码讲解-09-…` | —（mini 未实现：用户 2026-10-12 决定） |
-| **第 10 章（当前）** | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
-| **第 11 章（下一章）** | `state-db-recovery` | 待建 | — |
+| 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
+| **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
+| **第 12 章（下一章）** | `completion-backlog-delivery` | 待建 | — |
 
 三条规则：
 
@@ -83,17 +85,16 @@
   7   gateway-internals                 ✅ 第 7 章
   8   gateway-session-lifecycle         ✅ 7.1
   9   multiplexing-gateway              ⬜（第 7 章侧线做了它的一半：多 profile 入口层）
- 10   completion-backlog-delivery       ⬜ 52 行（"投递债"）
+ 10   completion-backlog-delivery       ⬜ 52 行（"投递债"，下一章）
  11   session-storage                   ✅ 第 6 章
- 12   state-db-recovery                 ⬜ 107 行（与第 6 章配对）
+ 12   state-db-recovery                 ✅ 第 11 章（与第 6 章配对）
  13   provider-runtime                  ✅ 第 8 章（= A 的第 4 项）
  14   programmatic-integration          ⬜ ← **下一章（第 9 章）**
 ```
 
 **差额一句话**：A 是"少而精的必读路线"（10 篇），B 是"目录顺序"（14 + Extending 那一片）。
 A 里我们还欠 **adding-providers / acp-internals** 两篇；
-B 里我们还欠 codebase-ownership / micro-compaction / multiplexing-gateway /
-completion-backlog-delivery / state-db-recovery / programmatic-integration 六篇。
+B 里我们还欠 codebase-ownership / completion-backlog-delivery 两篇（其余四篇已交付）。
 
 （"插件 / 技能 / 工具群"那一族在 developer-guide 的 Extending 分组里，仓库里的占位仍写着"第 10 章"。）
 

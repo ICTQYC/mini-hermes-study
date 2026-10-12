@@ -173,8 +173,10 @@ def is_structural_corruption_error(exc: BaseException) -> bool:
 class StateDbCorruptError(sqlite3.DatabaseError):
     """一个活的 `SessionDB` 观测到（非 FTS、非"文件被换掉"的）结构性损坏。
 
-    真实版 `hermes_state_errors.py:186-201`。★ 本章**只定义类型**：粘性隔离
-    （停写、拒绝自动重开、跳过关停时的 WAL checkpoint）留给下一轮。
+    真实版 `hermes_state_errors.py:186-201`。★ 类型在这里定义，**粘性隔离的落点不在本文件**：
+    `hermes_state.py` 的 `_halt_db_corrupt`（置粘性标志）/ `_raise_if_db_corrupt`（写前守卫）/
+    `_reopen_after_close`（拒重开）/ `close()`（不做 WAL checkpoint）——
+    本类只负责"让每一条降级路径都认得同一个类型"。
     真实版为什么要把这些做出来，教训逐字写在它的 docstring 里：
 
         a handle that kept writing after the first error checkpointed 15 pages
