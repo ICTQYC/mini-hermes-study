@@ -38,7 +38,7 @@
 | **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
 | **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
 | **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） | ✅ 源码讲解 `f1141e8`（**1,175 行** · H1=1 · H2=15 · H3=22 · 引用 153 条 0 死） | ｜ **审计后小修**（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）
-| **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 348 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1341 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 544/7 组 · `demos/ch14_real_run.py` 233；**1,435/1,431 通过 · 反验 4 条（RV-1/RV-2 测试 7/2 红 · 审计修复 RV-3/RV-4 各 2 红）· 真跑 12/12**） | ✅ 源码讲解 `baf9251`（**1,334 行** · 死引用 0） |
+| **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 348 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1341 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 555/7 组 · `demos/ch14_real_run.py` 233；**1,436/1,432 通过 · 反验 4 条（RV-1/RV-2 测试 7/2 红 · 审计修复 RV-3/RV-4 各 2 红）· 真跑 12/12**） | ✅ 源码讲解 `baf9251`（**1,334 行** · 死引用 0） |
 
 
 > **`cron` 面（搁置，2026-10-13 用户决定）**：`cron-internals`（380 行）与 `chronos-managed-cron-contract`（227 行）**本轮不做**。
@@ -301,7 +301,7 @@ python3 tests/test_session_storage.py  # 107 条：会话存储（建库 / 加�
 python3 tests/test_gateway.py          # 214 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 /
                                        #   进程身份 / profile 作用域 / 入口层 / ★ 第 8 章：会话生命周期 ·
                                        #   两层队列 · 缓存与巡检）
-# 全套件：1,430 条断言 / 0 失败（3.13.14）· 1,426 / 0 失败（3.9.6）
+# 全套件：1,436 条断言 / 0 失败（3.13.14）· 1,432 / 0 失败（3.9.6）
 #   （差额 4 条：3.9 的 SQLite 拒 DROP messages_fts_data，真损坏分支造不出来）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：

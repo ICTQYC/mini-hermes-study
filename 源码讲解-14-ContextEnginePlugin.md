@@ -749,7 +749,7 @@ def engines_dir() -> Path:                       # mini-hermes/agent/engine_regi
 
 ★ **与第 13 章技能发现同构**：mini 的这条发现路径**不是新造的形状**，而是**照第 13 章抄的** —— `engines_dir()` ↔ `mini-hermes/agent/skill_utils.py:121 skills_dir()`、`iter_engine_dirs()` ↔ `:133 iter_skill_dirs()`、`read_engine()` 的"宽容 + 计数、永不抛" ↔ `:271 read_skill()`、`discover_engines()` 的 `EngineScan` ↔ `:315 discover_skills()` 的 `SkillScan`、`resolve_engine()` 的"查索引不拼路径" ↔ `:347 resolve_skill()`。三条纪律（**零第三方依赖**、**每次选择真读盘（无进程内缓存）**、**宽容 + 计数**）也一字不差地沿用第 13 章。
 
-★ **回落必须"有声"**：`select_engine()` 返回的 `EngineSelection` 带一个 `warning` 字段 —— 未知名 / 该目录被跳过时，回落内置默认引擎并**返回一段可读警告**（`warning` 非空），由宿主经 `_emit_status` 打到用户眼前。**静默回落是这一章最坏的一种**：用户以为换了引擎、其实没换。
+★ **回落必须"有声"**：`select_engine()` 返回的 `EngineSelection` 带一个 `warning` 字段 —— 未知名 / 该目录被跳过时，回落内置默认引擎并**返回一段可读警告**（`warning` 非空），由宿主经 `_emit_engine_warning()` 打到用户眼前 —— 有 `status_callback`（CLI）走它；**没有**（网关 `gateway/run_turn.py` 传 `None`、`doctor.py` 不传）**只走一条 `print(..., file=sys.stderr)`**。★ 这两条都是**审计改出来的**：先前直接复用 `_emit_status` ⇒ 这些入口**静默丢警告**（用户以为换了引擎）；改成 `logger` + `print` 双写 ⇒ 零配置时 `lastResort` 与 `print` 叠加，终端**重复两遍**。故最终**只留一条出口**。**静默回落是这一章最坏的一种**：用户以为换了引擎、其实没换。
 
 至于真实侧的**第二条入口（通用插件系统 `register_context_engine`）**，mini **⏭ 不抄**：mini 根本没有插件宿主（没有 `plugins/`、没有 manager、没有 `ctx`），搬过来就是**没有第二个消费者的死代码**，还会牵进一整套生命周期 / 管理器。mini 只保留"目录发现"这一条 —— 它正是真实侧**推荐**、且多数场景够用的那条。
 
@@ -936,12 +936,12 @@ class TestContextEngineABC:
 
 **③ mini 的实现（现状）**　✅ 已抄（`a6ed019`）
 
-`mini-hermes/tests/test_context_engine.py`（**544 行 / 7 组 / 44 条**）。与真实侧不同的是组织形态：独立脚本（非 pytest），自带 `check(name, cond, detail)`（`:58`），末尾打印"`N 通过 / M 失败`"并 `sys.exit`（`:442-446`）；`MINI_HOME` 在 **import 任何 mini 模块之前**指到临时目录（`:43-44`），每条用例开跑先 `reset_home()` 清空引擎库与配置（`:84-90`），所以用例之间**顺序无关**。
+`mini-hermes/tests/test_context_engine.py`（**555 行 / 7 组 / 45 条**）。与真实侧不同的是组织形态：独立脚本（非 pytest），自带 `check(name, cond, detail)`（`:58`），末尾打印"`N 通过 / M 失败`"并 `sys.exit`（`:442-446`）；`MINI_HOME` 在 **import 任何 mini 模块之前**指到临时目录（`:43-44`），每条用例开跑先 `reset_home()` 清空引擎库与配置（`:84-90`），所以用例之间**顺序无关**。
 
 **七条不变量**，逐条守住一句承诺：
 
 - **I1 选中的引擎真的被用**（`:151-172`）。不只断言类型：`not isinstance(c, ContextCompressor)` + `name == 目录名`，然后**走宿主真路径** `agent._preflight_compression(msgs)`，断言那个引擎 `compress()` 产出的**标记文本真的进了最终历史**（`marker_in(msgs)`）、且 `compress_calls == 1`。判据是"**行为可观测**"，不是"返回的名字对"。
-- **I2 未知名 ⇒ 回落 + 有声**（`:175-202`）。`engine="nope"` ⇒ 仍是 `ContextCompressor`（不拒绝启动），且 `status_callback` 收到的串里**读得到被请求的名字 `nope`**、以及"可用引擎"清单。配一条**反向对照** `test_silent_when_engine_is_default`（`:190-202`）：名字就是 `"compressor"` 或**连 `context` 段都没有**时，**不许产生任何警告**——否则"有声"会退化成满屏噪声。
+- **I2 未知名 ⇒ 回落 + 有声**（`:175-202`）。`engine="nope"` ⇒ 仍是 `ContextCompressor`（不拒绝启动），且 `status_callback` 收到的串里**读得到被请求的名字 `nope`**、以及"可用引擎"清单。★ 这条还分**两种上下文**测：**网关形状**（调用方配了 logging handler）与**裸入口**（没配）—— 因为「退回 `logger` 单出口」只在有 handler 时显形（stderr 会空），「`logger`+`print` 双写」只在没 handler 时显形（stderr 两条）。配一条**反向对照** `test_silent_when_engine_is_default`（`:190-202`）：名字就是 `"compressor"` 或**连 `context` 段都没有**时，**不许产生任何警告**——否则"有声"会退化成满屏噪声。
 - **I3 漏实现抽象方法 ⇒ 实例化即 `TypeError`**（`:205-250`）。全漏 / 只漏 `compress` 都在实例化时报错、信息里点名缺失成员；再补一个**强对照**：补齐三个抽象成员 ⇒ 正常实例化（守住"契约不是拦好引擎"）。
 - **I4 默认引擎行为与改造前逐字节一致**（`:253-289`）。零配置 ⇒ `ContextCompressor`；与**直接构造**的 9 个关键字段 + `threshold_tokens` + `describe()` 逐个相等；同一输入 + 同一假 LLM ⇒ `compress` 输出**逐条 `==`**；并且断言**传进去的列表逐字节没被改**（引擎不碰 agent 状态）。
 - **I5 好引擎入库、坏目录进 `skipped` 并计数**（`:292-337`）。五类坏目录（无 `__init__.py` / 语法错 / 没导出子类 / `name` 与目录名不符 / 漏抽象方法）全部**跳过并计数**、原因**可读**、跳过清单**确定序**、一个都没进候选；引擎库不存在 ⇒ 空扫描、不抛。
@@ -1235,7 +1235,7 @@ mini 的压缩是**同步、内联**跑的：`run_agent.py::_preflight_compressi
 | `mini-hermes/run_agent.py` | **1341** | 1271 → 1341（+34 插槽化，+36 审计修复） | 唯一构造点改查表（`_compressor:1088`）+ 注入式默认工厂（`_build_default_compressor:1068`） |
 | `mini-hermes/hermes_cli/config.py` | **370** | 340 → 370（**+30**） | `context.engine` 读取（`get_context_engine_name:340`） |
 | `mini-hermes/agent/context_compressor.py` | **1046** | 1035 → 1046（**+11**） | 唯一生产实现补 `name`（`:624-633`） |
-| `mini-hermes/tests/test_context_engine.py` | **544** | 新建 | 七组不变量（I1~I7），独立脚本 + `check()` + `GROUPS` |
+| `mini-hermes/tests/test_context_engine.py` | **555** | 新建 | 七组不变量（I1~I7），独立脚本 + `check()` + `GROUPS` |
 | `mini-hermes/demos/ch14_real_run.py` | **233** | 新建 | 真跑（发现 → 选中 → 生效 → 回落），不联网、临时 `MINI_HOME` |
 | `mini-hermes/agent/skill_utils.py` | **436** | 未变 | 发现样板的出处（`skills_dir:121` / `iter_skill_dirs:133`），`engine_registry` 照它的形状写 |
 

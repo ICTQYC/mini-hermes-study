@@ -511,7 +511,7 @@ class AIAgent:
             return
         # 没有 status 出口的入口（网关 / doctor）：结构化日志 + stderr 双写，
         # 保证"回落有声"不因入口不同而消失。
-        logger.warning("%s", text)
+        # ★ 只 print 不 logger：logger 会双写（零配置时 lastResort 也落 stderr），配了 handler 的网关反倒看不见终端
         print(text, file=sys.stderr)
 
     def _ensure_system_prompt(self, messages: List[Dict], system_message: str) -> None:

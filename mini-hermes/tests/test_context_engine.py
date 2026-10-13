@@ -211,6 +211,31 @@ def test_silent_when_engine_is_default() -> None:
     check("零配置（没有 context 段）同样安静", isinstance(c2, ContextCompressor) and seen2 == [], str(seen2))
 
 
+def _fallback_stderr_text(with_handler: bool):
+    """在「**没有** status 出口」的入口跑一次解析，返回 `(stderr 文本, 引擎)`。
+
+    `with_handler=True` 模拟**网关/doctor**（自己配了 logging handler ⇒
+    `logging.lastResort` 不再触发）；`False` 模拟**裸入口**（没配任何 logging）。
+    ★ 两种上下文都测，是因为两条反例各自只在其中一种下显形：
+      退回 `logger` 单出口 ⇒ 有 handler 时 stderr **空**；
+      退回 `logger + print` 双写 ⇒ 无 handler 时 stderr **两条**。
+    """
+    ag = make_agent(status_callback=None)
+    buf = io.StringIO()
+    handler = logging.Handler()
+    handler.emit = lambda rec: None                       # type: ignore[method-assign]
+    lg = logging.getLogger("run_agent")
+    if with_handler:
+        lg.addHandler(handler)
+    try:
+        with contextlib.redirect_stderr(buf):
+            engine = ag._compressor()
+    finally:
+        if with_handler:
+            lg.removeHandler(handler)
+    return buf.getvalue(), engine
+
+
 def test_fallback_warning_audible_without_status_callback() -> None:
     """★ 回落有声的**跨入口**面：`status_callback=None` 时也必须能观测到警告。
 
@@ -218,34 +243,20 @@ def test_fallback_warning_audible_without_status_callback() -> None:
     而**网关**（`gateway/run_turn.py` 传 `status_callback=None`）与 **`doctor.py`**
     （干脆不传）正是这样的入口。若回落只走 `_emit_status`，这两个入口里
     "未知名回落"会被**静默丢弃** —— 用户以为换了引擎（静默降级 = 本章最坏的一种）。
-    实现把这条件单独收进 `_emit_engine_warning`：无 callback ⇒
-    `logger.warning` + stderr 兜底。这条用例守的就是那个兜底还在。
     """
     reset_home()
     write_config("nope")
-    ag = make_agent(status_callback=None)          # ← 网关 / doctor 的入口形状
-    assert ag.status_callback is None, "夹具必须模拟「无 status 出口」的入口"
 
-    buf = io.StringIO()
-    records: list = []
-    handler = logging.Handler()
-    handler.emit = lambda rec: records.append(rec.getMessage())   # type: ignore[method-assign]
-    lg = logging.getLogger("run_agent")
-    lg.addHandler(handler)
-    old_level = lg.level
-    lg.setLevel(logging.WARNING)
-    try:
-        with contextlib.redirect_stderr(buf):
-            c = ag._compressor()
-    finally:
-        lg.removeHandler(handler)
-        lg.setLevel(old_level)
+    text_h, c = _fallback_stderr_text(True)               # 网关/doctor 的形状：调用方配了 logging
+    check("★ 网关形状（调用方**配了** logging）⇒ 回落**仍然有声**：stderr 里读得到被请求的名字",
+          "nope" in text_h, repr(text_h[:200]))
+    check("…★ 且**恰好一次**（只走 stderr 一条出口 —— 退回 logger 单出口这条就空）",
+          text_h.count("nope") == 1, repr(text_h[:200]))
 
-    stderr_text = buf.getvalue()
-    check("★ `status_callback=None`（网关 / doctor 入口）回落**仍然有声**：stderr 里读得到被请求的名字",
-          "nope" in stderr_text, repr(stderr_text[:200]))
-    check("…同一警告也进了 `logger`（结构化日志可见，不止是一行 stderr）",
-          any("nope" in m for m in records), repr(records[:2]))
+    text_n, _ = _fallback_stderr_text(False)              # 裸入口：没配任何 logging
+    check("…★ 裸入口（**没配** logging）同样有声**且只有一条**（logger + print 双写在这里变红）",
+          "nope" in text_n and text_n.count("nope") == 1, repr(text_n[:200]))
+
     check("…且仍然是回落的内置压缩器（有声 ≠ 换了行为）",
           isinstance(c, ContextCompressor), type(c).__name__)
 
