@@ -654,12 +654,12 @@ Hermes 现在可以从多种外部发现模型消费第三方技能：
 **③ 条件激活字段少列了一个：`session_platforms`。**
 
 - 原文 §3.2 只列四字段（`requires_toolsets` / `requires_tools` / `fallback_for_toolsets` / `fallback_for_tools`）。
-- 源码 `agent/skill_utils.py:635` 逐字：`_CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_tools", "requires_tools", "session_platforms")`；同处 `:633-634` 逐字注释：*"``session_platforms`` is the gateway-channel gate: session platforms the skill is FOR (hidden from the index elsewhere), unlike ``platforms:`` (host OS)."*；判定分支在 `agent/prompt_builder.py:1217-1220`。
+- 源码 `agent/skill_utils.py:635` 逐字：`_CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_tools", "requires_tools", "session_platforms")`；同处 `:633-634` 逐字注释：*"``session_platforms`` is the gateway-channel gate: session platforms the skill is FOR (hidden from the index elsewhere), unlike ``platforms:`` (host OS)."*；判定分支在 `agent/prompt_builder.py:1216-1220`。
 - **结论**：**漏列**（不是矛盾）—— 第五个条件字段 `session_platforms` 是网关信道闸门，与 `platforms:`（宿主 OS）不是一回事。
 
 **④ §2 示例树里的 `productivity/ocr-and-documents/` 在该锚点的仓库树里不存在。**
 
-- 原文第 37–40 行逐字：`│       ├── SKILL.md` / `│       ├── scripts/` / `│       └── references/`（挂在 `productivity/ocr-and-documents/` 下）。
+- 原文第 38–40 行逐字：`│       ├── SKILL.md` / `│       ├── scripts/` / `│       └── references/`（挂在 `productivity/ocr-and-documents/` 下）。
 - 实测 `git ls-tree -r f5d1926110 --name-only | grep '^skills/productivity/'`：**没有** `ocr-and-documents` 目录；同名内容只以文档站页面存在 —— `website/docs/user-guide/skills/bundled/productivity/productivity-ocr-and-documents.md`；仓库内与该主题相关的只有 `skills/productivity/pdf/references/ocr-extraction.md`。
 - 同一棵树里的另两项（`research/arxiv/`、`productivity/`）**在场**（`skills/research/arxiv/SKILL.md` 282 行）。
 - **结论**：示例树含一个**该锚点不存在的目录**（作为"结构示意"可读，作为事实不实）。

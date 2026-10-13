@@ -165,7 +165,7 @@ def split_frontmatter(text: str) -> Tuple[Optional[Dict[str, str]], str]:
       |---|---|
       | 首行 `---` 围栏，下一个 `---` 收尾 | 没有围栏 / 围栏未闭合 → 返回 `None` |
       | 顶层 `key: value`，一行一条 | 缩进嵌套（`metadata.hermes.*`） |
-      | 值两侧空白去掉、成对引号去掉、空值丢掉 | 列表（`- a`）、多行块（`\\|` `>`）、锚点/别名 |
+      | 值两侧空白去掉、成对引号去掉、空值丢掉 | 列表（`- a`）、多行块（`\\|` `>` —— **标记与块内容一起丢，整个键视为不支持**）、锚点/别名 |
       | 空行与整行 `#` 注释 | 行尾注释（`x: y  # 注释` —— 会被当成值的一部分） |
 
     为什么敢不支持：mini 的索引只需要 `name` / `description` 两个**标量**字段。
@@ -194,7 +194,8 @@ def _parse_scalar_lines(lines: List[str]) -> Dict[str, str]:
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
         if raw[:1].isspace():
-            # 缩进行 = 嵌套结构（metadata.hermes.* / 列表项）→ 子集不认识，忽略。
+            # 缩进行 = 嵌套结构（metadata.hermes.* / 列表项 / 多行块的**块内容**）→
+            # 子集不认识，忽略。
             continue
         if ":" not in raw:
             continue
@@ -205,8 +206,27 @@ def _parse_scalar_lines(lines: List[str]) -> Dict[str, str]:
             # 空值一律丢：`metadata:` / `description: ""` 在这里**分不开**
             # （一个值都没有的键对索引毫无用处），这是子集口径的一部分。
             continue
+        if _is_block_scalar_marker(value):
+            # ★ 多行块标记：`description: >` 后面是缩进的**块内容**（上面已被当作
+            #   缩进行忽略）——如果只丢块内容、不丢标记，就会留下一个**字面值 `>`**
+            #   进索引，真正的描述文本反而被丢。docstring 承诺"多行块一律忽略"，
+            #   那就必须**把标记一起丢掉**（整键视为不支持）。于是这类技能会因
+            #   **缺 description** 被跳过并计数，而不是以 `>` 混进提示词索引。
+            continue
         out[key] = value
     return out
+
+
+def _is_block_scalar_marker(value: str) -> bool:
+    """值是 YAML 的**多行块标记**吗（`|` / `>`，可带 chomping/缩进指示符如 `>-` `|+2`）？
+
+    ★ 为什么单独判这件事：`description: >` 的**块内容**是缩进行（已忽略），
+      但那个 `>` 本身是**非空标量**，不挡的话会被当成描述值写进索引。
+      承诺是"一律忽略"，就要连标记一起丢。
+    """
+    if value[:1] not in ("|", ">"):
+        return False
+    return all(ch in "+-0123456789" for ch in value[1:])   # 空串（纯 `>`/`|`）也成立
 
 
 def _unquote(value: str) -> str:
@@ -265,6 +285,13 @@ def read_skill(skill_dir: Path) -> Tuple[Optional[Skill], str]:
         #   （`skills/evil -> ~/.ssh` 会把库外的文件读进上下文）。
         #   这里拒绝、并让它出现在 skipped 里（"漏看"和"看见了但拒绝"是两件事）。
         return None, "符号链接目录（不跟随：可能是逃逸路径）"
+    if path.is_symlink():
+        # ★ 同一处置，更高的精度：**真目录内的软链 `SKILL.md`**
+        #   （`skills/ok/SKILL.md -> <库外文件>`）。目录本身是真的、能过上面那关，
+        #   但 `is_file()` 会跟随软链 —— 于是库外文件的 frontmatter **name/description
+        #   就进了提示词索引**（正文虽被 load_skill_body 的纵深防御挡下，描述层却已泄漏）。
+        #   既然软链是逃逸路径，就得在**发现阶段**一并拒掉，而不是只挡正文。
+        return None, "符号链接 SKILL.md（不跟随：可能是逃逸路径）"
     if not path.is_file():
         return None, "没有 SKILL.md"
     try:

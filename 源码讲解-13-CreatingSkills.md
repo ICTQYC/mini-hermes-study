@@ -1,7 +1,7 @@
 # 源码讲解 · 第 13 章：创建技能（Creating Skills）
 
 > 上游：`官方文档-Developer-Guide/creating-skills.md`（438 行）· 中文精译见 `中文精译-13-CreatingSkills.md`（680 行）。
-> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号锚当前 HEAD（`445093a`）。
+> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号锚 `02c61d5`（mini 源码最后一次改动）。
 
 [TOC]
 
@@ -133,7 +133,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 6. `skill_view` 解析名字 → 读正文 → 返回**全文 + `linked_files`**；同时 `bump_view` / `bump_use`。
 7. 需要附文件时**第二次**调 `skill_view(name, file_path="references/x.md")`。
 
-逐字引（`agent/system_prompt.py:302-310`）：
+逐字引（`agent/system_prompt.py:301-302`）：
 
 ```text
     """Skills index (empty without skills tools).  Focus mode demotes non-coding
@@ -153,7 +153,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 
 ## §〇 与真实版的差距总表
 
-★ **本章与第 11 / 12 章不同：mini 侧真有实现。** 第 11 章是地图、第 12 章连生产者都不存在；本章 mini 侧在 commit `02c61d5` 落地了技能系统的**最小形状**（发现 + 渐进披露 + 一个 `skill_view`）——因为它自己的 docstring 就写明了这个接缝（`agent/system_prompt.py:32-33`「原来还差一块……第 13 章把它补上了」，`:303` 的 `volatile_parts` 就是那个位置）。下表按「面 | 真实 Hermes | mini 现状」逐面拉平；mini 列四档口径：`✅ 已抄（02c61d5）` / `已对齐` / `⬜ 没做（量级）` / `⏭ 不抄（理由）`。真实侧锚 `f5d1926110`（v0.21.3），mini 侧锚当前 HEAD `445093a`。
+★ **本章与第 11 / 12 章不同：mini 侧真有实现。** 第 11 章是地图、第 12 章连生产者都不存在；本章 mini 侧在 commit `02c61d5` 落地了技能系统的**最小形状**（发现 + 渐进披露 + 一个 `skill_view`）——因为它自己的 docstring 就写明了这个接缝（`agent/system_prompt.py:32-33`「原来还差一块……第 13 章把它补上了」，`:303` 的 `volatile_parts` 就是那个位置）。下表按「面 | 真实 Hermes | mini 现状」逐面拉平；mini 列四档口径：`✅ 已抄（02c61d5）` / `已对齐` / `⬜ 没做（量级）` / `⏭ 不抄（理由）`。真实侧锚 `f5d1926110`（v0.21.3），mini 侧锚 `02c61d5`（mini 源码最后一次改动）。
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
@@ -167,7 +167,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 | `skill_view` 工具（只读、**不分页**、第二跳） | `tools/skills_tool.py:571` + `:705-716` 注册 | ✅ 已抄（02c61d5）：`tools/skills.py:84`，走**普通注册路径**（只读文件 ⇒ 不进 agent loop，`tools/skills.py:13-19` 判据） |
 | `skills_list`（Tier 1 列表工具） | `tools/skills_tool.py:232` | ⏭ 不抄（mini 的"列表"就是提示词索引本身；再开一个列表工具与索引重复，且多一份漂移面） |
 | frontmatter 解析 | 真 YAML，失败回落逐行切分（`agent/skill_utils.py:105-125`） | 已对齐：零依赖**子集**解析器（只认顶层 `key: value`；嵌套 / 列表 / 行尾注释一律忽略）（`agent/skill_utils.py:159-221`）。窄在"只为 name/description 两个标量"，为两个字段引 YAML 解析器不值（硬约束：零第三方依赖） |
-| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:19`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 是**单平台 CLI**，没有 OS 维度；`agent.platform` 那个是界面平台 cli/tui，不是 OS） |
+| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 是**单平台 CLI**，没有 OS 维度；`agent.platform` 那个是界面平台 cli/tui，不是 OS） |
 | 条件激活 `_CONDITION_KEYS`（含未文档化的 `session_platforms`） | 五键定义 `agent/skill_utils.py:633-641` + 判定 `agent/prompt_builder.py:1210-1228` | ⬜ 没做（可映射 mini 的 toolset 概念，**只抄 `requires_tools` / `fallback_for_toolsets` 两键**即可，~20-30 行；`session_platforms` 不抄——mini 无网关渠道门） |
 | `environments:` 第三道**相关性**门 | `agent/skill_utils.py:148-153`（fail open、显式加载永远绕过、只影响 offer 面） | ⏭ 不抄（mini 无 kanban / docker / s6 环境面） |
 | `skills.disabled` 硬拒绝 + `hermes-agent` 不可禁 | `tools/skills_tool.py:605-606`；`ESSENTIAL_SKILLS`（`agent/skill_utils.py:273-275`） | ⬜ 没做（mini 有 `config.json`，~10-15 行可补；只有配上前面的 config 才有意义） |
@@ -178,7 +178,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 | 安全扫描 + 四档信任 + `--force` | `tools/skills_guard.py:24-33`、`:660-673` | ⏭ 不抄（扫描器的前提是"从网上下来的技能"；mini 的技能都是本地手写） |
 | 发布 / 安装 / tap / 三种发现模型 | `hermes_cli/skills_hub.py`、`tools/skills_hub_*.py` | ⏭ 不抄（mini **零依赖**、无网络客户端与安装事务；唯一 HTTP 是模型调用用的 `_http_post`） |
 | 蓝图（skill 声明 `metadata.hermes.blueprint`） | `tools/blueprints.py:1-7`、`:44-62` | ⏭ 不抄（mini 无 cron / 调度面） |
-| 建议的定时任务四来源 + consent-first | `cron/suggestions.py:1-9`、`:39`（`MAX_PENDING = 5`） | ⏭ 不抄（mini 无编排面；第 12 章刚确认没有生产者） |
+| 建议的定时任务四来源 + consent-first | `cron/suggestions.py:1-9`、`:37`（`MAX_PENDING = 5`） | ⏭ 不抄（mini 无编排面；第 12 章刚确认没有生产者） |
 | curator（闲置触发、只碰 `created_by: agent`、只归档不删） | `agent/curator.py:1-6`、`:29-34`；`tools/skill_usage.py:1-6` | ⏭ 不抄（mini 无长命进程 / 闲置判定） |
 | 语义检索 / catalog | 嵌入模型或远端检索 | ⏭ 不抄（mini 只有 FTS5，且服务于**消息**；更窄的替代 = **名字 / 描述子串匹配**，成本约几十行） |
 
@@ -367,7 +367,7 @@ mini 写了一个**零第三方依赖的子集解析器**（`agent/skill_utils.p
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:19`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 单平台 CLI，无 OS 维度） |
+| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 单平台 CLI，无 OS 维度） |
 | 不匹配的处置 | 从提示词 / `skills_list` / 斜杠命令**软隐藏**（不删文件） | 无此项（同一"软隐藏"语义由 §3.2 的条件激活承担，而条件激活也没做） |
 
 ### 条件激活（Conditional Skill Activation）
@@ -399,7 +399,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 **③ mini 的实现（现状）**
 
-⬜ 没做。但 mini **有可映射的承载物**：它已经有一张 toolset 表（`toolsets.py:53` 的 `TOOLSETS`）与 `check_fn` 探测机制（`tools/registry.py:180`）。所以这条门若要抄，**只抄 `requires_tools` / `fallback_for_toolsets` 两键**即可——它们命中的正是 mini 已有的"工具集是否可用"概念；另外三键（`requires_tools` / `fallback_for_tools` / `session_platforms`）要么依赖"可用工具集"的运行时快照，要么依赖网关渠道门，mini 两样都没有。量级约 20~30 行。
+⬜ 没做。但 mini **有可映射的承载物**：它已经有一张 toolset 表（`toolsets.py:53` 的 `TOOLSETS`）与 `check_fn` 探测机制（`tools/registry.py:180-186`）。所以这条门若要抄，**只抄 `requires_tools` / `fallback_for_toolsets` 两键**即可——它们命中的正是 mini 已有的"工具集是否可用"概念；另外三键（`requires_tools` / `fallback_for_tools` / `session_platforms`）要么依赖"可用工具集"的运行时快照，要么依赖网关渠道门，mini 两样都没有。量级约 20~30 行。
 
 **④ 与真实版的差别**
 
@@ -804,7 +804,7 @@ plus the inverse (``export_blueprint``) back to a SKILL.md.
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 蓝图的对象模型 | 普通 `SKILL.md` + `metadata.hermes.blueprint` 块，**无新类型**（`tools/blueprints.py:1-7`） | ⏭ 不抄（无 cron / job 引擎可翻译） |
-| 块 → job 的翻译 | `blueprint_to_job_spec`（`tools/blueprints.py:90-105`），全章唯一翻译点，两条路径共用防漂移 | ⏭ 不抄 |
+| 块 → job 的翻译 | `blueprint_to_job_spec`（`tools/blueprints.py:118-128`），全章唯一翻译点，两条路径共用防漂移 | ⏭ 不抄 |
 | 安装即登记建议 | `register_blueprint_suggestion`（`tools/blueprints.py:140-161`），**永不自动排程** | ⏭ 不抄（无建议面，见 §八） |
 | 人类友好的 slot 目录 | `cron/blueprint_catalog.py:1-6`，用户永不手写 cron | ⏭ 不抄 |
 
@@ -899,9 +899,9 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 
 第三档 `agent-created` 的判决值不是 allow/block，而是 **`"ask"`**（`:32`）：docstring（`:662`）逐字 *"``allowed`` is None when policy says \"ask\"."*——回给调用方的是一个 `None`，含义是**把这条发现当"报错"交还给 agent，让它删掉惹事的内容再重试**（`:31` 注释逐字 *"\"ask\" = error to the agent (retry without the flagged content)"*）。而且这一档**默认不开**：它是 opt-in，只在 `skills.guard_agent_created` 为真时才生效，配置默认值逐字是 `"guard_agent_created": False,`（`hermes_cli/config_defaults.py:1374`）。一个 Agent 自己 `skill_manage(create)` 写出来的技能，在默认配置下**不会被拦**——这条不写清楚，读者会以为"agent 自建的技能一定过安检"。
 
-**扫描时机不是一处，是五处**（每一处语义不同，这正是本节的信息量所在）：① hub 安装——先 `quarantine_bundle` 到隔离区再扫（`hermes_cli/skills_hub.py:628-641` `_scan_quarantined`），放行闸口在同一条路径上（`:721-723` 逐字 `allowed, _reason = should_allow_install(result, force=force)`，`--force` 就是从这里进来的）；② 已装技能复查——`hermes skills audit`（`:905`，扫在 `:927`）；③ 发布前——`do_publish` 先扫，`dangerous` 直接拒发（`:1164-1168`）；④ agent 自建技能写后扫（`tools/skill_manager_tool.py:41-58`，**opt-in 默认关**）；⑤ **项目技能的每一次读取**——这是最容易漏的一处，也是全章最漂亮的一条推理：`hermes skills trust` 是一个**仓库级、做一次**的决定，但仓库里的技能内容**会在每次 `git pull` 时从它脚下改变**，于是"已经信任过的仓库"里可以被注入一个恶意技能而**任何地方都不会再扫**（`agent/skill_utils.py:520-523` 的注释把这条的编号都写了：`#48974`）。对策是**每个项目 `SKILL.md` 的父目录都过一次 hub 同款扫描器**（内容 hash 缓存，`:523-527`），`dangerous` 直接隔离出索引/`skills_list`/`skill_view`/斜杠命令，`caution` 照常加载（与 hub 行为对齐，`:526-527`），而且**扫描器崩了也隔离（fail-closed）**（`:533-557` `is_quarantined_project_skill`）。五处之外还有一处**收口**：项目技能的迭代只有**一个**闸口 `iter_project_skill_files`（`:559-563`），隔离决定不许各消费面自行再判一遍。
+**扫描时机不是一处，是五处**（每一处语义不同，这正是本节的信息量所在）：① hub 安装——先 `quarantine_bundle` 到隔离区再扫（`hermes_cli/skills_hub.py:628-641` `_scan_quarantined`），放行闸口在同一条路径上（`:721-723` 逐字 `allowed, _reason = should_allow_install(result, force=force)`，`--force` 就是从这里进来的）；② 已装技能复查——`hermes skills audit`（`:905`，扫在 `:927`）；③ 发布前——`do_publish` 先扫，`dangerous` 直接拒发（`:1164-1168`）；④ agent 自建技能写后扫（`tools/skill_manager_tool.py:41`/`:50-72`，**opt-in 默认关**）；⑤ **项目技能的每一次读取**——这是最容易漏的一处，也是全章最漂亮的一条推理：`hermes skills trust` 是一个**仓库级、做一次**的决定，但仓库里的技能内容**会在每次 `git pull` 时从它脚下改变**，于是"已经信任过的仓库"里可以被注入一个恶意技能而**任何地方都不会再扫**（`agent/skill_utils.py:520-523` 的注释把这条的编号都写了：`#48974`）。对策是**每个项目 `SKILL.md` 的父目录都过一次 hub 同款扫描器**（内容 hash 缓存，`:523-527`），`dangerous` 直接隔离出索引/`skills_list`/`skill_view`/斜杠命令，`caution` 照常加载（与 hub 行为对齐，`:526-527`），而且**扫描器崩了也隔离（fail-closed）**（`:533-557` `is_quarantined_project_skill`）。五处之外还有一处**收口**：项目技能的迭代只有**一个**闸口 `iter_project_skill_files`（`:559-563`），隔离决定不许各消费面自行再判一遍。
 
-扫描器本身的形状也值得一句。它是**正则静态扫描 + 结构检查**两层：正则表 `THREAT_PATTERNS`（`:114`-`:391`，本轮实测 **131** 条），结构检查在 `scan_structure`（`:690-736`：超量文件、超大、二进制、可疑可执行位、逃逸 symlink），单文件扫描再叠一层**不可见 Unicode 隐写检测**（`:577-582`，命中判 `injection` / `high`）。`Finding` 的 `category` 字段（`:42`）注释只给了五个值加省略号，**实测真正的类别共 13 类**（见附录 C ①）。扫描结果按内容 hash 缓存，带版本号 `SCANNER_VERSION = "skills-guard-v5"`（`:21`），所以规则一改缓存自动失效。
+扫描器本身的形状也值得一句。它是**正则静态扫描 + 结构检查**两层：正则表 `THREAT_PATTERNS`（`:114-390`，本轮实测 **131** 条），结构检查在 `_check_structure`（`:690-736`：超量文件、超大、二进制、可疑可执行位、逃逸 symlink），单文件扫描再叠一层**不可见 Unicode 隐写检测**（`:577-582`，命中判 `injection` / `high`）。`Finding` 的 `category` 字段（`:42`）注释只给了五个值加省略号，**实测真正的类别共 13 类**（见附录 C ①）。扫描结果按内容 hash 缓存，带版本号 `SCANNER_VERSION = "skills-guard-v5"`（`:21`），所以规则一改缓存自动失效。
 
 **② 读 Hermes 的代码**：`tools/skills_guard.py:26-33`（`INSTALL_POLICY`，逐字）：
 
@@ -937,10 +937,10 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 | 裁决映射 | `_determine_verdict`：`critical`→`dangerous`、`high`→`caution`、`medium/low` 单独出现→`safe`（`:791-794`） | ⏭ 不抄（无 `Findings`） |
 | 正则扫描器 + 结构检查 | 131 条正则（`:114-391`）+ 结构检查（`:690-736`）+ 隐写检测（`:577-582`）；`Finding.category` 实测 **13 类** | ⏭ 不抄（无不可信内容进入） |
 | `--force` 与硬边界 | 覆盖除 `community`/`trusted` 的 `dangerous` 外所有 block（`:665`/`:668`/`:673`） | ⏭ 不抄（无 block 可覆盖） |
-| 扫描时机（五处 + 收口） | 安装（`hermes_cli/skills_hub.py:628-641`/`:721-723`）· 审计（`:905`/`:927`）· 发布前（`:1164-1168`）· agent 自建 opt-in 写后（`tools/skill_manager_tool.py:41-58`）· 项目技能每次读（`agent/skill_utils.py:519-557`） | ⏭ 不抄（五个时机的消费者全都不存在） |
+| 扫描时机（五处 + 收口） | 安装（`hermes_cli/skills_hub.py:628-641`/`:721-723`）· 审计（`:905`/`:927`）· 发布前（`:1164-1168`）· agent 自建 opt-in 写后（`tools/skill_manager_tool.py:41`/`:50-72`）· 项目技能每次读（`agent/skill_utils.py:519-557`） | ⏭ 不抄（五个时机的消费者全都不存在） |
 | 写入面（"恶意的入口"） | `skill_manage` 可写技能；故须在写后扫（opt-in） | ❌ **没有**：`agent/skill_utils.py` / `tools/skills.py` grep 无任何写入 API，技能库只读 |
 | 「名字当路径」的安全边界 | `skill_view` 的路径解析 + 名字校验 | ✅ **已抄**：`is_valid_skill_name`（`agent/skill_utils.py:225-230`）+ 路径只来自扫描结果 + 符号链接发现阶段即拒（`tests/test_skills.py` 组 5 钉住） |
-| 不可见 Unicode / 结构检查 | `scan_file`（`:554-582`）与 `scan_structure`（`:690-736`） | ⏭ 不抄（同上：没有不可信内容） |
+| 不可见 Unicode / 结构检查 | `scan_file`（`:554-582`）与 `_check_structure`（`:690-736`） | ⏭ 不抄（同上：没有不可信内容） |
 
 ---
 
@@ -949,7 +949,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 > 本附录把 §十 的「② 读 Hermes 的代码」单块塞不下的 `文件:行号` 集中归档，**按文件分组**（正文 ② 已引的 `INSTALL_POLICY` `:26-33` 不在此重复）。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
 > - **真实侧**锚 `f5d1926110`：`git -C $HOME/.hermes/hermes-agent show f5d1926110:<path>`
-> - **mini 侧**锚当前 HEAD `445093a`（含 `02c61d5` 的 A1~A4 实现），工作区无未提交改动：`sed -n 'Np' mini-hermes/<path>`
+> - **mini 侧**锚 `02c61d5`（第 13 章 A1~A4 实现落地的那次），工作区无未提交改动：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条真身打印核对过**；括号里的说明是「它在说什么」，不当逐字引文用。
 
 ### 真实侧（锚 `f5d1926110`）
@@ -961,7 +961,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 | `:1-7` | `"""Skills Guard — regex static scan of externally-sourced skills plus a trust-aware install policy.` | 扫描器自述：① 前提是 **externally-sourced**；② `builtin` **never scanned**；③ 管线是 `scan_skill` → `should_allow_install` → `format_scan_report`；④ 末尾自曝一条 **Known gap**（语言写 API 指向 agent 配置文件时只出低危 `*_ref` 发现） |
 | `:23-24` | `# NVIDIA-verified skills each ship a signed skill.oms.sig ...` | 信任清单**四个**仓库（含 `NVIDIA/skills`，文档只列三个，见附录 C 补 ②） |
 | `:38-46` | `@dataclass` / `class Finding:` | `Finding` 字段块：`severity`（`:41`）+ `category`（`:42`，注释只列五值加省略号）+ `file`/`line`/`match`/`description` |
-| `:114` | `THREAT_PATTERNS = [` | 正则模式表起点（`:114`-`:391`，本轮实测 **131** 条） |
+| `:114` | `THREAT_PATTERNS = [` | 正则模式表起点（`:114-390`，本轮实测 **131** 条） |
 | `:392` | `_COMPILED_THREAT_PATTERNS = [(re.compile(pattern, re.IGNORECASE), *rest) for pattern, *rest in THREAT_PATTERNS]` | 编译后的模式表——扫描循环遍历它（`:568`） |
 | `:554-582` | `def scan_file(file_path: Path, rel_path: str = "") -> List[Finding]:` | 单文件扫描：docstring 行排除（`_compute_docstring_lines`）+ md 链接遮蔽（`_mask_prose_link_destinations`）+ 逐行正则 + `invisible_unicode` 隐写检测（`:580`） |
 | `:586-602` | `def scan_skill(` | 扫描入口：结构检查 + 逐文件扫描 + 汇总 |
@@ -996,7 +996,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 | 行号 | 该行/该段首 20 字 | 它证明什么 |
 |---|---|---|
 | `:41-46` | `def _guard_agent_created_enabled() -> bool:` | agent 自建技能的扫描是 **opt-in**：docstring 逐字 *"skills.guard_agent_created (default False): opt-in — terminal() runs the same code ungated."* |
-| `:48-60` | `def _security_scan_skill(skill_dir: Path) -> Optional[str]:` | 写后扫描：`scan_skill(skill_dir, source="agent-created")` + `should_allow_install`；`allowed is None`（即 `"ask"`）当**错误**回给 agent 让它删掉惹事内容重试 |
+| `:50-72` | `def _security_scan_skill(skill_dir: Path) -> Optional[str]:` | 写后扫描：`scan_skill(skill_dir, source="agent-created")` + `should_allow_install`；`allowed is None`（即 `"ask"`）当**错误**回给 agent 让它删掉惹事内容重试 |
 
 **`hermes_cli/subcommands/skills.py`（177 行）**
 
@@ -1016,7 +1016,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 |---|---|---|
 | `:1372-1374` | `# code via terminal() ungated, so it mostly blocks prose with risky keywords. On: a` | agent 自建扫描的**默认值 = 关**（`:1374` 逐字 `"guard_agent_created": False,`），注释说明开启后的语义与"hub 安装永远扫"的对比 |
 
-### mini 侧（锚 `445093a`）
+### mini 侧（锚 `02c61d5`）
 
 **`agent/skill_utils.py`（409 行；`wc -l` 实测）**
 
@@ -1078,7 +1078,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 
 ## 附录 B · 本篇提到的文件与实测行数
 
-行数一律实测：**真实侧** `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 `445093a`。
+行数一律实测：**真实侧** `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 `02c61d5`（mini 源码最后一次改动）。
 
 **B-1 · 真实侧（锚 `f5d1926110`）**
 
@@ -1087,7 +1087,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 | `tools/skills_guard.py` | **811** | §十 主角：正则静态扫描器 + 信任感知安装策略（`INSTALL_POLICY:26`、`should_allow_install:660`、`_resolve_trust_level:780`） |
 | `agent/skill_utils.py` | **811** | 技能发现/平台与条件判定/项目技能隔离扫描（`environments:` 门 `:148-153`、项目隔离 `:533-557`） |
 | `hermes_cli/skills_hub.py` | **1522** | hub 安装/审计/发布三处的扫描时机（`_scan_quarantined:628`、`do_audit:905`、`do_publish:1143`） |
-| `tools/skill_manager_tool.py` | **987** | agent 自建技能的写后扫描（opt-in）：`_guard_agent_created_enabled:41`、`_security_scan_skill:48` |
+| `tools/skill_manager_tool.py` | **987** | agent 自建技能的写后扫描（opt-in）：`_guard_agent_created_enabled:41`、`_security_scan_skill:50` |
 | `hermes_cli/config_defaults.py` | **2922** | `skills.guard_agent_created` 默认值（`:1374` `False`）藏在这里 |
 | `hermes_cli/subcommands/skills.py` | **177** | `--force` 的 CLI 声明（`:62`） |
 | `tools/skills_hub_models.py` | **327** | `TRUST_RANK`（`:113`，三档）——信任级别只有三档的旁证 |
@@ -1096,7 +1096,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 | `agent/system_prompt.py` | **817** | 索引进 volatile band 首行（`:705-707`）的宿主文件 |
 | `website/docs/developer-guide/creating-skills.md` | **438** | 上游原文（§十 的对照面；其「四类」「trusted 只列三仓」见附录 C） |
 
-**B-2 · mini 侧（锚 `445093a`）**
+**B-2 · mini 侧（锚 `02c61d5`）**
 
 | 文件 | 行数 | 它是什么 |
 |---|---|---|
@@ -1133,7 +1133,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
   ```
   42:     category: str       # "exfiltration" | "injection" | "destructive" | "persistence" | "network" | ...
   ```
-  注释里已经带省略号地列了五个值。**实测计数**（本轮解析 `THREAT_PATTERNS` `:114-391` 与结构检查 `:690-736`）：正则模式层 **131** 条、**12** 个不同 `category`，结构层再加 `structural` 一类，**合计 13 类**——`exfiltration(26)` / `persistence(20)` / `injection(19)` / `obfuscation(14)` / `supply_chain(10)` / `network(9)` / `destructive(8)` / `credential_exposure(7)` / `execution(6)` / `traversal(7，含结构层 2 条符号链接)` / `privilege_escalation(5)` / `mining(2)` / `structural(5)`。文档提到的四类里，"shell 注入"甚至**不是一个 category**（shell 相关的命中散在 `execution` / `obfuscation` / `supply_chain` 下），而 `persistence`（`:214`）、`obfuscation`（`:252`）、`supply_chain`（`:292`）、`credential_exposure`（`:353`）这些**高危类别文档一个字没提**。
+  注释里已经带省略号地列了五个值。**实测计数**（本轮解析 `THREAT_PATTERNS` `:114-390` 与结构检查 `:690-736`）：正则模式层 **131** 条、**12** 个不同 `category`，结构层再加 `structural` 一类，**合计 13 类**——`exfiltration(26)` / `persistence(20)` / `injection(19)` / `obfuscation(14)` / `supply_chain(10)` / `network(9)` / `destructive(8)` / `credential_exposure(7)` / `execution(6)` / `traversal(7，含结构层 2 条符号链接)` / `privilege_escalation(5)` / `mining(2)` / `structural(5)`。文档提到的四类里，"shell 注入"甚至**不是一个 category**（shell 相关的命中散在 `execution` / `obfuscation` / `supply_chain` 下），而 `persistence`（`:214`）、`obfuscation`（`:252`）、`supply_chain`（`:292`）、`credential_exposure`（`:353`）这些**高危类别文档一个字没提**。
 - **影响**：文档给的是"扫描器在看什么"的**四类直觉**，不是类别清单；照它去核对扫描覆盖面会**漏掉八类**，其中 `credential_exposure`（硬编码密钥/GitHub token，`critical`）与 `persistence`（写 agent 启动配置）都是会直接决定 `dangerous` 裁决的类别。读文档得把它当"举例"，权威清单在代码里。
 
 **② 文档只提 community 的 `--force` 边界，真实的 `trusted` 的 `dangerous` 也 block。**

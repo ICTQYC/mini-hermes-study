@@ -288,6 +288,45 @@ def test_frontmatter_parser_is_a_narrow_subset() -> None:
     check("围栏未闭合 → None", skill_utils.split_frontmatter("---\nname: x\n")[0] is None)
 
 
+def test_multiline_block_marker_is_dropped() -> None:
+    """★ frontmatter 多行块标记（`|` / `>`）⇒ 该键**整个视为不支持、丢弃**，
+    不把 `>` / `|` 当字面值（否则它会被当成描述进索引，真正的多行文本却丢了）。
+
+    这是解析器的**承诺与实现对齐**：docstring 的表说"多行块一律忽略"，
+    那就必须连标记一起丢 —— 只丢块内容（缩进行）会留下一个垃圾标量。
+    """
+    fm, _ = skill_utils.split_frontmatter(
+        "---\nname: x\ndescription: >\n  真正描述\n---\n正文\n")
+    check("`description: >` ⇒ 该键被**丢弃**（不是留一个字面 `>`）", fm == {"name": "x"}, str(fm))
+    fm2, _ = skill_utils.split_frontmatter(
+        "---\nname: y\ndescription: |\n  行一\n  行二\n---\n正文\n")
+    check("`description: |` 同理被丢弃", fm2 == {"name": "y"}, str(fm2))
+    fm3, _ = skill_utils.split_frontmatter(
+        "---\nname: keep\ndescription: 正常描述\ntags: >\n  a\n  b\n---\n正文\n")
+    check("只丢多行块那一键：`name` 与普通标量字段**不受影响**",
+          fm3 == {"name": "keep", "description": "正常描述"}, str(fm3))
+
+    # 值以 `>` 开头但**不是**纯标记（真文本）要照留，别误伤
+    fm4, _ = skill_utils.split_frontmatter(
+        "---\nname: t\ndescription: > 这是正常值\n---\n正文\n")
+    check("`description: > 文本`（`>` 后还有字）仍是正常值，不误伤",
+          fm4 == {"name": "t", "description": "> 这是正常值"}, str(fm4))
+
+    # ★ 发现层：多行块描述的技能应因**缺 description 被跳过并计数**，而不是以 `>` 进索引
+    reset_skills_dir()
+    write_skill("good", name="good", description="正常的")
+    write_skill("block_desc", raw="---\nname: block_desc\ndescription: >\n  本来想写的描述\n---\n正文\n")
+    scan = skill_utils.discover_skills()
+    check("多行块描述的技能 ⇒ 只有合规的进索引（它因缺 description 被跳过）",
+          [s.name for s in scan.skills] == ["good"], str([s.name for s in scan.skills]))
+    check("…并且被**计数**（skipped 里查得到，原因是缺 description）",
+          any(s.dir_name == "block_desc" and s.reason == "缺 description" for s in scan.skipped),
+          str([(s.dir_name, s.reason) for s in scan.skipped]))
+    idx = skill_utils.build_skill_index()
+    check("…它的名字与字面 `>` **都不进索引**",
+          "block_desc" not in idx and ">" not in idx, repr(idx))
+
+
 # ═══════════════════════════════ 4. 排序确定
 def test_index_order_is_by_name() -> None:
     reset_skills_dir()
@@ -347,9 +386,10 @@ def test_skill_view_refuses_to_escape_the_skills_dir() -> None:
 
     good = skill_view("ok")
     check("正常的技能照读（安全边界没有误伤）", good.get("content", "").strip() == "正常正文。")
-    check("名字非法时错误里给出**可用的技能名**（模型能自己改）", good.get("name") == "ok")
+    check("成功取回时返回里带着技能**名字**（模型可核对拿到了哪个）", good.get("name") == "ok")
     bad_payload = skill_view("../secret")
-    check("…非法名字的错误里也带着可用清单", "available" in bad_payload, str(bad_payload)[:90])
+    check("★ 名字非法时错误里给出**可用的技能名**（模型能自己改）",
+          "available" in bad_payload, str(bad_payload)[:90])
 
 
 # ═══════════════════════════════ 6. 工具闸门
