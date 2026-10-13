@@ -278,35 +278,10 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 **怎么亲手验证状态重建**：跑一个多步任务 → `/exit` → `./mini --resume` → `/todo`。
 清单应该还在（`revision` 不是 0）。这跟"网关每条消息新建 agent 也不丢状态"是同一套机制。
 
-## 改动落在哪、要跑哪些测试（第 12 章落地的「归属图」）
-
-真实版有一篇 `codebase-ownership`（= 《中文精译-12》第一部分）：每个子系统对应哪些源码目录、文档入口，
-以及"**测试镜像源码目录**"这条约定。mini 的 `tests/` 是**平铺**的（没有 `tests/tools/` 这种镜像层次），
-所以那条约定在这里只能落成**一张显式映射表**（下表由各测试文件实际 import 的模块反推，不是凭印象列的）。
-改代码前先看它，改完按行跑：
-
-| 你改了 | 必须跑 |
-|---|---|
-| `agent/context_compressor.py` · `agent/usage_anchor.py` | `tests/test_compression.py` |
-| `agent/micro_compaction.py` | `tests/test_micro_compaction.py`（+ `test_compression.py`：两条压缩路径共用摘要注入点） |
-| `providers/*` · `hermes_cli/runtime_provider.py` | `tests/test_provider_runtime.py` |
-| `agent/fallback.py` · `agent/auxiliary.py` · `hermes_cli/config.py` | `tests/test_fallback_and_aux.py` |
-| `run_agent.py` · `model_tools.py`（主循环 / 工具编排） | `tests/test_loop_mechanisms.py` |
-| 提示词装配（`agent/` 的 prompt builder / system prompt） | `tests/test_prompt_assembly.py` |
-| `tools/` · `tools/registry.py` · `toolsets.py` | `tests/test_tools_runtime.py` |
-| `gateway/*` · `hermes_cli/profiles.py` · `hermes_cli/main.py` | `tests/test_gateway.py` |
-| `hermes_state*.py`（会话存储） | `tests/test_session_storage.py` |
-| `hermes_state_errors.py` · `hermes_state_fts.py` · `hermes_state_repair.py` · `hermes_cli/sessions_cmd.py` | `tests/test_state_db_recovery.py`（+ `test_session_storage.py`） |
-| **新增/删除模块** · 动依赖 · 改模块白名单 | `tests/test_packaging.py`（**永远跑**：它是"发布前自检"） |
-
-三条从归属图带出来的约定，在 mini 里的对应物：
-
-1. **改动留在自己的子系统内** —— mini 有两道真实闸门：`tools/` 下的工具靠 AST 自动发现（加工具只需改
-   `tools/` + `toolsets.py`），而 `toolsets.py:53-70` 的 `TOOLSETS` 是**白名单**：不登记进 toolset 的工具，
-   模型永远看不到它。
-2. **"跑源码目录对应的镜像测试"** —— mini 没有镜像层次，用上面那张表；拿不准就全套跑（双解释器）。
-3. **两个子系统都涉及，更窄的那个拥有改动** —— 现成例子：`gateway/run_turn.py:75-84`，回合作用域绑在
-   **这条消息所属的** profile 上（更窄处），而不是网关启动时的 `self.home`。
+> **改动落在哪、要跑哪些测试（第 12 章落地的「归属图」）**：那张表在**仓库根 `AGENTS.md`** 里
+> ——「改动落在哪、要跑哪些测试」一节（11 行映射表：改哪儿 → 跑哪个 `tests/test_*.py`，
+> 含"新增/删除模块 ⇒ **永远**跑 `test_packaging.py`"这条硬约定，以及归属图三条约定在 mini 的对应物）。
+> 放在 `AGENTS.md` 是因为它是"开工手册"——新会话按上面「新会话开工三步」读它时就会看到。
 
 ## 发布前自检
 

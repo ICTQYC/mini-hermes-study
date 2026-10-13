@@ -75,6 +75,37 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 - 密钥只写在 `~/.hermes/.env`（和 `~/.mini-hermes/.env` 的非空覆盖位）。
 - **不进 shell 历史、不在聊天里出现值**；代码里取凭据必须走 `get_secret`，不用 `os.getenv`。
 
+## 改动落在哪、要跑哪些测试（第 12 章落地的「归属图」）
+
+真实版有一篇 `codebase-ownership`（= 《中文精译-12》第一部分）：每个子系统对应哪些源码目录、文档入口，
+以及"**测试镜像源码目录**"这条约定。mini 的 `tests/` 是**平铺**的（没有 `tests/tools/` 这种镜像层次），
+所以那条约定在这里只能落成**一张显式映射表**（下表由各测试文件实际 import 的模块反推，不是凭印象列的）。
+改代码前先看它，改完按行跑：
+
+| 你改了 | 必须跑 |
+|---|---|
+| `agent/context_compressor.py` · `agent/usage_anchor.py` | `tests/test_compression.py` |
+| `agent/micro_compaction.py` | `tests/test_micro_compaction.py`（+ `test_compression.py`：两条压缩路径共用摘要注入点） |
+| `providers/*` · `hermes_cli/runtime_provider.py` | `tests/test_provider_runtime.py` |
+| `agent/fallback.py` · `agent/auxiliary.py` · `hermes_cli/config.py` | `tests/test_fallback_and_aux.py` |
+| `run_agent.py` · `model_tools.py`（主循环 / 工具编排） | `tests/test_loop_mechanisms.py` |
+| 提示词装配（`agent/` 的 prompt builder / system prompt） | `tests/test_prompt_assembly.py` |
+| `tools/` · `tools/registry.py` · `toolsets.py` | `tests/test_tools_runtime.py` |
+| `gateway/*` · `hermes_cli/profiles.py` · `hermes_cli/main.py` | `tests/test_gateway.py` |
+| `hermes_state*.py`（会话存储） | `tests/test_session_storage.py` |
+| `hermes_state_errors.py` · `hermes_state_fts.py` · `hermes_state_repair.py` · `hermes_cli/sessions_cmd.py` | `tests/test_state_db_recovery.py`（+ `test_session_storage.py`） |
+| **新增/删除模块** · 动依赖 · 改模块白名单 | `tests/test_packaging.py`（**永远跑**：它是"发布前自检"） |
+
+三条从归属图带出来的约定，在 mini 里的对应物：
+
+1. **改动留在自己的子系统内** —— mini 有两道真实闸门：`tools/` 下的工具靠 AST 自动发现（加工具只需改
+   `tools/` + `toolsets.py`），而 `toolsets.py:53-70` 的 `TOOLSETS` 是**白名单**：不登记进 toolset 的工具，
+   模型永远看不到它。
+2. **"跑源码目录对应的镜像测试"** —— mini 没有镜像层次，用上面那张表；拿不准就全套跑
+   （双解释器跑法见上面「新会话开工三步」第 3 条）。
+3. **两个子系统都涉及，更窄的那个拥有改动** —— 现成例子：`gateway/run_turn.py:75-84`，回合作用域绑在
+   **这条消息所属的** profile 上（更窄处），而不是网关启动时的 `self.home`。
+
 ## 用户偏好（直接影响怎么干活）
 
 - 中文交流，**直接、不啰嗦**，别铺垫、别复述他的问题。
