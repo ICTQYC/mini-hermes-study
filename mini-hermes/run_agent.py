@@ -1065,26 +1065,60 @@ class AIAgent:
         else:
             print(f"（完整 traceback 已写入 {where}；加 --debug 可直接看到）", file=sys.stderr)
 
-    def _compressor(self):
-        """惰性建一个 ContextCompressor（第一次用到才建）。
+    def _build_default_compressor(self):
+        """内置默认压缩器（`context.engine == "compressor"` 或发现失败回落时用它）。
 
-        ★ 第 10 章：把 `compression.micro_compact` 一族配置读进来（A9 配置层）。
-          与真实版 `agent_init.py:1506-1515` 同款 —— 配置在**构造处**一次性读入，
-          压缩器内部不再碰磁盘（保持第 5 章\"纯内存\"的性质）。
+        ★ 第 14 章：这一段**逐字保留改造前的构造参数与顺序** ——
+          "零配置 = 与改造前逐字节一致"（不变量 I4）就挂在这里。
+          它现在是**注**给 `select_engine()` 的工厂（不是被写死调用），
+          所以"内置默认怎么构造"依然只有这一处。
+        """
+        from agent.context_compressor import DEFAULT_CONTEXT_LENGTH, ContextCompressor
+        from hermes_cli.config import get_compression_config
+
+        mc = get_compression_config()
+        return ContextCompressor(
+            context_length=int(getattr(self, "context_length", 0) or DEFAULT_CONTEXT_LENGTH),
+            status_callback=self._emit_status,
+            micro_compact=bool(mc["micro_compact"]),
+            micro_compact_every_n_turns=int(mc["micro_compact_every_n_turns"]),
+            micro_compact_defrag_threshold_tokens=int(mc["micro_compact_defrag_threshold_tokens"]),
+        )
+
+    def _compressor(self) -> "Any":
+        """惰性**查表**解析一个上下文引擎（第一次用到才建）。
+
+        ★ 第 14 章 A5：这是全文**唯一**的引擎构造点，也是本章切的接缝。
+          改造前这里是写死 `ContextCompressor(...)`；现在换成
+          `select_engine(context.engine, default_factory=…)`：
+
+          | `context.engine` | 结果 |
+          |---|---|
+          | 没配 / `"compressor"` | 内置默认压缩器（**行为与改造前逐字节一致**） |
+          | 已注册的引擎名 | 那个引擎（每次选择真读盘，拿新实例） |
+          | 未知名 / 坏目录 | 回落内置 + **有声警告**（经 `_emit_status` 打到用户眼前） |
+
+        ★ 其余调用点（`should_compress` / `compress` / `micro_compact`）**一个字没改**
+          —— 它们本来就是多态调用。缓存（`_compressor_obj`）语义不变：
+          一个 agent 实例内解析一次。
+
+        ★ 第 10 章：把 `compression.micro_compact` 一族配置读进来（构造处一次性读入，
+          压缩器内部不再碰磁盘 —— 保持第 5 章"纯内存"的性质）。这条现在住在
+          `_build_default_compressor()` 里。
         """
         c = getattr(self, "_compressor_obj", None)
         if c is None:
-            from agent.context_compressor import DEFAULT_CONTEXT_LENGTH, ContextCompressor
-            from hermes_cli.config import get_compression_config
+            from agent.engine_registry import select_engine
+            from hermes_cli.config import get_context_engine_name
 
-            mc = get_compression_config()
-            c = ContextCompressor(
-                context_length=int(getattr(self, "context_length", 0) or DEFAULT_CONTEXT_LENGTH),
-                status_callback=self._emit_status,
-                micro_compact=bool(mc["micro_compact"]),
-                micro_compact_every_n_turns=int(mc["micro_compact_every_n_turns"]),
-                micro_compact_defrag_threshold_tokens=int(mc["micro_compact_defrag_threshold_tokens"]),
+            selection = select_engine(
+                get_context_engine_name(),
+                default_factory=self._build_default_compressor,
             )
+            if selection.warning:
+                # ★ 回落**必须有声** —— 静默降级是这一章最坏的一种（用户以为换了引擎）。
+                self._emit_status(selection.warning)
+            c = selection.engine
             self._compressor_obj = c
         return c
 

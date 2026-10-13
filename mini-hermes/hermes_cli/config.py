@@ -76,11 +76,21 @@ KEY_MICRO_COMPACT_EVERY_N_TURNS = "micro_compact_every_n_turns"
 KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = "micro_compact_defrag_threshold_tokens"
 KEY_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = "proactive_prune_min_reclaim_tokens"
 
+# ── context 段（第 14 章：上下文引擎的选择键）────────────────────────────────
+# 与真实版 `context.engine` 同名同默认（`hermes_cli/config_defaults.py:1206`）。
+# ★ 默认 `"compressor"` 永远指向**内置**实现（上游逐字：*"compressor" = built-in
+#   lossy summarization; or a plugin name…*）。用户写别的名字才会走目录发现。
+KEY_CONTEXT = "context"
+KEY_CONTEXT_ENGINE = "engine"
+
 # 默认值（键不在文件里时就是它们 —— 与真实版逐字对齐）
 DEFAULT_MICRO_COMPACT = False                       # 默认关：每次 pass 打破缓存前缀
 DEFAULT_MICRO_COMPACT_EVERY_N_TURNS = 1             # ≥1，夹取见 get_compression_config
 DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = 2000
 DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = 4096   # 0 = 无最小回收量闸门
+
+# ★ 上下文引擎默认名（真实版 `config_defaults.py:1206`）：恒指向内置压缩器。
+DEFAULT_CONTEXT_ENGINE = "compressor"
 
 # ★ 辅助路由的两个魔法值（真实版 `_normalize_aux_provider` / `_resolve_task_provider_model`）：
 AUX_PROVIDER_AUTO = "auto"   # 继承主 agent 当前路由（未配置时的默认）
@@ -325,16 +335,36 @@ def get_compression_config(config: Optional[Dict[str, Any]] = None) -> Dict[str,
     }
 
 
+# ── context 段（第 14 章：选择上下文引擎）────────────────────────────────────
+
+def get_context_engine_name(config: Optional[Dict[str, Any]] = None) -> str:
+    """`context.engine` 的值（缺省 / 非串 / 空串 ⇒ ``"compressor"``）。**绝不抛。**
+
+    ★ 三段式与 `get_configured_provider` / `get_auxiliary_config` 一致：
+      `_section` 拿段（坏段按空 dict 处理）→ 取值 → 非字符串/空白一律落默认。
+      `load_config()` 已经是"坏配置按空配置"，所以这里连"文件不存在"都免判。
+    ★ 为什么默认值**在配置层**定死成 ``"compressor"``：这是"零配置 = 与改造前
+      逐字节一致"（不变量 I4）的载体 —— `run_agent._compressor()` 拿到
+      ``"compressor"`` 就走内置分支，一步不多。
+    """
+    value = _section(config, KEY_CONTEXT).get(KEY_CONTEXT_ENGINE)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return DEFAULT_CONTEXT_ENGINE
+
+
 __all__ = [
     "CONFIG_FILENAME",
     "KEY_AUXILIARY", "KEY_FALLBACK_MODEL", "KEY_FALLBACK_PROVIDERS", "KEY_MODEL",
     "KEY_COMPRESSION", "KEY_MICRO_COMPACT", "KEY_MICRO_COMPACT_EVERY_N_TURNS",
     "KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS", "KEY_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS",
+    "KEY_CONTEXT", "KEY_CONTEXT_ENGINE",
     "AUX_PROVIDER_AUTO", "AUX_PROVIDER_MAIN", "DEFAULT_AUX_PROVIDER", "DEFAULT_FALLBACK_CHAIN",
     "DEFAULT_MICRO_COMPACT", "DEFAULT_MICRO_COMPACT_EVERY_N_TURNS",
     "DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS", "DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS",
+    "DEFAULT_CONTEXT_ENGINE",
     "config_path", "load_config",
     "get_model_config", "get_configured_provider", "get_configured_model",
     "get_fallback_chain", "resolve_entry_api_key",
-    "get_auxiliary_config", "get_compression_config", "parse_config_int",
+    "get_auxiliary_config", "get_compression_config", "get_context_engine_name", "parse_config_int",
 ]

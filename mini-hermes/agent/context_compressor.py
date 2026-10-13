@@ -621,6 +621,17 @@ class ContextCompressor(MicroCompactionMixin, ContextEngine):
         """记下 provider 报出的真实用量（下一轮的锚点）。"""
         self.anchor.record(usage, messages)
 
+    @property
+    def name(self) -> str:
+        """引擎短标识 —— ★ 第 14 章：与配置值 `context.engine`、目录名三者一致。
+
+        内置默认压缩器的名字恒为 ``"compressor"``（真实侧逐字：
+        `agent/context_compressor.py:1786-1788`）。这个名字同时是
+        `engine_registry` 里的**保留名**：`<MINI_HOME>/engines/compressor/`
+        会被跳过，`select_engine("compressor")` 永远命中内置实现。
+        """
+        return "compressor"
+
     def describe(self) -> str:
         used, src = self.current_tokens([])
         return (

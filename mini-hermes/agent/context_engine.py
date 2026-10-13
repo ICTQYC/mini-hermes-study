@@ -21,8 +21,17 @@ Hermes 没法替所有人决定，所以它把这个决策做成一个可替换�
 ## mini 版与 Hermes 的差异（一句话）
 
 Hermes 有插件解析链（`plugins/context_engine/<name>/` → 通用插件系统 → 内置），
-mini 只保留"内置 + 显式指定的替代实现"这一步 —— 因为 mini 还没有插件系统。
-**接口形状保持一致**，这样以后加插件只是在解析处加两个分支。
+mini 只保留**一条**：`<MINI_HOME>/engines/<name>/` 目录发现 +
+`agent/engine_registry.py` 的选择 —— 因为 mini 没有通用插件系统，
+也没有第二个发现根（见第 14 章清单 B 批）。
+**接口形状保持一致**，这样以后加插件只是在解析处加分支。
+
+## name（第 14 章）
+
+选择/注册按 **`name`** 寻址（`context.engine` 里写的就是它），
+所以 `name` 是 `@abstractmethod`：每个引擎必须自报家门
+（`ContextCompressor.name == "compressor"`）。这一条决定
+`tests/test_context_engine.py` 的 I3/I7 两条不变量。
 """
 from __future__ import annotations
 
@@ -31,7 +40,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 class ContextEngine(ABC):
-    """上下文引擎。子类必须实现 `should_compress` 和 `compress`。"""
+    """上下文引擎。子类必须实现 `name`、`should_compress` 和 `compress`。"""
+
+    # ── 必需：名字（注册 / 选择的寻址键）────────────────────────────────────
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """引擎短标识（如 ``"compressor"`` / ``"lcm"``）—— 注册与选择按它寻址。
+
+        ★ 第 14 章补：与上游逐字一致（真实侧 `agent/context_engine.py:50-53`：
+          ``Short identifier (e.g. 'compressor', 'lcm').``）。
+
+        为什么必须是**必需项**、而且做成 ``@property`` + ``@abstractmethod``
+        （而不是给一个"派生自类名"的默认实现）：
+
+        - 名字是**选择键** —— `context.engine` 里写的就是它，`select_engine(name)`
+          也按它查表。靠类名派生 ⇒ 改一次类名就**静默改掉**用户的选择键；
+          ABC 强制每个引擎**自报家门**，这条不可能悄悄漂移。
+        - 用 **属性**而不是普通类属性：实例可以按需计算（普通属性做不到），
+          同时又保留"忘了实现 ⇒ 实例化即 `TypeError`"这条免费契约
+          （见 `tests/test_context_engine.py` 的不变量 I3）。
+        """
 
     # ── 必需的两项能力 ──────────────────────────────────────────────────────
 
