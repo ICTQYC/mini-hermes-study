@@ -570,7 +570,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 要害：规范不是"别用 grep"，而是"**别把 agent 已经包好的 shell 工具当成榜首出口**"——技能正文该点名 Hermes 原生工具，把 `grep→search_files` 这类映射**逐条写死**（`:34-36`），第三方 CLI 只降格到脚本文件（`:37`）。这条同时消掉了"模型按旧习惯敲 `grep`"这条漂移路径。
 
-**③ mini 的实现（现状）**：✅ **已对齐（纪律层，无代码）**。mini 的硬约束就是**零第三方依赖**——这条在 `mini-hermes/agent/skill_utils.py:174` 的 docstring 里被点名（*为了两个标量字段引入一个 YAML 解析器不值（本项目硬约束：零第三方依赖）*），并在 `model_tools.py` / `toolsets.py` / `profiles.py` 的"等真有需求再补"里一致体现。同一份纪律也让 mini 的 frontmatter 解析器只做**子集**（`skill_utils.py:159-187`：只认顶层 `key: value`，拒绝嵌套/列表/多行块）。
+**③ mini 的实现（现状）**：✅ **已对齐（纪律层，无代码）**。mini 的硬约束就是**零第三方依赖**——这条在 `mini-hermes/agent/skill_utils.py:174` 的 docstring 里被点名（*为了两个标量字段引入一个 YAML 解析器不值（本项目硬约束：零第三方依赖）*），并在 `model_tools.py` / `toolsets.py` / `profiles.py` 的"等真有需求再补"里一致体现。同一份纪律也让 mini 的 frontmatter 解析器只做**子集**（`mini-hermes/agent/skill_utils.py:159-187`：只认顶层 `key: value`，拒绝嵌套/列表/多行块）。
 
 **④ 与真实版的差别**：
 
