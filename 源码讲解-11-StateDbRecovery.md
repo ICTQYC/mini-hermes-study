@@ -160,45 +160,6 @@
 3. **结构损坏之后，还会不会继续往坏文件里写？** 不会。粘性标志（`hermes_state.py:574`）+ 写前守卫（`:1340-1343`，调用点 `:942`）让之后每次写入**立即失败且不碰文件**；`close()` 还不 checkpoint。（§0.5 · §五）
 4. **降级中搜索还能用吗？** 能。`search_messages` 在 `_fts_stale` 为真时走 LIKE 扫权威表（`hermes_state_search.py:1085-1087`），并把路径名标成 `like_scan_fts_stale`，让"降级在服务"一眼可见。（§0.6 · §三）
 
-**引用清单（本节）**
-
-- [真实 f5d1926110] `hermes_state_fts.py:28-31` — # Split DDL: the tab
-- [真实 f5d1926110] `hermes_state.py:941` — while True:
-- [真实 f5d1926110] `hermes_state_fts.py:353` — def _enter_fts_fail_
-- [真实 f5d1926110] `hermes_state_errors.py:100` — def is_fts_scoped_co
-- [真实 f5d1926110] `hermes_state.py:1249` — def _halt_db_corrupt
-- [真实 f5d1926110] `hermes_state_schema.py:545` — def _recover_stale_f
-- [真实 f5d1926110] `hermes_state_common.py:880` — FTS_STALE_KEY = "fts
-- [真实 f5d1926110] `hermes_state_common.py:1168` — @contextlib.contextm
-- [真实 f5d1926110] `hermes_state_errors.py:105-110` — A known result code 
-- [真实 f5d1926110] `hermes_state.py:1023-1035` — if (
-- [真实 f5d1926110] `hermes_state_fts.py:354-356` — """Detach corrupt FT
-- [真实 f5d1926110] `hermes_state_fts.py:363` — self._conn.execute("
-- [真实 f5d1926110] `hermes_state_fts.py:382-383` — self._drop_all_fts_t
-- [真实 f5d1926110] `hermes_state.py:963-969` — self._conn.commit()
-- [真实 f5d1926110] `hermes_state.py:1028-1029` — # Corrupt FTS shadow
-- [真实 f5d1926110] `hermes_state_errors.py:189-191` — no close-time checkp
-- [真实 f5d1926110] `hermes_state_schema.py:546-548` — """Atomically rebuil
-- [真实 f5d1926110] `hermes_state_schema.py:553-556` — if not admitted:
-- [真实 f5d1926110] `hermes_state.py:1235-1243` — def _is_structural_c
-- [真实 f5d1926110] `gateway/session_transcript.py:142-143` — ) -> None:
-- [真实 f5d1926110] `hermes_cli/doctor_state.py:200` — "state.db FTS write 
-- [真实 f5d1926110] `hermes_cli/doctor_state.py:206-212` — _STATE_DB_STRUCTURAL
-- [真实 f5d1926110] `hermes_cli/subcommands/sessions.py:160-168` — sessions_repair = se
-- [真实 f5d1926110] `hermes_cli/subcommands/sessions.py:186-197` — sessions_recover = s
-- [真实 f5d1926110] `hermes_state_schema.py:561-566` — def retry_deferred_f
-- [真实 f5d1926110] `hermes_state_schema.py:41-44` — # retry_deferred_fts
-- [真实 f5d1926110] `gateway/run.py:4650` — (1, "Deferred FTS re
-- [真实 f5d1926110] `hermes_state_search.py:1084-1087` — self._refresh_fts_st
-- [真实 f5d1926110] `hermes_state_search.py:883-885` — try:
-- [真实 f5d1926110] `hermes_state_schema.py:644` — rebuild_sql += "INSE
-- [真实 f5d1926110] `hermes_state_schema.py:958-963` — fts5_available = sel
-- [真实 f5d1926110] `hermes_state.py:574` — self._db_corrupt, se
-- [真实 f5d1926110] `hermes_state.py:1340-1343` — def _raise_if_db_cor
-- [真实 f5d1926110] `hermes_state.py:1449-1457` — retire_without_close
-- [真实 f5d1926110] `hermes_state.py:888-904` — def _reopen_after_cl
-- [真实 f5d1926110] `hermes_state_search.py:917-920` — syntax) so the calle
-
 ---
 ## §〇 差异表
 
@@ -230,75 +191,6 @@
 
 - 行 11 的"不抄"指的是**跨进程守卫**（准入锁 + 外部持有者侦查）不抄；mini 的**重建动作本身**是有的（`hermes_state_fts.py:187-217`），只是入口收窄成 `repair` 一条，不开库自动跑。别把这一行读成"mini 不会重建"。
 - （已解决）A1 轮在 `hermes_state_errors.py` 里留过一句"粘性隔离留给下一轮"的旧注释；A7（`d269953`）把隔离落在 `hermes_state.py` 之后，该注释已在 `950fe6c` 改成指明四个真实落点（`_halt_db_corrupt` / `_raise_if_db_corrupt` / `_reopen_after_close` / `close()`）。
-
-**引用清单（本节）**
-
-- [真实 f5d1926110] `hermes_state_errors.py:100` — def is_fts_scoped_co
-- [真实 f5d1926110] `hermes_state_errors.py:256-257` — if is_fts_scoped_cor
-- [真实 f5d1926110] `hermes_state_common.py:878-880` — # Set when a base/tr
-- [真实 f5d1926110] `hermes_state_fts.py:365-369` — self._conn.execute(
-- [真实 f5d1926110] `hermes_state_fts.py:353-403` — def _enter_fts_fail_
-- [真实 f5d1926110] `hermes_state.py:1020-1035` — if isinstance(exc, s
-- [真实 f5d1926110] `hermes_state_search.py:979-981` — def _search_messages
-- [真实 f5d1926110] `hermes_state_search.py:1085-1087` — if self._fts_stale:
-- [真实 f5d1926110] `hermes_state_search.py:884-885` — if self._fts_stale:
-- [真实 f5d1926110] `hermes_state_schema.py:958-963` — fts5_available = sel
-- [真实 f5d1926110] `hermes_state.py:574` — self._db_corrupt, se
-- [真实 f5d1926110] `hermes_state.py:1249-1267` — def _halt_db_corrupt
-- [真实 f5d1926110] `hermes_state.py:1340-1343` — def _raise_if_db_cor
-- [真实 f5d1926110] `hermes_state.py:888-904` — def _reopen_after_cl
-- [真实 f5d1926110] `hermes_state.py:1449-1457` — retire_without_close
-- [真实 f5d1926110] `hermes_state_schema.py:545-559` — def _recover_stale_f
-- [真实 f5d1926110] `hermes_state_common.py:1168-1224` — @contextlib.contextm
-- [真实 f5d1926110] `hermes_state_holders.py:187-232` — def foreign_state_db
-- [真实 f5d1926110] `hermes_state_schema.py:561-620` — def retry_deferred_f
-- [真实 f5d1926110] `hermes_state_schema.py:41-44` — # retry_deferred_fts
-- [真实 f5d1926110] `gateway/run.py:4566-4579` — def _housekeeping_de
-- [真实 f5d1926110] `gateway/run.py:4650` — (1, "Deferred FTS re
-- [真实 f5d1926110] `agent/session_persistence.py:256-262` — from hermes_state im
-- [真实 f5d1926110] `gateway/session_transcript.py:140-160` — def _divert_transcri
-- [真实 f5d1926110] `gateway/shutdown_flush.py:37` — flush_dir = get_herm
-- [真实 f5d1926110] `gateway/shutdown_flush.py:117` — def spool_dropped_tr
-- [真实 f5d1926110] `hermes_state_repair.py:478-490` — def _backup_db_file(
-- [真实 f5d1926110] `hermes_cli/subcommands/sessions.py:160-168` — sessions_repair = se
-- [真实 f5d1926110] `hermes_state_repair.py:849-860` — def repair_state_db_
-- [真实 f5d1926110] `hermes_cli/sessions_cmd.py:101-115` — def _cmd_repair(args
-- [真实 f5d1926110] `hermes_cli/backup.py:37` — _QUICK_SNAPSHOTS_DIR
-- [真实 f5d1926110] `hermes_cli/backup.py:1212` — def _create_quick_sn
-- [真实 f5d1926110] `hermes_cli/backup.py:1302` — def restore_quick_sn
-- [真实 f5d1926110] `hermes_state.py:405-408` — def _close_time_chec
-- [真实 f5d1926110] `hermes_state.py:1267-1281` — def _disable_close_t
-- [真实 f5d1926110] `hermes_state_common.py:321-322` — _FTS_TRIGGERS = ("me
-- [真实 f5d1926110] `hermes_state_common.py:872` — _FTS_CJK_TRIGGERS = 
-- [mini d269953] `hermes_state_errors.py:82-110` — def is_fts_scoped_co
-- [mini d269953] `hermes_state_errors.py:115-147` — def classify_persist
-- [mini d269953] `hermes_state_errors.py:149-170` — def is_structural_co
-- [mini d269953] `hermes_state_common.py:175-178` — CREATE TABLE IF NOT 
-- [mini d269953] `hermes_state_common.py:70-81` — FTS_STALE_KEY = "fts
-- [mini d269953] `hermes_state_fts.py:92-122` — def _read_fts_stale_
-- [mini d269953] `hermes_state_fts.py:146-182` — def enter_fts_fail_o
-- [mini d269953] `hermes_state.py:195-260` — def _execute_write(s
-- [mini d269953] `hermes_state.py:261-291` — def _degrade_or_rais
-- [mini d269953] `hermes_state_search.py:173` — if has_cjk(query) or
-- [mini d269953] `hermes_state_search.py:178` — route = "like_scan_f
-- [mini d269953] `hermes_state_search.py:191-212` — def _describe_search
-- [mini d269953] `hermes_state.py:140-148` — self._fts_stale = se
-- [mini d269953] `hermes_state.py:126-132` — #   `_db_corrupt`   
-- [mini d269953] `hermes_state.py:304-317` — def _halt_db_corrupt
-- [mini d269953] `hermes_state.py:319-327` — def _raise_if_db_cor
-- [mini d269953] `hermes_state.py:329-352` — def _reopen_after_cl
-- [mini d269953] `hermes_state.py:382-407` — def close(self) -> N
-- [mini d269953] `hermes_state_fts.py:187-217` — def rebuild_fts(self
-- [mini d269953] `hermes_state_repair.py:153-183` — def _backup_db_file(
-- [mini d269953] `hermes_state_repair.py:194-213` — def _verify_repair(d
-- [mini d269953] `hermes_cli/sessions_cmd.py:34-66` — def _check_only(db_p
-- [mini d269953] `hermes_cli/sessions_cmd.py:76-118` — def cmd_repair(args)
-- [mini d269953] `hermes_cli/main.py:85-99` — # ★ 第 11 章：`sessions
-- [mini d269953] `hermes_state_common.py:57-60` — _FTS_TRIGGERS = (
-- [mini d269953] `hermes_state_common.py:219-224` — CREATE VIRTUAL TABLE
-- [mini d269953] `hermes_state_common.py:242-262` — FTS_TRIGGER_STATEMEN
-- [mini d269953] `hermes_state_common.py:84-179` — SCHEMA_SQL = """
-- [mini d269953] `hermes_state_fts.py:125-133` — def _drop_fts_trigge
 
 ---
 
@@ -349,24 +241,6 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 | 同步触发器 | 6 个（+CJK 3）（`hermes_state_common.py:321-322`） | ⬜ 没做（量级）：3 个（`hermes_state_common.py:242-262`），形状对齐、套数不同 |
 | 边界的载体 | `state_meta` + `fts_stale` 持久标记（`hermes_state_common.py:878-880`） | ✅ 已对齐（d269953）：同表同键（`hermes_state_common.py:175-178` / `:70-81`） |
 | 重建归属 | 只在受守卫恢复窗口（准入锁 + 外部持有者守卫） | ⏭ 不抄（B1/B2）：只在 `repair` 显式路径（`hermes_state_fts.py:187-217`）；`rebuild_fts()` 不在任何活写 / 活搜路径上 |
-
-**引用清单（本节）**
-
-- [真实 f5d1926110] `hermes_state_common.py:878-880` — # Set when a base/tr
-- [真实 f5d1926110] `hermes_state_fts.py:28-31` — # Split DDL: the tab
-- [真实 f5d1926110] `hermes_state_fts.py:405-407` — # ── Chunked FTS reb
-- [真实 f5d1926110] `hermes_state_schema.py:644` — rebuild_sql += "INSE
-- [真实 f5d1926110] `hermes_state_schema.py:650` — + f"DELETE FROM stat
-- [mini d269953] `hermes_state_common.py:84-179` — SCHEMA_SQL = """
-- [mini d269953] `hermes_state_common.py:219-224` — CREATE VIRTUAL TABLE
-- [mini d269953] `hermes_state_common.py:242-262` — FTS_TRIGGER_STATEMEN
-- [mini d269953] `hermes_state_common.py:175-178` — CREATE TABLE IF NOT 
-- [mini d269953] `hermes_state_common.py:70-81` — FTS_STALE_KEY = "fts
-- [mini d269953] `hermes_state_common.py:267-269` — FTS_TRIGGER_SQL = ";
-- [mini d269953] `hermes_state_common.py:57-60` — _FTS_TRIGGERS = (
-- [mini d269953] `hermes_state_fts.py:125-133` — def _drop_fts_trigge
-- [mini d269953] `hermes_state_fts.py:146-182` — def enter_fts_fail_o
-- [mini d269953] `hermes_state_fts.py:187-217` — def rebuild_fts(self
 
 ---
 
@@ -427,17 +301,6 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 | 写前代际守卫 | `_raise_if_db_corrupt()` + `_halt_if_db_generation_changed()` 两道前置（`:359-360`） | 部分：写前守卫 `_raise_if_db_corrupt` 已接（A7）；**无** `generation_changed` 代际检测（⬜ 没做） |
 | 触发器复活防线 | 开库时 `if self._fts_stale: self._drop_all_fts_triggers(cursor)`（`hermes_state_schema.py:958-963`） | ✅ 已抄（见 §三末那段）：`hermes_state.py:140-151` |
 
-**引用清单（§二）**
-
-- 真实锚 `f5d1926110`：`hermes_state_fts.py:354-356`（`"""Detach corrupt FTS indexes so canonical...`）· `:363`（`self._conn.execute("BEGIN IMMEDIATE")...`）· `:355-356`（`trigger drop commit atomically: once triggers are absent...`）· `:405-407`（`One blocking rebuild held the write lock...`）· `:319-325`（`def _drop_fts_triggers(cursor: sqlite3.Cursor) -> None...`）· `:29-31`（`# Split DDL: the table/view is safe to ensure any time...`）
-- 真实：`hermes_state.py:1020-1035`（`if isinstance(exc, sqlite3.DatabaseError):...`）· `:1028-1029`（`# Corrupt FTS shadow tables fail every write...`）· `:1030-1031`（`if self._enter_fts_fail_open(exc): continue`）
-- 真实：`hermes_state_errors.py:100-122`（`def is_fts_scoped_corruption_error...`）· `:93`（`SQLITE_CORRUPT_VTAB = ...`）
-- 真实：`hermes_state_schema.py:212-216`（`def _drop_all_fts_triggers(self, cursor...`）· `:958-963`（`if self._fts_stale: self._drop_all_fts_triggers(cursor)`）
-- mini 锚 `d269953`：`hermes_state_errors.py:82-110`（`def is_fts_scoped_corruption_error(exc_or_str) -> bool:`）· `:115-147`（`def classify_persistence_error(exc_or_str) -> str:`）· `:149-170`（`def is_structural_corruption_error(exc: BaseException) -> bool:`）· `:173-193`（`class StateDbCorruptError(sqlite3.DatabaseError):`）· `:38-46`（`_DB_CORRUPTION_MARKERS = (`）· `:68`（`SQLITE_CORRUPT_VTAB = getattr(sqlite3, ...`）· `:79`（`_FTS_OBJECT_RE = re.compile(r"\bmessages_fts\w*")`）
-- mini：`hermes_state_fts.py:146-184`（`def enter_fts_fail_open(self, exc: BaseException) -> bool:`）· `:164`（`if not self._fts_enabled or not is_fts_scoped_corruption_error(exc):`）· `:92`（`def _read_fts_stale_marker(self) -> bool:`）· `:106`（`def _write_fts_stale_marker(self, conn...`）· `:114`（`def _clear_fts_stale_marker(self, conn...`）· `:125-133`（`def _drop_fts_triggers(cursor: sqlite3.Cursor) -> None:`）· `:136-143`（`def drop_all_fts_triggers(self) -> None:`）
-- mini：`hermes_state.py:242-249`（`except sqlite3.OperationalError as exc:`）· `:253-259`（`except sqlite3.DatabaseError as exc:`）· `:261`（`def _degrade_or_raise_on_corruption(self, exc: BaseException) -> bool:`）· `:279-280`（`if self.enter_fts_fail_open(exc): return True`）
-- mini：`hermes_state_common.py:70`（`FTS_STALE_KEY = "fts_stale"`）· `:57-67`（`_FTS_TRIGGERS = (`）
-
 ---
 
 ## §三 搜索降级与"活路径绝不 rebuild"
@@ -495,13 +358,6 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 **它非平凡在哪**：开库要跑 `_ensure_schema()`，而那里的建表/建触发器语句是 `CREATE TRIGGER IF NOT EXISTS` ——它是**幂等的**，不管「上次是谁把触发器摘了」，只要 `IF NOT EXISTS` 判定为不存在（因为确实被摘了），它就**把触发器原样复活**。若开库时不重新摘一次，那个 `fts_stale` 标记就变成**一句谎话**：「标记说索引在摘除中，库里却装着触发器」。而触发器一复活，写入又会去触达（可能仍坏的）影子表，fail-open 的不变量当场破。所以这条不是可选装饰，是**让标记保持诚实**的必需一步：**标记还在 = 这库里就不该有触发器**，每次开库都照此执行。
 
 **与真实版的关系**：它严格对应真实版的 `hermes_state_schema.py:958-963`——读 `state_meta` 标记后 `if self._fts_stale: self._drop_all_fts_triggers(cursor)`，同一句语义（「先前的进程因损坏摘了 FTS，在全量重建前保持摘除」）。所以在「抄没抄」的口径上，它是 ✅ 已抄，不是 mini 自创；说它「多出来」，是相对 fail-open（A1–A6）那批而言——它严格属于下一轮「开库受守卫重建」的**前半**，但**不做会自相矛盾**，所以提前照抄了这保守的一半（准入锁 / 外部持有者守卫 / 受守卫重建留待下一轮）。
-
-**引用清单（§三）**
-
-- 真实锚 `f5d1926110`：`hermes_state_search.py:916-920`（`"""Run one MATCH against *table*; ``None``...`）· `:979-981`（`def _search_messages_like_fallback(... "Search canonical messages while derived FTS state is stale."`）· `:1084-1087`（`self._refresh_fts_stale_state()` / `if self._fts_stale:`）· `:991-1001`（`def _refresh_fts_stale_state(self) -> None:`）· `:1106-1115`（`except sqlite3.DatabaseError as exc:`）· `:881-896`（`def _describe_search_path(self, query: str) -> str:`）· `:884-885`（`if self._fts_stale: return "like_scan_fts_stale"`）
-- 真实：`hermes_state_schema.py:958-963`（`if self._fts_stale: self._drop_all_fts_triggers(cursor)`）
-- mini 锚 `d269953`：`hermes_state_search.py:173`（`if has_cjk(query) or self._fts_stale:`）· `:178`（`route = "like_scan_fts_stale" if self._fts_stale else "like"`）· `:191-212`（`def _describe_search_path(self, query: str) -> str:`）· `:196-197`（`if self._fts_stale: return "like_scan_fts_stale"`）· `:237`（`def _search_like(self, query: str, route: str = "like", **kw: Any)...`）· `:26-32`（模块 docstring）· `:240-248`（`_search_like` docstring）
-- mini：`hermes_state.py:140-151`（`self._fts_stale = self._read_fts_stale_marker()` / `if self._fts_stale: ... self.drop_all_fts_triggers()`）
 
 ---
 
@@ -563,39 +419,6 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 | 外部持有者守卫 | 扫 `/proc/<pid>/fd` 比 inode（`hermes_state_holders.py:187-232`） | ⏭ 不抄：无多进程持有者模型 |
 | 长命退避重试 | `retry_deferred_fts_recovery`（`hermes_state_schema.py:561-620`）+ 网关 tick（`run.py:4566-4579/4650`） | ⏭ 不抄：无长命网关/节拍器 |
 
-**引用清单（§四）**
-
-- `hermes_state_schema.py:958` — `fts5_availab…`（开库读 FTS5 能力）
-- `hermes_state_schema.py:962` — `# A prio…`（"前一个进程摘过 → 保持摘除"注释）
-- `hermes_state_schema.py:1163` — `if self._fts…`（触发受守卫重建）
-- `hermes_state_schema.py:1167` — `else:`（重建失败 → 清四个 enable 标志）
-- `hermes_state_schema.py:546` — `"""Atomicall…`（`_recover_stale_fts` docstring）
-- `hermes_state_schema.py:549` — `foreign_hold…`（先过外部持有者守卫）
-- `hermes_state_schema.py:552` — `with fts_reb…`（再过准入锁）
-- `hermes_state_schema.py:644` — `rebuild_…`（`FTS5('rebuild')` 语句）
-- `hermes_state_schema.py:650` — `+ f"DELE…`（删 `fts_stale` 标记）
-- `hermes_state_schema.py:468` — `"""Record a …`（`_defer_stale_fts_for_holders` docstring）
-- `hermes_state_schema.py:562` — `"""Retry a d…`（退避重试 docstring，② 引文出处）
-- `hermes_state_schema.py:607` — `reco…`（非阻塞准入 `timeout=0.0`）
-- `hermes_state_schema.py:573` — `if not self.…`（`retry_deferred_fts_recovery` 早退守卫）
-- `hermes_state_common.py:1170` — `"""Serialize ful…`（准入锁 docstring）
-- `hermes_state_common.py:1179` — `lock_path = f"{d…`（锁文件名）
-- `hermes_state_common.py:1195` — `acquired…`（flock 获取）
-- `hermes_state_common.py:988` — `_FTS_REBUILD_LOCK_TI…`（120s 超时常量）
-- `hermes_state_common.py:989` — `_FTS_REBUILD_LOCK_PO…`（0.1s 轮询常量）
-- `hermes_state_holders.py:188` — `"""Return foreig…`（持有者守卫 docstring）
-- `hermes_state_holders.py:194` — `if _IS_WINDOWS:`（Windows 返回空）
-- `hermes_state_holders.py:199` — `db_path_str = os…`（realpath）
-- `hermes_state_holders.py:221` — `if sys.platform.…`（Linux 扫 `/proc`）
-- `hermes_state.py:430` — `def _foreign_state_db_holders…`（委托）
-- `gateway/run.py:4566` — `def _housekeeping_de…`（tick 回调定义）
-- `gateway/run.py:4650` — `(1, "Deferre…`（`every=1` 登记）
-- `gateway/run.py:4622` — `stop_event: thre…`（housekeeping `interval=60`）
-- `gateway/run.py:4663` — `stop_event.w…`（tick 等待）
-- `mini hermes_state.py:138` — `# ★ 开库时**读一次…`（mini 开库读标记）
-- `mini hermes_state.py:151` — `self.drop_all_fts_triggers()`（保持摘除）
-- `mini hermes_state_fts.py:187` — `def rebuild_fts(`（mini 唯一重建入口）
-
 ## §五 结构损坏：停写就是保护
 
 **① Hermes 怎么做的**：一句总纲 —— **Stopping the writes is the protection**。当一次活写报出**裸的** `SQLITE_CORRUPT` / `SQLITE_NOTADB`（`database disk image is malformed` / `file is not a database`）、且**没有 FTS 来源（provenance）**时，损坏在**权威 B 树 / schema / freelist** 里 —— 这不是"索引坏了"那种可以摘掉继续写的处境，而是"文件本身已经撕裂"。此时唯一安全的动作是**立刻住手**。Hermes 落四件事：
@@ -646,49 +469,6 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 | `close()` 跳检查点 | `close()` 隔离中不跑 `PRAGMA wal_checkpoint(PASSIVE)`（`:1449-1457`） | ✅ **天然满足**：mini `close()` 本就裸关、永不 checkpoint（`hermes_state.py:382-407`） |
 | `NO_CKPT_ON_CLOSE`（3.12+） | `setconfig(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)`（`:405-408/1267-1283`） | ⏭ 不抄（B8）：mini 无"要关掉的关停检查点" |
 | 3.11 三件套一起拷 | 无 `setconfig` ⇒ 内部检查点不可避免（`hermes_state_errors.py:199-200`） | 差异同上：mini 3.9–3.13 均裸关，无此告警面 |
-
-**引用清单（§五）**
-
-- `hermes_state.py:1249` — `def _halt_db_cor…`（② 引文出处）
-- `hermes_state.py:1250` — `"""Quarantin…`（`never run in-file repair here`）
-- `hermes_state.py:1251` — `self._db_cor…`（置粘性标志）
-- `hermes_state.py:1253` — `self._disabl…`（关 SQLite 关停检查点）
-- `hermes_state.py:1265` — `raise err fr…`（不重试、向上抛）
-- `hermes_state.py:942` — `self._ra…`（写前守卫调用点，每轮 while 顶部）
-- `hermes_state.py:1340` — `def _raise_if_db…`（写前守卫）
-- `hermes_state.py:574` — `self._db_cor…`（粘性标志初始化，逐字含注释）
-- `hermes_state.py:888` — `def _reopen_afte…`（拒重开）
-- `hermes_state.py:899` — `# assumption…`（"拒重开"注释）
-- `hermes_state.py:900` — `if self._db_…`（隔离则拒）
-- `hermes_state.py:1415` — `def close(self):`（close 入口）
-- `hermes_state.py:1449` — `reti…`（generation 先判）
-- `hermes_state.py:1450` — `quar…`（算隔离原因）
-- `hermes_state.py:1451` — `if q…`（隔离 ⇒ 跳过 checkpoint）
-- `hermes_state.py:1362` — `def _quarantine_…`（隔离原因）
-- `hermes_state.py:1369` — `if self._db_…`（返回 structural corruption）
-- `hermes_state.py:1235` — `def _is_structur…`（结构损坏判定）
-- `hermes_state.py:1033` — `if self._is_structural_corruption_error(exc):`（结构损坏分支）
-- `hermes_state.py:1034` — `self._halt_db_corrupt(exc)`（置粘性标志并抛）
-- `hermes_state.py:405` — `def _close_time_chec…`（能力探测）
-- `hermes_state.py:407` — `return (getattr(`（`setconfig` 是否可用）
-- `hermes_state.py:1267` — `def _disable_clo…`（关停检查点开关）
-- `hermes_state.py:1278` — `if flag is N…`（3.11 无 setconfig ⇒ return False）
-- `hermes_state.py:599` — `if n…`（3.11 → 保留未关连接）
-- `hermes_state_errors.py:186` — `class StateDbCorrupt…`（隔离异常类型）
-- `hermes_state_errors.py:199` — `survives on disk…`（3.11 内部检查点不可避免）
-- `hermes_state_errors.py:204` — `_STATE_DB_CORRUPT_MS…`（隔离文案）
-- `tests/hermes_state/test_state_db_corrupt_quarantine.py:3` — `Field evidence (the …`（50 分钟 / 15 页现场）
-- `mini hermes_state.py:304` — `def _halt_db_cor…`
-- `mini hermes_state.py:315` — `self._db_cor…`（置粘性标志）
-- `mini hermes_state.py:317` — `raise self._…`
-- `mini hermes_state.py:319` — `def _raise_if_db…`
-- `mini hermes_state.py:326` — `if self._db_…`
-- `mini hermes_state.py:329` — `def _reopen_afte…`
-- `mini hermes_state.py:344` — `if self._db_…`（隔离则拒重开）
-- `mini hermes_state.py:382` — `def close(self) …`
-- `mini hermes_state.py:401` — `# 显式声明：这条关停路…`（"无 checkpoint"声明）
-- `mini hermes_state.py:402` — `self._closed…`
-- `mini hermes_state.py:130` — `self._db_cor…`（标志初始化）
 
 ## §六 隔离的边界（两种"认不出的损坏"）
 
@@ -744,23 +524,6 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 | `unknown` 兜底 | `classify_persistence_error` 末尾 `return "unknown"`（`hermes_state_errors.py:264`） | ✅ 已抄（`hermes_state_errors.py:146`） |
 | `vtable constructor failed: messages_fts`（码 11） | 实测 `classify = unknown` ⇒ 原样抛 | **同一结果**（实测 `classify = unknown` ⇒ 原样抛）—— **共同边界** |
 | 开库撞 NOTADB | 隔离判定只在 live write（`hermes_state.py:1020-1035`）；新句柄 open 抛裸错 | 同：新句柄 open 抛 SQLite 裸 `DatabaseError`（真跑 `:186-192`） |
-
-**引用清单（§六）**
-
-- `hermes_state_errors.py:88` — `_DB_CORRUPTION_MARKE…`（词表定义）
-- `hermes_state_errors.py:89` — `"malformed", "fi…`（四个子串）
-- `hermes_state_errors.py:100` — `def is_fts_scoped_co…`（FTS 归因谓词）
-- `hermes_state_errors.py:105` — `A known result c…`（"码优先于文本"）
-- `hermes_state_errors.py:236` — `def classify_persist…`（分类函数）
-- `hermes_state_errors.py:256` — `if is_fts_scoped…`（先做 FTS 分流）
-- `hermes_state_errors.py:258` — `text = str(exc_o…`（文本兜底）
-- `hermes_state_errors.py:264` — `return "unknown"`（边界终点）
-- `mini hermes_state_errors.py:112` — `PERSISTENCE_ERROR_CA…`（桶集合）
-- `mini hermes_state_errors.py:139` — `if any(marker in…`（词表命中 → corrupt）
-- `mini hermes_state_errors.py:146` — `return "unknown"`（同上兜底）
-- `mini hermes_state.py:256` — `#   它既不是 FTS 归因、也不在…`（"原样抛、行为不变"注释）
-- `mini demos/ch11_real_run.py:146` — `#   \`vtable construc…`（探针 A 实测说明）
-- `mini demos/ch11_real_run.py:191` — `print(f"  · 边界（如实）：新…`（开库边界实测）
 
 ---
 
@@ -827,45 +590,6 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | 策略阶梯 | 4 条（`rebuild_fts`/`reindex_btree`/`dedup_schema`/`drop_fts_rebuild`+VACUUM） | 只留 `rebuild_fts` |
 | 三段验证 | 文档 §3 三条 | 逐字实现（`_verify_repair:194`） |
 | 修复账本/去重 | `.repair-attempts.json`（`_MAX_PERSISTENT_REPAIR_ATTEMPTS=3`）+ 备份去重 + 保留上限 3 | 不做（纯运维防御；一次真实事故攒了 89GB 雷同备份） |
-
-**引用清单（本节）**
-
-| 引用 | 该行前 20 字（或身份） |
-|---|---|
-| `hermes_cli/subcommands/sessions.py:160-207` | `sessions_repair = sessions_subparsers.add_parser(` |
-| `hermes_cli/subcommands/sessions.py:166` | `--check-only`（help="Only report whether…"） |
-| `hermes_cli/subcommands/sessions.py:168` | `--no-backup`（help="Skip the timestamped backup…"） |
-| `hermes_cli/subcommands/sessions.py:186` | `sessions_recover = sessions_subparsers.add_parser(` |
-| `hermes_state_repair.py:478` | `def _backup_db_file(db_path: Path) -> "Tuple[…` |
-| `hermes_state_repair.py:505` | `backup_path = db_path.with_name(f"{db_path.name}.malformed-backup-…` |
-| `hermes_state_repair.py:664` | `def _copy_database_snapshot(source_path: Path, destina…` |
-| `hermes_state_repair.py:684` | `source.backup(destination, pages=256, progress=_check_de…` |
-| `hermes_state_repair.py:849` | `def repair_state_db_schema(db_path: Path, *, backup: bo…` |
-| `hermes_state_repair.py:966` | `def _repair_state_db_schema_locked(` |
-| `hermes_state_repair.py:969-981` | `Strategies run on a SCRATCH COPY, copied back…`（docstring） |
-| `hermes_state_repair.py:982` | `scratch = db_path.with_name(f"{db_path.name}.repair-scratch")` |
-| `hermes_state_repair.py:1008` | `_copy_database_snapshot(db_path, scratch, source_connection=…` |
-| `hermes_state_repair.py:1018-1019` | `# Never ``os.replace`` the live DB: Windows rejects…` |
-| `hermes_state_repair.py:1021` | `_copy_database_snapshot(scratch, db_path, destination_conne…` |
-| `hermes_state_repair.py:1120` | `_REPAIR_STRATEGIES = (` |
-| `hermes_state_repair.py:724` | `def state_db_has_structural_damage(db_path: Path) -> bool:` |
-| `hermes_state_repair.py:748` | `def _db_opens_cleanly(db_path: Path) -> Optional[str]:` |
-| `hermes_cli/sessions_cmd.py:101` | `def _cmd_repair(args):` |
-| `hermes_cli/sessions_cmd.py:144` | `def _cmd_recover(args):` |
-| `hermes_cli/doctor_state.py:206` | `_STATE_DB_STRUCTURAL_ISSUE = (` |
-| `hermes_cli/doctor_state.py:241` | `from hermes_state_repair import state_db_has_structural_damage` |
-| `hermes_cli/session_recovery.py:1112` | `def recover_session_database(` |
-| `mini: hermes_state_repair.py:61` | `def _db_opens_cleanly(db_path) -> Optional[str]:` |
-| `mini: hermes_state_repair.py:153` | `def _backup_db_file(db_path) -> Tuple[Optional[Path], Opt…` |
-| `mini: hermes_state_repair.py:194` | `def _verify_repair(db_path, before_rows: int) -> Dict[…` |
-| `mini: hermes_state_repair.py:226` | `def repair_state_db_schema(db_path, *, backup: bool = True)…` |
-| `mini: hermes_state_repair.py:254` | `reason = _db_opens_cleanly(path)` |
-| `mini: hermes_state_repair.py:260` | `if backup:`（+ `_backup_db_file`） |
-| `mini: hermes_state_repair.py:274` | `db.rebuild_fts()` |
-| `mini: hermes_cli/sessions_cmd.py:34` | `def _check_only(db_path) -> int:` |
-| `mini: hermes_cli/sessions_cmd.py:76` | `def cmd_repair(args) -> int:` |
-| `mini: hermes_cli/sessions_cmd.py:128` | `def add_sessions_parser(sub) -> None:` |
-| `mini: hermes_cli/main.py:88-99` | `from hermes_cli.sessions_cmd import add_sessions_parser` … |
 
 ---
 
@@ -945,21 +669,6 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 
 **真问题 2 · 一种**任何一张词表都认不出**的现场错误：`vtable constructor failed`。** 路径 ② 里，若先走 `append_message`，SQLite 撞上的不是"malformed"，而是 `DatabaseError: vtable constructor failed: messages_fts`（`sqlite_errorcode = 11`）——因为要编译 FTS 同步触发器就得构造 FTS5 虚表。这行文案**既不含 FTS 损坏词、也不含结构损坏词**，上游词表 `("malformed", "file is not a database", "not a database", "database corruption")`（`hermes_state_errors.py:88-90`）同样认不出 ⇒ **两个桶都不进 ⇒ 原样抛**（`demos/ch11_real_run.py:145-155` 如实记为"与上游同边界，非 mini 缺陷"）。**这才是 §2 的场景**：改走**不牵动 FTS vtable** 的写法（`create_session` 只碰 `sessions` 表），SQLite 读坏页得到 `database disk image is malformed`（含词表里的 `malformed`）⇒ 三桶归位、抛 `StateDbCorruptError`。另有一条**开库侧**的边界同样如实记下：新句柄 open 撞上"文件根本不是库"时抛的是 SQLite 裸错（`DatabaseError`）——上游 §2 的隔离判定接在 **live write** 上，开库这一侧不在它范围内（这条进差异表）。
 
-**引用清单（本节）**
-
-| 引用 | 该行前 20 字（或身份） |
-|---|---|
-| `mini: hermes_state_repair.py:120-124` | `# ★ 逐项隔离：**一句读不了不能把整份体检带崩**。` |
-| `mini: hermes_state_repair.py:146-148` | `# 健康 = 读得到标记 · 标记不在场 · 触发器齐 · 行数读得出来` |
-| `mini: hermes_cli/sessions_cmd.py:50-52` | `print("  fts_stale  ❓ 读不到（%s）—— 这是**旧库**…` |
-| `mini: hermes_cli/sessions_cmd.py:69-71` | `if not v.get("marker_readable"):` `print("\n结论：**不健康**（旧库缺 state_meta 表 …` |
-| `mini: tests/test_state_db_recovery.py:764` | `def test_legacy_db_without_state_meta_is_diagnosed_not_confused()` |
-| `mini: tests/test_state_db_recovery.py:799-823` | `GROUPS = [`（12 组登记表） |
-| `mini: demos/ch11_real_run.py:145-155` | `# 探针 A：先走 append_message —— 它要编译 FTS 同步触发器…` |
-| `mini: demos/ch11_real_run.py:186-192` | `# 开库路径的边界（如实记）：新句柄撞上"文件根本不是库"时抛…` |
-| `hermes_state_errors.py:88-90` | `_DB_CORRUPTION_MARKERS = (`（真实侧词表） |
-| `mini: hermes_state_errors.py:38-46` | `_DB_CORRUPTION_MARKERS = (`（mini 词表） |
-
 ---
 
 ## §九 差距清单（A 批 / B 批）
@@ -994,43 +703,6 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | **B8** | `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（3.12+，关掉 SQLite 自己的关停检查点） | `hermes_state.py:405-408/1267/1275-1281` | mini `close()` 本就**不 checkpoint** ⇒ 没有"要关掉的关停检查点"；**差异表要写**（这正是上游 §2 的第二道防线） |
 | **B9** | 参数面与命名细节（`--output` / 备份名 `state.db.malformed-backup-<stamp>` / `--no-backup` 语义） | `hermes_cli/subcommands/sessions.py:166-207` | 细节；A8 保留 `--check-only` 与"默认先备份"两条即可 |
 
-**引用清单（本节）**
-
-| 引用 | 该行前 20 字（或身份） |
-|---|---|
-| `hermes_state_errors.py:100-122` | `def is_fts_scoped_corruption_error(exc_or_str) -> bool:` |
-| `hermes_state_errors.py:88-90` | `_DB_CORRUPTION_MARKERS = (` |
-| `hermes_state_common.py:878-880` | `FTS_STALE_KEY = "fts_stale"` |
-| `hermes_state_fts.py:353` | `def _enter_fts_fail_open(self, exc: BaseException) -> bool:` |
-| `hermes_state_fts.py:354-356` | `"""…the FTS rebuild must never run here…"""` |
-| `hermes_state.py:1020` | `if isinstance(exc, sqlite3.DatabaseError):` |
-| `hermes_state.py:1028-1029` | `# never rebuild here`（写路径不变量） |
-| `hermes_state.py:1249` | `def _halt_db_corrupt(self, exc: BaseException) -> None:` |
-| `hermes_state.py:1340` | `def _raise_if_db_corrupt(self) -> None:` |
-| `hermes_state.py:888` | `def _reopen_after_close_locked(self, context: str = "write") -> None:` |
-| `hermes_state.py:1449-1457` | `if quarantine_reason is not None:`（跳过 close-time checkpoint） |
-| `hermes_state.py:405-408` | `def _close_time_checkpoint_configurable() -> bool:` |
-| `hermes_state_holders.py:187-232` | 外部持有者守卫（扫 `/proc/<pid>/fd`） |
-| `hermes_cli/backup.py:37` | `_QUICK_SNAPSHOTS_DIR = "state-snapshots"` |
-| `hermes_cli/backup.py:1212` | `def _create_quick_snapshot_locked(label, home, keep, max_file_size):` |
-| `hermes_state_search.py:1085-1087` | 条件 `self._fts_stale`（走 LIKE 回退） |
-| `hermes_state_search.py:918-920` | 搜索侧"活路径不许重建"注释 |
-| `hermes_state_schema.py:561-620` | 长命网关退避重试 |
-| `gateway/shutdown_flush.py:37/117` | `flush_dir = get_hermes_home() / "pending_messages"` / `spool_dropped_transcript_message` |
-| `mini: hermes_state_errors.py:82` | `def is_fts_scoped_corruption_error(exc_or_str) -> bool:` |
-| `mini: hermes_state_common.py:175` | `CREATE TABLE IF NOT EXISTS state_meta (` |
-| `mini: hermes_state_common.py:70` | `FTS_STALE_KEY = "fts_stale"` |
-| `mini: hermes_state_fts.py:92/106` | `_read_fts_stale_marker` / `_write_fts_stale_marker` |
-| `mini: hermes_state_fts.py:146` | `def enter_fts_fail_open(self, exc: BaseException) -> bool:` |
-| `mini: hermes_state.py:130` | `self._db_corrupt, self._db_corrupt_reason = False, ""` |
-| `mini: hermes_state.py:304` | `def _halt_db_corrupt(self, exc: BaseException) -> None:` |
-| `mini: hermes_state.py:319` | `def _raise_if_db_corrupt(self) -> None:` |
-| `mini: hermes_state.py:329` | `def _reopen_after_close(self, context: str = "write") -> sqlite3.Connection:` |
-| `mini: hermes_state.py:382` | `def close(self) -> None:` |
-| `mini: hermes_state_search.py:173` | `if has_cjk(query) or self._fts_stale:` |
-| `mini: hermes_state_repair.py:226` | `def repair_state_db_schema(db_path, *, backup: bool = True)…` |
-| `mini: hermes_cli/sessions_cmd.py:34/76/128` | `_check_only` / `cmd_repair` / `add_sessions_parser` |
-
 ---
 
 ## 附录 A · 从正文挪过来的引用
@@ -1040,7 +712,6 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 > - **真实侧**锚 `f5d1926110`：`git -C $HOME/.hermes/hermes-agent show f5d1926110:<path> | sed -n 'Np'`
 > - **mini 侧**锚当前 HEAD（`d269953`，工作区干净）：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条打印核对过**；括号里的说明只是「它在说什么」，不当逐字引文用。
-> - 校对说明：主代理给的 mini 侧行号有几处是**范围起点**的近似值，本轮按 `sed` 真身校正到**函数定义行**（例：mini「开库保持摘除」的真身在 `hermes_state.py:138-151`，不是 `:114-124`；`:114-124` 是那两个标志的注释块；`_backup_db_file` 在 `:153` 不是 `:138`；`cmd_repair` 在 `:76` 不是 `:69`）。
 
 ### 真实侧（锚 `f5d1926110`）
 

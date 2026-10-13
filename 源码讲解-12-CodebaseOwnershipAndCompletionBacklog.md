@@ -181,43 +181,6 @@
 3. **一个忙会话被 requeue 的是什么？** **结构化事件**，不是渲染后的批字符串（`session_notifications.py:508-513` 放回的是 `event`）。requeue 字符串会重复渲染、丢归属、令消费复查失效。（§0.5 · §0.7）
 4. **批或投递状态会不会被写进系统提示词？** 不会。批文本作为**回合输入**进入（CLI `_pending_input` / TUI `_run_prompt_submit`），系统提示词必须字节稳定（`tui_gateway/prompt_turn.py:541-542`、`agent/prompt_builder.py:591`、`agent/AGENTS.md:125`）——这是**缓存前缀不变式**，不是"省 token"。（§0.4 · §0.6）
 
-**引用清单（本节）**
-
-- [真实 f5d1926110] `tools/process_registry_notifications.py:14-17` — @dataclass(frozen=T
-- [真实 f5d1926110] `tools/process_registry_notifications.py:39-51` — def group_process_not
-- [真实 f5d1926110] `tools/process_registry_notifications.py:28-29` — if len(messages) == 1
-- [真实 f5d1926110] `tools/process_registry_notifications.py:20-22` — return [(event, text) 
-- [真实 f5d1926110] `tools/process_registry.py:1382-1384` — if was_running and sess
-- [真实 f5d1926110] `tools/process_registry.py:1393-1396` — # Stable producer ident
-- [真实 f5d1926110] `tools/process_registry.py:546-547` — import queue as _queue_m
-- [真实 f5d1926110] `tools/process_registry.py:554-556` — # Completions the agent
-- [真实 f5d1926110] `tools/process_registry.py:557-563` — # Sessions merely *observ
-- [真实 f5d1926110] `tools/process_registry.py:1538-1547` — def _drain_should_skip(
-- [真实 f5d1926110] `tools/process_registry.py:1601-1604` — _evt_sid = evt.get("sess
-- [真实 f5d1926110] `tools/process_registry.py:1574-1584` — def drain_notifications(
-- [真实 f5d1926110] `tools/process_registry.py:1358` — def _move_to_finished(sel
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:22-43` — def _drain_process_no
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:51-54` — rendered = user_input.
-- [真实 f5d1926110] `cli.py:3467` — lambda: self._drain_proce
-- [真实 f5d1926110] `cli.py:3602-3603` — with suppress(Exception):
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:94-103` — def _session_owns_noti
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:106-108` — def _notification_event
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:451-452` — unowned (addressed but
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:508-513` — for event, _text in not
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:518-519` — if text is None:
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:533-544` — def _notif_handle_ready
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:663-673` — try:
-- [真实 f5d1926110] `tui_gateway/prompt_turn.py:434-452` — # Safety net for comple
-- [真实 f5d1926110] `tui_gateway/prompt_turn.py:541-542` — # Per-turn API-message n
-- [真实 f5d1926110] `gateway/run_notifications.py:1527` — ("_completion_notificatio
-- [真实 f5d1926110] `gateway/run_notifications.py:1420-1448` — def _format_coalesced_p
-- [真实 f5d1926110] `gateway/run_notifications.py:1521-1543` — async def _enqueue_proce
-- [真实 f5d1926110] `tools/async_delegation.py:344-352` — def claim_event_delivery(
-- [真实 f5d1926110] `tools/async_delegation.py:399-406` — def complete_completion
-- [真实 f5d1926110] `agent/prompt_builder.py:591` — A per-turn fact, not a p
-- [真实 f5d1926110] `agent/AGENTS.md:125` — message-shape invariant
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:90` — sys.exit({7 if index ==
-
 ---
 
 ## §〇 差异表
@@ -245,55 +208,6 @@
 
 - 行 10 与行 2 常被混为一谈，但它们是**两套相反的机制**：本章的 `group_process_notifications` **无窗口**（只合并已就绪的连续 completion），网关的 `run_notifications.py` **有 0.1s 短窗**。文档明确说本章改动**不替代**后者；抄 mini 时"抄形状不抄窗"，别把两者合并。
 - 行 12 的"⏭ 不抄"指的是**没有逐回合通知这条载体**（无从落纪律）；不是说 mini 违反了字节稳定不变式——mini 的 `tests/test_prompt_assembly.py` 本就守"字节稳定性"（README `:315`）。
-
-**引用清单（本节）**
-
-- [真实 f5d1926110] `tools/process_registry_notifications.py:14-36` — @dataclass(frozen=T
-- [真实 f5d1926110] `tools/process_registry_notifications.py:39-51` — def group_process_not
-- [真实 f5d1926110] `tools/process_registry_notifications.py:20-22` — return [(event, text) 
-- [真实 f5d1926110] `tools/process_registry_notifications.py:26-27` — if not messages:
-- [真实 f5d1926110] `tools/process_registry.py:1382-1398` — if was_running and sess
-- [真实 f5d1926110] `tools/process_registry.py:546-547` — import queue as _queue_m
-- [真实 f5d1926110] `tools/process_registry.py:554-563` — # Completions the agent
-- [真实 f5d1926110] `tools/process_registry.py:1796-1799` — if session.exited:
-- [真实 f5d1926110] `tools/process_registry.py:1762-1764` — "total_lines": total_lin
-- [真实 f5d1926110] `tools/process_registry.py:1845-1852` — def kill_process(
-- [真实 f5d1926110] `tools/process_registry.py:1870-1887` — if consume_output:
-- [真实 f5d1926110] `tools/process_registry.py:1538-1547` — def _drain_should_skip(
-- [真实 f5d1926110] `tools/process_registry.py:1601-1604` — _evt_sid = evt.get("sess
-- [真实 f5d1926110] `tools/process_registry.py:1726-1731` — if session.exited:
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:22-43` — def _drain_process_no
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:45-63` — def _tui_unwrap_input
-- [真实 f5d1926110] `cli.py:3467` — lambda: self._drain_proce
-- [真实 f5d1926110] `cli.py:3602-3603` — with suppress(Exception):
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:38-46` — def _notif_resolve_eve
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:80-91` — def _notif_other_profi
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:94-103` — def _session_owns_noti
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:106-108` — def _notification_event
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:508-513` — for event, _text in not
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:518-519` — if text is None:
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:533-544` — def _notif_handle_ready
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:663-673` — try:
-- [真实 f5d1926110] `tui_gateway/prompt_turn.py:434-452` — # Safety net for comple
-- [真实 f5d1926110] `tui_gateway/prompt_turn.py:541-542` — # Per-turn API-message n
-- [真实 f5d1926110] `gateway/run_notifications.py:1527` — ("_completion_notificatio
-- [真实 f5d1926110] `gateway/run_notifications.py:1521-1543` — async def _enqueue_proce
-- [真实 f5d1926110] `gateway/run_notifications.py:1420-1448` — def _format_coalesced_p
-- [真实 f5d1926110] `agent/prompt_builder.py:591` — A per-turn fact, not a p
-- [真实 f5d1926110] `agent/AGENTS.md:125` — message-shape invariant
-- [真实 f5d1926110] `completion-backlog-delivery.md:31-32` — **Noninteractive/headle
-- [真实 f5d1926110] `completion-backlog-delivery.md:42-49` — `evals/completion_back
-- [真实 f5d1926110] `AGENTS.md:346` — - **Placement mirrors t
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:90` — sys.exit({7 if index ==
-- [mini 653b627] `tools/terminal.py:94-119` — def terminal_tool(command
-- [mini 653b627] `cli.py:152` — def _on_text(self, text:
-- [mini 653b627] `run_agent.py:370-371` — if self.text_callback:
-- [mini 653b627] `gateway/run_turn.py:75-84` — # ★ 作用域绑定：整个回合
-- [mini 653b627] `gateway/delivery.py:47-63` — def deliver(self, source:
-- [mini 653b627] `README.md:279` — ## 改动落在哪、要跑哪些测
-- [mini 653b627] `README.md:286-298` — | 你改了 | 必须跑 |
-- [mini 653b627] `README.md:300-307` — 三条从归属图带出来的约定
-- [mini 653b627] `README.md:322` — # 全套件：1,309 条断言
 
 ---
 
@@ -348,27 +262,6 @@
 | 约定 1（留在子系统内） | 靠"插件不得改核心"的**设计坏味道**判断 | ✅ **部分可落地（形态不同）**：mini 是 `tools/` + `toolsets.py` **两道真实闸门**（`toolsets.py:53-70`），但没有插件系统 ⇒ 真实版那个具体场景不存在 |
 | 约定 3（更窄的拥有） | "窄腰"论（`AGENTS.md` 评审准则） | ✅ **可落地为一条原则**：已有现成例子 `gateway/run_turn.py:75-84`，只是缺一个正式的名字 |
 | 落点文件 | 仓库根 `AGENTS.md`（评审准则 `:31`）+ 镜像测试规则 `:346` | **README.md**（`:279` 起）；`mini-hermes/AGENTS.md` **不存在**，根 `AGENTS.md` 是受保护文件（未获审批） |
-
-**引用清单（本节）**
-
-- [真实 f5d1926110] `codebase-ownership.md:8` — Hermes is a large repo
-- [真实 f5d1926110] `codebase-ownership.md:10-28` — | Subsystem | Source dir
-- [真实 f5d1926110] `codebase-ownership.md:30-34` — A few conventions that
-- [真实 f5d1926110] `AGENTS.md:31-36` — ## Contribution Rubric —
-- [真实 f5d1926110] `AGENTS.md:43` — grow: expansive at the ed
-- [真实 f5d1926110] `AGENTS.md:346` — - **Placement mirrors t
-- [mini 653b627] `README.md:279` — ## 改动落在哪、要跑哪些测
-- [mini 653b627] `README.md:283` — 所以那条约定在这里只能落成
-- [mini 653b627] `README.md:286-298` — | 你改了 | 必须跑 |
-- [mini 653b627] `README.md:297` — | `hermes_state_errors.py` ·
-- [mini 653b627] `README.md:294` — | `tools/` · `tools/registry
-- [mini 653b627] `README.md:300-307` — 三条从归属图带出来的约定
-- [mini 653b627] `README.md:303` — `toolsets.py:53-70` 的 `TOOLSETS`
-- [mini 653b627] `README.md:305` — 2. **"跑源码目录对应的镜像测试
-- [mini 653b627] `README.md:306-307` — 3. **两个子系统都涉及
-- [mini 653b627] `README.md:22` — | 11 | `state-db-recovery.md`
-- [mini 653b627] `toolsets.py:53-70` — TOOLSETS: Dict[str, Dict
-- [mini 653b627] `gateway/run_turn.py:75-84` — # ★ 作用域绑定：整个回合
 
 ---
 
@@ -431,15 +324,6 @@
 | 合并出的一条批 | `ProcessNotificationBatch.render`：单条保原文、多条加 `[IMPORTANT: N …]` 头、失败与成功同批（`:24-33`） | ⏭ 不抄（同上） |
 | 「另一个窗口」参照 | 网关自有的**路由键短窗 0.1s**，与本节无窗口设计**相反**且**不互相替代**（`gateway/run_notifications.py:1527`） | ⏭ 不抄（mini 网关通知面只有 `gateway/delivery.py::deliver`） |
 
-**引用清单（§二）**
-
-- 真实锚 `f5d1926110`：`tools/process_registry_notifications.py:39-51`（`def group_process_notifications(notifications):`）· `:40`（`"""Group consecutive completions only; watches and delegations...`）· `:14-36`（`@dataclass(frozen=True, slots=True)`）· `:20-22`（`def _live(self, registry) -> list:`）· `:24-33`（`def render(self, registry) -> str | None:`）· `:28-29`（`if len(messages) == 1: return messages[0]`）· `:30-32`（`header = (f"[IMPORTANT: {len(messages)} background processes...`）
-- 真实：`tools/process_registry.py:1382-1398`（`if was_running and session.notify_on_complete:`）· `:546-547`（`import queue as _queue_mod`）
-- 真实：`gateway/run_notifications.py:1527`（`("_completion_notification_batch_window", lambda: 0.1),`）· `:1521-1543`（`async def _enqueue_process_completion_notification(self, synth...`）· `:1420-1448`（`def _format_coalesced_process_completions(entries: list...`）· `:70-71`（`_COMPLETION_BATCH_KEY_FIELDS = ("session_key", "platform"...`）
-- 真实：`tui_gateway/session_notifications.py:664-673`（`evt = queue.get(timeout=0.5)`）
-- mini 锚 `653b627`：`tools/terminal.py:94`（`def terminal_tool(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:`）· `:96-106`（`proc = subprocess.run(`）· `:77-87`（`parameters={`，schema 无 `background`）· `:107-109`（`except subprocess.TimeoutExpired:`）· `:115-119`（`return tool_result(`）· `:12-24`（`## 关于第 8 项改造（后端表）：故意不做`）· `:17-18`（`真正的复杂度在 Hermes 那两个 process_registry 文件里...`）· `:20`（`**在只有一种后端的时候做一张"后端表"，就是投机性基础设施**`）
-- 上游文档：`官方文档-Developer-Guide/completion-backlog-delivery.md:8-11`（`Interactive surfaces coalesce consecutive...` / `This does not add a delay...`）· `:28-30`（`Messaging gateway: gateway/run_notifications.py already uses its own route-keyed...`）
-
 ---
 
 ## §三 消费抑制与归属：谁能认领，谁说了算
@@ -498,15 +382,6 @@
 | 归属判定（fail-closed 正证明） | `_session_owns_notification_event`：sid + `origin_ui_session_id` + 压缩 lineage（`tui_gateway/session_notifications.py:94-103`）；无主丢弃不收养（`:449-474`） | ⏭ 不抄（单进程单会话，无第二消费者） |
 | 全消费的批不开回合 | `render` 返回 `None` → `_notif_release_turn`（`session_notifications.py:518-519`） | ⏭ 不抄（无「回合名额」概念） |
 
-**引用清单（§三）**
-
-- 真实锚 `f5d1926110`：`tools/process_registry_notifications.py:14-36`（`@dataclass(frozen=True, slots=True)`）· `:16`（`"""Keep completion identity until the owning surface starts its turn."""`）· `:20-22`（`def _live(self, registry) -> list:`）· `:26-27`（`if not messages: return None`）
-- 真实：`tools/process_registry.py:554-563`（`# Completions the agent already consumed via wait()/read_log()...`）· `:1434-1436`（`def is_completion_consumed(self, session_id: str) -> bool:`）· `:1538-1547`（`def _drain_should_skip(self, session_id: str, *, skip_poll_observed...`）· `:1601-1604`（`_evt_sid = evt.get("session_id", "")`）· `:1726-1731`（`if session.exited:` poll 只记 `_poll_observed`）· `:1763-1764`（`if session.exited and observed_completion_output:`）· `:1797-1799`（`if session.exited:` wait 消费）· `:1845-1852`（`def kill_process(` docstring）· `:1871-1872` / `:1886-1887`（`if consume_output:`）· `:2186-2190`（`# Belt-and-suspenders against module-lifetime growth: forget consumed /`）
-- 真实：`tui_gateway/session_notifications.py:94-103`（`def _session_owns_notification_event(sid: str, session: dict, evt: dict) -> bool:`）· `:104-108`（`def _notification_event_requires_owner(evt: dict) -> bool:`）· `:38-46`（`def _notif_resolve_event_key(evt_key: str, session: dict | None = None) -> str:`）· `:80-91`（`def _notif_other_profile_session_owns(sid: str, session: dict, evt: dict) -> bool:`）· `:449-474`（`def _notif_handle_event(sid, session, evt, emitted, registry, fmt...`）· `:475-476`（`if evt_type == "completion" and registry.is_completion_consumed...`）· `:502-530`（`def _notif_dispatch_completions(sid, session, notifications, registry, deferred):`）· `:518-519`（`if text is None: _notif_release_turn(session)`）
-- 真实：`tui_gateway/prompt_turn.py:434-452`（`# Safety net for completion events that arrived mid-turn...`）· `:442`（`skip_poll_observed=False)`）
-- mini 锚 `653b627`：`cli.py:152-154`（`def _on_text(self, text: str) -> None:` / `print(text)`）· `run_agent.py:370-371`（`if self.text_callback:` / `self.text_callback(final_response)`）· `tools/terminal.py:17`（`真正的复杂度在 Hermes 那两个 process_registry 文件里...`）· `tools/terminal.py:20`（`**在只有一种后端的时候做一张"后端表"，就是投机性基础设施**`）
-- 上游文档：`官方文档-Developer-Guide/completion-backlog-delivery.md:13-16`（`Process identity remains available until dispatch...` / `An entirely consumed batch starts no turn.`）· `:36-37`（`Addressed events still require a provable owner; another live session cannot adopt them.`）
-
 ---
 
 ## §四 为什么不落系统提示词
@@ -548,23 +423,6 @@
 | "不落提示词"的动机 | 每会话提示词字节稳定 = 缓存前缀不变式（`prompt_turn.py:541-542` 等四处凭证） | ✅ 同口径（653b627）：缓存系统提示词（`agent/system_prompt.py:292`）+ 逐回合话走请求副本（`run_agent.py:564-569`） |
 | 批与投递状态 | **不**进系统提示词；批走 `_pending_input` / `_run_prompt_submit` 作为回合输入 | ⏭ 不抄（mini 无生产者）：`_pending_input` 与 `_run_prompt_submit` 这两个入口在 mini 都不存在 |
 | 载体 | 逐回合 note 一律骑模型可见输入 | ✅ 有载体（提示词字节稳定测试组在）；**缺**骑上去的"批" |
-
-**引用清单（§四）**
-
-- [真实 f5d1926110] `tui_gateway/prompt_turn.py:541-542` — `# Per-turn API-messa`
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:762-763` — `user did not type (int`
-- [真实 f5d1926110] `agent/prompt_builder.py:591` — `model-bound message, `
-- [真实 f5d1926110] `agent/AGENTS.md:125` — `message-shape invari`
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:22-43` — `def _drain_process_`
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:45-63` — `def _tui_unwrap_inpu`
-- [真实 f5d1926110] `cli.py:3467` — `lambda: self._drain_`
-- [真实 f5d1926110] `cli.py:3603` — `self._drain_process_`
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:158-162` — `def _notif_submit(ri`
-- [真实 f5d1926110] `agent/AGENTS.md` doc 第 52 行（`completion-backlog-delivery.md`）— `It measures turn adm`
-- [mini 653b627] `agent/system_prompt.py:292` — `"""拼出完整系统提示词，**并缓存在 agent 上**。`
-- [mini 653b627] `agent/system_prompt.py:307-310` — `cached = getattr(agent, "_cached_system_prompt", None)`
-- [mini 653b627] `run_agent.py:564-569` — `if self.ephemeral_system_prompt and api_messages:`
-- [mini 653b627] `tests/test_prompt_assembly.py:12` — `| **2. 字节稳定性 ★** |`
 
 ---
 
@@ -625,22 +483,6 @@ mini **没有** `cli_process_notifications.py` / `session_notifications.py` / `p
 | 无头/非交互 | 文档负向声明（**只有反证**，无逐字否定） | ⏭ 不抄：无自主通知循环（同理，亦只有反证） |
 | 共享渲染器 | `ProcessNotificationBatch` 被 CLI / TUI 共用 | ⏭ 不抄：无批对象可渲 |
 
-**引用清单（§五）**
-
-- [真实 f5d1926110] `hermes_cli/cli_process_notifications.py:22-43` — `def _drain_process_`
-- [真实 f5d1926110] `cli.py:3467` — `lambda: self._drain_`
-- [真实 f5d1926110] `cli.py:3603` — `self._drain_process_`
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:502-544` — `def _notif_dispatch_`
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:508-513` — `if not _notif_claim_t`
-- [真实 f5d1926110] `tui_gateway/session_notifications.py:663-673` — `try:`
-- [真实 f5d1926110] `tui_gateway/prompt_turn.py:434-452` — `# Safety net for com`
-- [真实 f5d1926110] `gateway/run_notifications.py:1420-1448` — `def _format_coalesce`
-- [真实 f5d1926110] `gateway/run_notifications.py:1527` — `("_completion_notific`
-- [真实 f5d1926110] `completion-backlog-delivery.md`（负向声明行）— `Noninteractive/headle`
-- [mini 653b627] `cli.py:152` — `def _on_text(self, t`
-- [mini 653b627] `run_agent.py:370-371` — `if self.text_callback:`
-- [mini 653b627] `gateway/delivery.py:47-63` — `def deliver(self, sou`
-
 ---
 
 ## §六 本地验证探针：验什么、不验什么
@@ -696,17 +538,6 @@ ownership, consumption, queue draining, batching, or formatting.
 | 验什么 | I/O 的合并 / 归属 / 消费 / 排空 / 渲染；**不**验模型推理 / 原生渲染器 / 托管平台 | ——（无可验对象） |
 | 固定装置 | 合成 watch / 委派信封（★ "labeled" 源码无独立标签字段）；委派用**真 SQLite 账本** | ⏭ 不抄：无 watch / 委派 / 账本 |
 | "真跑"的形式 | 探针跑 15 次 + 断言 5 条 | 本章**无新代码** ⇒ 真跑 = 跑一遍全套件作"未破坏"收据（1,309 / 1,305） |
-
-**引用清单（§六）**
-
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:1-6` — `"""Local I/O probe f`
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:90` — `f'print("BACKLOG_{in`
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:105-113` — `delegation = {'type'`
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:109-110` — `ad._persist_dispatch(`
-- [真实 f5d1926110] `evals/completion_backlog_probe.py:157-159` — `with ad._transaction(`
-- [真实 f5d1926110] `evals/completion_backlog_probe.py`（场景循环，`main` 内）— `for surface in ('cli'`
-- [mini 653b627] `demos/ch10_real_run.py` — （脚本：第 10 章真跑传统）
-- [mini 653b627] `demos/ch11_real_run.py` — （脚本：第 11 章真跑传统）
 
 ---
 
@@ -777,29 +608,6 @@ mini 自己的纪律也指向同一个结论：
 | 完成回执生产者 | `tools/process_registry.py`（2376 行，后台进程 + `Popen`） | **无**（`tools/terminal.py:94-119` 同步阻塞；无进程注册表） |
 | 反向验证 | 本章真实侧也无独立 commit 圈定边界（见附录 C） | **无反向验证**（无新代码、无生产者）；真跑=全套件 1,309/1,305 |
 
-**引用清单（本节）**
-
-| 引用 | 该行前 20 字（或身份） |
-|---|---|
-| `mini: README.md:279` | `## 改动落在哪、要跑哪些测试（第 12 章落地的「归属图」）` |
-| `mini: README.md:286-298` | `\| 你改了 \| 必须跑 \|`（11 行映射表 + `test_packaging.py` 永远跑） |
-| `mini: README.md:300-307` | `三条从归属图带出来的约定，在 mini 里的对应物：` |
-| `mini: README.md:322-323` | `# 全套件：1,309 条断言 / 0 失败（3.13.14）· 1,305 / 0 失败（3.9.6）` |
-| `mini: tools/terminal.py:94-119` | `def terminal_tool(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:`（`subprocess.run` 同步阻塞） |
-| `mini: tools/terminal.py:12-23` | `## 关于第 8 项改造（后端表）：故意不做`（docstring 逐字"故意不做"） |
-| `mini: tools/terminal.py:20` | `**在只有一种后端的时候做一张"后端表"，就是投机性基础设施**` |
-| `mini: toolsets.py:53-70` | `TOOLSETS: Dict[str, Dict[str, Any]] = {`（4 toolset / 7 工具白名单） |
-| `mini: toolsets.py:14-16` | `所以"加一个工具"**永远是两个文件**：` |
-| `mini: cli.py:152` | `def _on_text(self, text: str) -> None:`（CLI 唯一汇报出口） |
-| `mini: run_agent.py:370-371` | `if self.text_callback:` / `self.text_callback(final_response)` |
-| `mini: gateway/run_turn.py:75-84` | `# ★ 作用域绑定：整个回合（含所有工具调用、子进程）都在**这条消息所属的** profile 上跑。` |
-| `mini: gateway/delivery.py:47-63` | `def deliver(self, source: SessionSource, text: str,`（网关唯一出站） |
-| `mini: model_tools.py:232` | `# 对应 Hermes 的 _AGENT_LOOP_TOOLS = {...delegate_task}` |
-| `mini: gateway/hooks.py:28-37` | `HOOK_EVENTS`（生命周期事件，非通知投递） |
-| `AGENTS.md:4` | `目标是**搞懂架构决策**（抄的是决策，不是代码量），不是抄代码量。` |
-| `AGENTS.md:57` | `零第三方依赖是**设计选择**，不做 pip install。` |
-| `AGENTS.md:58-59` | `测试必须能**反向验证**：把产物改回旧写法，测试要变红` |
-
 ---
 
 ## §八 差距清单（A 批 / B 批）
@@ -829,35 +637,6 @@ mini 自己的纪律也指向同一个结论：
 | **B6** | 全消费的批不启动回合 | `tools/process_registry_notifications.py:26-27`（`render` 返回 `None`）→ `tui_gateway/session_notifications.py:518-519`（`if text is None: _notif_release_turn(session)`） | 同上：依赖"批 + 消费标记 + 回合占用"三件基座，mini 全无 |
 | **B7** | 网关**自有**的路由键短窗批（0.1s 窗） | `gateway/run_notifications.py:1527`（窗口默认值 `0.1`）· `:1420-1448`（`_format_coalesced_process_completions`）· `:1521-1543`（入队）· `:1456-1493`（flush）；路由键 `:70-71` | **抄形状不抄窗**：这是**另一套**机制（带 0.1s 窗，与本章"无窗口"设计相反），上游文档 `:28-30` 明确"本次改动**不**替代它"；mini 网关的通知面只有 `gateway/delivery.py:47-63` 的 `deliver`（无本地短窗批） |
 | **B8** | headless/ACP 的自主通知循环 | 文档**负向声明**「this change does not create a new autonomous notification loop…」（`completion-backlog-delivery.md:31-32`）；代码侧**只有反证**，无逐字否定 | 不存在的机制无从抄；全仓 `git grep "autonomous notification loop"` **只命中文档本身**，无从给出正向 `文件:行号`（见附录 C ②） |
-
-**引用清单（本节）**
-
-| 引用 | 该行前 20 字（或身份） |
-|---|---|
-| `tools/process_registry_notifications.py:14-36` | `@dataclass(frozen=True, slots=True)` / `class ProcessNotificationBatch:` |
-| `tools/process_registry_notifications.py:39-51` | `def group_process_notifications(notifications):` |
-| `tools/process_registry_notifications.py:26-27` | `if not messages: return None`（`render`） |
-| `tools/process_registry.py:554-563` | `self._completion_consumed: set = set()` / `self._poll_observed: set = set()` |
-| `tools/process_registry.py:1797` | `if session.exited: self._completion_consumed.add(session_id)` |
-| `tools/process_registry.py:1763-1764` | `if session.exited and observed_completion_output:` |
-| `tools/process_registry.py:1871-1887` | `if consume_output: self._completion_consumed.add(session_id)` |
-| `tools/process_registry.py:1538-1547` | `def _drain_should_skip(self, session_id: str, *, skip_poll_observed: bool = True) -> bool:` |
-| `tools/process_registry.py:1601-1604` | `if evt.get("type") == "completion" and self._drain_should_skip(` |
-| `tools/process_registry.py:1726-1731` | `# Read-only: record in _poll_observed … but NOT in _completion_consumed` |
-| `hermes_cli/cli_process_notifications.py:22-63` | `def _drain_process_notifications(self, consumer: str) -> None:` / `def _tui_unwrap_input(self, user_input):` |
-| `cli.py:3467` / `cli.py:3603` | `lambda: self._drain_process_notifications("cli-idle")` / `self._drain_process_notifications("cli-post-turn")` |
-| `tui_gateway/session_notifications.py:94-108` | `def _session_owns_notification_event(sid: str, session: dict, evt: dict) -> bool:` |
-| `tui_gateway/session_notifications.py:449-474` | `def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, …)` |
-| `tui_gateway/session_notifications.py:80-91` | `def _notif_other_profile_session_owns(sid: str, session: dict, evt: dict) -> bool:` |
-| `tui_gateway/session_notifications.py:518-519` | `if text is None: _notif_release_turn(session)` |
-| `gateway/run_notifications.py:1527` | `("_completion_notification_batch_window", lambda: 0.1),` |
-| `gateway/run_notifications.py:1420-1448` | `def _format_coalesced_process_completions(entries: list[tuple[str, dict, asyncio.Future]]) -> str:` |
-| `gateway/run_notifications.py:1521-1543` | `async def _enqueue_process_completion_notification(self, synth_text: str, evt: dict) -> Optional[bool]:` |
-| `gateway/run_notifications.py:1456-1493` | `async def _flush_process_completion_batch(self, key: tuple[str, ...]) -> None:` |
-| `gateway/run_notifications.py:70-71` | `_COMPLETION_BATCH_KEY_FIELDS = ("session_key", "platform", …)` |
-| `website/docs/developer-guide/completion-backlog-delivery.md:31-32` | `- **Noninteractive/headless consumers:** this change does not create a new` |
-| `website/docs/developer-guide/codebase-ownership.md:8` | `…the right test directory (tests mirror source: code in \`tools/\` is tested in \`tests/tools/\`, …)` |
-| `mini: README.md:279/286-298/300-307/322-323` | 第 12 章落地节（映射表 + 三条约定 + 全套件数字） |
 
 ---
 
