@@ -167,7 +167,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 | `skills.auto_load` 钉 stable prefix | `_auto_load_parts`（`agent/system_prompt.py:316-320`、`:684-685`） | ⬜ 没做（量级 ~12 行，需先有 `skills.auto_load` 配置消费面） |
 | `skill_view` 工具（只读、**不分页**、第二跳） | `tools/skills_tool.py:571` + `:705-716` 注册 | ✅ 已抄（02c61d5）：`mini-hermes/tools/skills.py:84`，走**普通注册路径**（只读文件 ⇒ 不进 agent loop，`mini-hermes/tools/skills.py:13-19` 判据） |
 | `skills_list`（Tier 1 列表工具） | `tools/skills_tool.py:232` | ⏭ 不抄（mini 的"列表"就是提示词索引本身；再开一个列表工具与索引重复，且多一份漂移面） |
-| frontmatter 解析 | 真 YAML，失败回落逐行切分（`agent/skill_utils.py:105-125`） | 已对齐：零依赖**子集**解析器（只认顶层 `key: value`；嵌套 / 列表 / 行尾注释一律忽略）（`mini-hermes/agent/skill_utils.py:159-241`）。窄在"只为 name/description 两个标量"，为两个字段引 YAML 解析器不值（硬约束：零第三方依赖） |
+| frontmatter 解析 | 真 YAML，失败回落逐行切分（`agent/skill_utils.py:105-125`） | 已对齐：零依赖**子集**解析器（只认顶层 `key: value`；嵌套 / 列表 / 行尾注释一律忽略）（`mini-hermes/agent/skill_utils.py:256-344`）。窄在"只为 name/description 两个标量"，为两个字段引 YAML 解析器不值（硬约束：零第三方依赖） |
 | `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 是**单平台 CLI**，没有 OS 维度；`agent.platform` 那个是界面平台 cli/tui，不是 OS） |
 | 条件激活 `_CONDITION_KEYS`（含未文档化的 `session_platforms`） | 五键定义 `agent/skill_utils.py:633-641` + 判定 `agent/prompt_builder.py:1210-1228` | ⬜ 没做（可映射 mini 的 toolset 概念，**只抄 `requires_tools` / `fallback_for_toolsets` 两键**即可，~20-30 行；`session_platforms` 不抄——mini 无网关渠道门） |
 | `environments:` 第三道**相关性**门 | `agent/skill_utils.py:148-153`（fail open、显式加载永远绕过、只影响 offer 面） | ⏭ 不抄（mini 无 kanban / docker / s6 环境面） |
@@ -259,7 +259,7 @@ mini 没有技能**创作**流程（没有 `skill_manage`），所以 §一 的�
 
 **③ mini 的实现（现状）**
 
-mini 只落**一个表面、一层深度**：`<MINI_HOME>/skills/<name>/SKILL.md`（`mini-hermes/agent/skill_utils.py:121-130` 的 `skills_dir()` = `get_mini_home() / "skills"`）。没有 `skills/` vs `optional-skills/` 之分，也没有 `<category>/` 这层（`mini-hermes/agent/skill_utils.py:81-86` 的 `SUPPORT_DIRS` 常量**留着但不参与扫描**；"为什么一层就够"写在 `:29-31` 的 docstring 里）。
+mini 落**两个来源根、一层深度**：**用户根** `<MINI_HOME>/skills/<name>/SKILL.md`（`mini-hermes/agent/skill_utils.py:144-154` 的 `skills_dir()` = `get_mini_home() / "skills"`）+ **内置根** `<repo>/mini-hermes/skills/<name>/SKILL.md`（`:156-169` 的 `bundled_skills_dir()`，随程序发布）。两者的先后**就是优先级**（`:172` 的 `skill_roots()` = 用户在前 ⇒ 同名时**用户覆盖内置**，首见胜出）—— 注意这与真实侧"表面"的含义**不同**：真实侧 `skills/` vs `optional-skills/` 分的是**激活策略**（默认加载 / 显式 install），mini 没有那一层的消费者，所以没抄；第 13b（`4b0c96a`）补的是**来源**面的第二级。深度仍只有一层，没有 `<category>/`（`mini-hermes/agent/skill_utils.py:75-80` 的 `SUPPORT_DIRS` 常量**留着但不参与扫描**；"为什么一层就够"写在 `:29-31` 的 docstring 里）。
 
 "每个 profile 一套技能"这件事**没另写一行 profile 逻辑**：路径走 `get_mini_home()`（`mini-hermes/hermes_constants.py:36`，解析顺序 contextvar 覆盖 → `MINI_HOME` → `~/.mini-hermes`），而"一个 profile = 一个 home"，所以隔离是**天然**的。同时 `mini-hermes/hermes_cli/profiles.py:43` 把 `skills` 加进 `PROFILE_DIRS`，于是**新建 profile 那一刻就建好技能库**（而不是等用户自己 `mkdir`——那会是一条隐式约定）。
 
@@ -269,7 +269,7 @@ mini 只落**一个表面、一层深度**：`<MINI_HOME>/skills/<name>/SKILL.md
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 表面数 | 两级：`skills/`（默认加载）+ `optional-skills/`（显式 install）（`skills/AGENTS.md:6-12`） | ⬜ 没做第二级（`optional-skills/` 的消费者是 hub 安装面，mini 没有） |
+| 表面数（激活策略） | 两级：`skills/`（默认加载）+ `optional-skills/`（显式 install）（`skills/AGENTS.md:6-12`） | ⬜ 没做（`optional-skills/` 的消费者是 hub 安装面，mini 没有）。★ 第 13b（`4b0c96a`）补的是**来源**面的第二级（内置根 + 用户根、用户优先），不是这一行说的"激活策略" |
 | 目录深度 | `<surface>/<category>/<skill>/SKILL.md`，扫描**递归**（`agent/skill_utils.py:761-783`） | 已对齐（窄）：`<MINI_HOME>/skills/<skill>/SKILL.md`，只扫**一层**（`agent/skill_utils.py:133-152`） |
 | 支持目录 | `references/templates/assets/scripts` 被剪、走第二跳（`agent/skill_utils.py:29-31`） | 已对齐：常量在（`:81-86`），扫描剪枝逻辑同形（一层扫描下无嵌套可剪） |
 | "技能属于谁" | profile = HERMES_HOME，靠目录隔离 | ✅ 已抄（02c61d5）：走 `get_mini_home()`；`PROFILE_DIRS` 加 `skills`（`hermes_cli/profiles.py:43`） |
@@ -330,15 +330,15 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
 
 **③ mini 的实现（现状）**
 
-mini 写了一个**零第三方依赖的子集解析器**（`mini-hermes/agent/skill_utils.py:159-241`），**不是 YAML**：只认顶层 `key: value`，嵌套（`metadata.hermes.*`）、列表（`- a`）、多行块、行尾注释**一律忽略**。判据是"**索引只需要 `name` / `description` 两个标量**"——条件激活 / 蓝图 / `skills.config` 这些嵌套字段的消费者都不在 A 批，为两个标量引一个 YAML 解析器不值（项目硬约束：零第三方依赖）。真要加嵌套的那天，改动面就是这一个函数 + 一条测试。
+mini 写了一个**零第三方依赖的子集解析器**（`mini-hermes/agent/skill_utils.py:256-344`），**不是 YAML**：只认顶层 `key: value`，嵌套（`metadata.hermes.*`）、列表（`- a`）、多行块、行尾注释**一律忽略**。判据是"**索引只需要 `name` / `description` 两个标量**"——条件激活 / 蓝图 / `skills.config` 这些嵌套字段的消费者都不在 A 批，为两个标量引一个 YAML 解析器不值（项目硬约束：零第三方依赖）。真要加嵌套的那天，改动面就是这一个函数 + 一条测试。
 
-两处与真实侧**同形**：①**先剥 BOM**（`mini-hermes/agent/skill_utils.py:179-180`，注释点明"真实侧同样先剥 BOM —— 否则首行 `---` 对不上"）；②**围栏未闭合宽容地交回全文**（`:187`），对应"坏格式不致命"。
+两处与真实侧**同形**：①**先剥 BOM**（`mini-hermes/agent/skill_utils.py:280-281`，注释点明"真实侧同样先剥 BOM —— 否则首行 `---` 对不上"）；②**围栏未闭合宽容地交回全文**（`:288`），对应"坏格式不致命"。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| frontmatter 解析 | 真 YAML + 逐行回落（`agent/skill_utils.py:105-125`） | 已对齐（窄）：零依赖子集解析器（`mini-hermes/agent/skill_utils.py:159-241`） |
+| frontmatter 解析 | 真 YAML + 逐行回落（`agent/skill_utils.py:105-125`） | 已对齐（窄）：零依赖子集解析器（`mini-hermes/agent/skill_utils.py:256-344`） |
 | 字段集 | 身份 + `platforms:` + `metadata.hermes.*`（含四条件键 / `config` / `blueprint`）（`skills/AGENTS.md:16-22`） | ⬜ 只消费 `name` / `description` 两个标量（其余字段对 mini 无消费者） |
 | 正文分页 | 明确**不分页**（`skills/AGENTS.md:57`） | ✅ 已抄（02c61d5）：`skill_view` 一次返回全文（`mini-hermes/tools/skills.py:84-124`） |
 
@@ -570,7 +570,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 要害：规范不是"别用 grep"，而是"**别把 agent 已经包好的 shell 工具当成榜首出口**"——技能正文该点名 Hermes 原生工具，把 `grep→search_files` 这类映射**逐条写死**（`:34-36`），第三方 CLI 只降格到脚本文件（`:37`）。这条同时消掉了"模型按旧习惯敲 `grep`"这条漂移路径。
 
-**③ mini 的实现（现状）**：✅ **已对齐（纪律层，无代码）**。mini 的硬约束就是**零第三方依赖**——这条在 `mini-hermes/agent/skill_utils.py:174` 的 docstring 里被点名（*为了两个标量字段引入一个 YAML 解析器不值（本项目硬约束：零第三方依赖）*），并在 `model_tools.py` / `toolsets.py` / `profiles.py` 的"等真有需求再补"里一致体现。同一份纪律也让 mini 的 frontmatter 解析器只做**子集**（`mini-hermes/agent/skill_utils.py:159-187`：只认顶层 `key: value`，拒绝嵌套/列表/多行块）。
+**③ mini 的实现（现状）**：✅ **已对齐（纪律层，无代码）**。mini 的硬约束就是**零第三方依赖**——这条在 `mini-hermes/agent/skill_utils.py:275` 的 docstring 里被点名（*为了两个标量字段引入一个 YAML 解析器不值（本项目硬约束：零第三方依赖）*），并在 `model_tools.py` / `toolsets.py` / `profiles.py` 的"等真有需求再补"里一致体现。同一份纪律也让 mini 的 frontmatter 解析器只做**子集**（`mini-hermes/agent/skill_utils.py:256-344`：只认顶层 `key: value`，拒绝嵌套/列表/多行块）。
 
 **④ 与真实版的差别**：
 
@@ -725,7 +725,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 **③ mini 的实现（现状）**：✅ **真的做了（02c61d5）**，两件真跑：
 
-- `tests/test_skills.py`（525 行 / **6 组 / 82 条全过**）：stdlib、**不联网**、`MINI_HOME` 在 import 前指到临时目录（否则测试会读用户真实的技能库）。组 1 钉索引字节稳定、组 2 钉"正文只经 `skill_view` 出现"、组 5 钉 `skill_view` 安全边界（`..` / 绝对路径 / 符号链接目录 / 库外文件全部拒读）。
+- `tests/test_skills.py`（691 行 / **7 组 / 103 条全过**）：stdlib、**不联网**、`MINI_HOME` 与**内置根**（patch `bundled_skills_dir`）都在 import 前/夹具里指到临时目录（否则测试会读用户真实的技能库、以及仓里随程序发布的内置技能）。组 1 钉索引字节稳定、组 2 钉"正文只经 `skill_view` 出现"、组 5 钉 `skill_view` 安全边界（`..` / 绝对路径 / 符号链接目录 / 库外文件全部拒读）。
 - `demos/ch13_real_run.py`（**17/17**）：把**真提示词**建出来再在里面搜正文独有句，是"演示证据"而非"调函数看返回值"。
 - 缺的 CLI 面：mini **没有** `hermes chat --toolsets skills` 这个 `--toolsets` 参数（只有 `--list-toolsets` 列表与 REPL 里的 `/tools`，`mini-hermes/hermes_cli/main.py:73-77, 125-128`）——所以 mini 的"跑一遍"落在上面的脚本与测试上，而不是一个 `--toolsets` 旗标。
 
@@ -756,16 +756,16 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 要害："住在哪"不只是"有用没用"，还是一个**信任决定**——从一个 clone 自动加载的项目技能是注入向量，所以默认**不加载**，只有 root 进了 `skills.trusted_project_dirs` 才生效（`:410-411`）；而且 `cwd + trust list` 是**会话固定**的，这样技能索引才能字节稳定（`:412-413`）。**发现范围的定义同时是攻击面的定义**——这是本节最该记住的一句。
 
-**③ mini 的实现（现状）**：✅ **真的做了（02c61d5）中的"与 profile 的关系"这一半**、⬜ 没做（两级目录面与信任门）。
+**③ mini 的实现（现状）**：✅ **已抄**（`02c61d5` 的"与 profile 的关系" + `4b0c96a` 的**第二个发现根**：内置 `<repo>/mini-hermes/skills/` 与用户根共存、用户优先）；⏭ **不抄**信任门（判据见下一条：mini 没有"不可信来源"这回事）。
 
 - **每个 profile 一套技能**：`mini-hermes/hermes_cli/profiles.py:43` 把 `skills` 加进 `PROFILE_DIRS = ["logs", "hooks", "skills"]`——新建 profile 时就建出该目录（注释逐字：*第 13 章才补进来：在此之前技能库没有消费者，所以刻意不建*）。路径来源是 `mini-hermes/agent/skill_utils.py:121-130` 的 `skills_dir()` = `get_mini_home() / "skills"`。因为**一个 profile = 一个 home**，所以"技能属于谁"这件事**一行都不用另写**——`get_mini_home()` 自动隔离，天然不串味。
-- **只扫一层**：mini 只扫 `skills/<name>/SKILL.md`（`mini-hermes/agent/skill_utils.py:29-31` 的 docstring 逐字：*只扫一层（真实 Hermes 会递归走分类目录，如 `skills/github/xxx`）*）。窄的理由：mini 没有"分类"这个消费者（没有 browse、没有 hub 安装），一层够用。两级表面（`skills/` vs `optional-skills/`）与项目信任门都不在 A 批。
+- **只扫一层**：mini 只扫 `skills/<name>/SKILL.md`（`mini-hermes/agent/skill_utils.py:29-31` 的 docstring 逐字：*只扫一层（真实 Hermes 会递归走分类目录，如 `skills/github/xxx`）*）。★ **两个根都如此** —— 第 13b 加的是"去哪儿找"的第二个根，不是 `<category>/` 那层深度，"多根 ≠ 多层"。
 
 **④ 与真实版的差别**：
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 两级目录面 | `skills/` 默认加载 + `optional-skills/` 需 `hermes skills install`（`skills/AGENTS.md:6-15`） | ⬜ 没做（量级）：只有一层 `skills/`（`agent/skill_utils.py:29-31`） |
+| 两级目录面 | `skills/` 默认加载 + `optional-skills/` 需 `hermes skills install`（`skills/AGENTS.md:6-15`） | ⬜ 没做（量级）：`optional-skills/` 那种**激活策略**面没有消费者；★ 但**来源**面的第二级已补（`4b0c96a`）：内置根 + 用户根共存、用户优先（`mini-hermes/agent/skill_utils.py:172` 的 `skill_roots()`） |
 | 发现优先级 | four layers + `project → local → external`，首见胜出（`agent/skill_utils.py:398-406, 802-810`） | ✅ 已抄（单层）：`iter_skill_dirs` 排序后扫（`agent/skill_utils.py:133-152`）；同名"首见胜出"（`:296-297`） |
 | 项目内技能的信任门 | 默认不加载，须入 `skills.trusted_project_dirs`（`agent/skill_utils.py:409-413`） | ⏭ 不抄（无 `trusted_project_dirs` 配置面） |
 | 与 profile 的关系 | 每 profile 一套（`_PROFILE_DIRS` 含 `skills`，`hermes_cli/profiles.py:32`） | ✅ 已抄（02c61d5）：`PROFILE_DIRS` 含 `skills`（`hermes_cli/profiles.py:43`），路径走 `get_mini_home()/skills`（`agent/skill_utils.py:121-130`） |
@@ -1025,7 +1025,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 |---|---|---|
 | `:1-44` | `"""技能发现与索引（对应 Hermes 的 `agent/skill_utils.py`，真实版 811 行）。` | 模块 docstring 的「抄了什么／没抄什么」两块；`:11` 逐字 *"安全扫描与四档信任（技能都是本地手写）"*——§十 ③ 的直接出处 |
 | `:62-69` | `SKILL_FILENAME = "SKILL.md"` / `SKILL_PROMPT_DESC_LIMIT = 60` | 描述硬截 60，且注释里注明出处 = 真实侧 `agent/skill_utils.py:741` |
-| `:121-130` | `def skills_dir() -> Path:` | 技能库根 = `get_mini_home() / "skills"`（**唯一来源**，不硬编码）——每个 profile 一套 |
+| `:144-154` | `def skills_dir() -> Path:` | 技能库根 = `get_mini_home() / "skills"`（**用户根**，不硬编码；内置根见 `:156-169`）——每个 profile 一套 |
 | `:133-138` | `def iter_skill_dirs(root: Optional[Path] = None) -> List[Path]:` | **排序后返回**（索引字节稳定的前提）；docstring 直接引真实侧 `yield from map(Path, sorted(matches))` |
 | `:225-230` | `def is_valid_skill_name(name: str) -> bool:` | **安全边界**（不是风格）：拒空/空白/`..`/`/`/`\`/NUL/前导点——§十 ③ 里"不抄扫描器也抄到的那一半" |
 | `:288-298` | `def discover_skills(root: Optional[Path] = None) -> SkillScan:` | 每次调用**真读盘**（无缓存，"等真慢了再补"）；同名技能**目录名靠前的胜出**（对应真实侧"首见胜出"） |
@@ -1067,7 +1067,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 |---|---|---|
 | `:39-43` | `#   skills/ ← agent/skill_utils.skills_dir()（第 13 章：发现 + 提示词索引 + skill_view）` | `PROFILE_DIRS = ["logs", "hooks", "skills"]`（`:43`）——技能库从创建 profile 那一刻起就有；注释解释"在此之前没有消费者所以刻意不建" |
 
-**`tests/test_skills.py`（525 行）/ `demos/ch13_real_run.py`（159 行）**
+**`tests/test_skills.py`（691 行）/ `demos/ch13_real_run.py`（166 行）**
 
 | 行号 | 该行/该段首 20 字 | 它证明什么 |
 |---|---|---|
@@ -1097,20 +1097,23 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 | `agent/system_prompt.py` | **817** | 索引进 volatile band 首行（`:705-707`）的宿主文件 |
 | `website/docs/developer-guide/creating-skills.md` | **438** | 上游原文（§十 的对照面；其「四类」「trusted 只列三仓」见附录 C） |
 
-**B-2 · mini 侧（锚 `02c61d5`）**
+**B-2 · mini 侧（锚 `4b0c96a`，即第 13b 之后）**
 
 | 文件 | 行数 | 它是什么 |
 |---|---|---|
-| `agent/skill_utils.py` | **436** | （本节新增）技能发现 + 索引构造的唯一实现；模块头 `:11` 明写"安全扫描不抄，技能都是本地手写"。**审计后小修**：多行块标记丢弃 + 软链 `SKILL.md` 拒收（409 → 436） |
+| `agent/skill_utils.py` | **551** | （本节新增）技能发现 + 索引构造的唯一实现；模块头 `:11` 明写"安全扫描不抄，技能都是本地手写"。**审计后小修**：多行块标记丢弃 + 软链 `SKILL.md` 拒收（409 → 436；13b 加多根 → 551） |
 | `tools/skills.py` | **136** | （本节新增）`skill_view` 工具 + 可见性探针 + 名字安全边界 |
-| `tests/test_skills.py` | **525** | （本节新增）六组契约/不变量；组 5 覆盖名字/路径安全边界 |
-| `demos/ch13_real_run.py` | **159** | 真跑脚本（17/17）：索引字节稳定 + 正文不进提示词 + `skill_view` 第二跳 + 三种边界 |
+| `tests/test_skills.py` | **691** | （本节新增）七组契约/不变量（组 7 = 内置/用户两级共存）；组 5 覆盖名字/路径安全边界 |
+| `demos/ch13_real_run.py` | **166** | 真跑脚本（17/17）：索引字节稳定 + 正文不进提示词 + `skill_view` 第二跳 + 三种边界 |
+| `demos/ch13b_real_run.py` | **155** | （第 13b）两级共存的真跑（17/17）：只靠内置根也能进索引 + `skill_view`；用户同名覆盖内置；顺序确定 |
+| `skills/`（仓内） | **68** | （第 13b）**内置技能根**：`README.md`（9 行）+ `mini-repo-conventions/SKILL.md`（59 行）—— 随程序发布的内容，升级时可能整体替换 |
+| `tests/test_tools_runtime.py` | **929** | （第 13b）"默认工具表"断言随"有内置技能 ⇒ `skill_view` 可见"同步：一并把内置根隔离掉 |
 | `toolsets.py` | **207** | `TOOLSETS["skills"]:74`（`"tools": ["skill_view"]:76`）、默认捆加 `skill_view:101` |
 | `agent/system_prompt.py` | **432** | `_skill_index_parts:195`、`volatile_parts:306` |
 | `agent/prompt_builder.py` | **928** | `load_skill_index:645`（内容构造层） |
 | `hermes_cli/profiles.py` | **253** | `PROFILE_DIRS:43` 加 `"skills"` |
 | `tests/test_gateway.py` | **1698** | `:707` 那条硬编码目录集合断言随 `PROFILE_DIRS` 同步 |
-| `README.md` | **597** | 第 13 章状态行（`:40`）：精译 `b37f5db` · 实现 `02c61d5` · 1,391/1,387 · 反验 4/4（+审计修复 2 条）· 真跑 17/17 |
+| `README.md` | **608** | 第 13 章状态行（`:40`）与 13b 行（`:42`）：精译 `b37f5db` · 实现 `02c61d5` · 内置技能级 `4b0c96a` · 全套件 **1,457/1,453** · 反验 6 条 · 真跑 17/17 |
 
 ---
 

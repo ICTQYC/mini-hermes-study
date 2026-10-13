@@ -747,7 +747,7 @@ def engines_dir() -> Path:                       # mini-hermes/agent/engine_regi
     return get_mini_home() / "engines"
 ```
 
-★ **与第 13 章技能发现同构**：mini 的这条发现路径**不是新造的形状**，而是**照第 13 章抄的** —— `engines_dir()` ↔ `mini-hermes/agent/skill_utils.py:121 skills_dir()`、`iter_engine_dirs()` ↔ `:133 iter_skill_dirs()`、`read_engine()` 的"宽容 + 计数、永不抛" ↔ `:271 read_skill()`、`discover_engines()` 的 `EngineScan` ↔ `:315 discover_skills()` 的 `SkillScan`、`resolve_engine()` 的"查索引不拼路径" ↔ `:347 resolve_skill()`。三条纪律（**零第三方依赖**、**每次选择真读盘（无进程内缓存）**、**宽容 + 计数**）也一字不差地沿用第 13 章。
+★ **与第 13 章技能发现同构**：mini 的这条发现路径**不是新造的形状**，而是**照第 13 章抄的** —— `engines_dir()` ↔ `mini-hermes/agent/skill_utils.py:144 skills_dir()`、`iter_engine_dirs()` ↔ `:133 iter_skill_dirs()`、`read_engine()` 的"宽容 + 计数、永不抛" ↔ `:271 read_skill()`、`discover_engines()` 的 `EngineScan` ↔ `:315 discover_skills()` 的 `SkillScan`、`resolve_engine()` 的"查索引不拼路径" ↔ `:347 resolve_skill()`。三条纪律（**零第三方依赖**、**每次选择真读盘（无进程内缓存）**、**宽容 + 计数**）也一字不差地沿用第 13 章。
 
 ★ **回落必须"有声"**：`select_engine()` 返回的 `EngineSelection` 带一个 `warning` 字段 —— 未知名 / 该目录被跳过时，回落内置默认引擎并**返回一段可读警告**（`warning` 非空），由宿主经 `_emit_engine_warning()` 打到用户眼前 —— 有 `status_callback`（CLI）走它；**没有**（网关 `gateway/run_turn.py` 传 `None`、`doctor.py` 不传）**只走一条 `print(..., file=sys.stderr)`**。★ 这两条都是**审计改出来的**：先前直接复用 `_emit_status` ⇒ 这些入口**静默丢警告**（用户以为换了引擎）；改成 `logger` + `print` 双写 ⇒ 零配置时 `lastResort` 与 `print` 叠加，终端**重复两遍**。故最终**只留一条出口**。**静默回落是这一章最坏的一种**：用户以为换了引擎、其实没换。
 

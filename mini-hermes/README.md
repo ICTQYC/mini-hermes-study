@@ -35,10 +35,11 @@
 | **第 8 章** | `provider-runtime` | `中文精译-08-…` / `源码讲解-08-…` | `ch08-provider-runtime` |
 | **第 9 章** | `programmatic-integration` | `中文精译-09-…` / `源码讲解-09-…` | —（mini 未实现：用户 2026-10-12 决定） |
 | 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
-| **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
+| **第 11 章** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
 | **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
-| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） | ✅ 源码讲解 `f1141e8`（**1,175 行** · H1=1 · H2=15 · H3=22 · 引用 153 条 0 死） | ｜ **审计后小修**（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）
-| **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 348 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1341 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 555/7 组 · `demos/ch14_real_run.py` 233；**1,436/1,432 通过 · 反验 4 条（RV-1/RV-2 测试 7/2 红 · 审计修复 RV-3/RV-4 各 2 红）· 真跑 12/12**） | ✅ 源码讲解 `baf9251`（**1,334 行** · 死引用 0） |
+| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） · ✅ 源码讲解 `f1141e8`（**1,178 行** · H1=1 · H2=15 · H3=22）· 审计后小修（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条） | `ch13-skills` |
+| **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 348 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1341 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 555/7 组 · `demos/ch14_real_run.py` 233；**1,436/1,432 通过 · 反验 4 条（RV-1/RV-2 测试 7/2 红 · 审计修复 RV-3/RV-4 各 2 红）· 真跑 12/12**） · ✅ 源码讲解 `baf9251`（**1,336 行**）· 审计修复 + 回落警告出口收口（`a3a2753`/`add7680`） | `ch14-context-engine` |
+| └ 扩展 **13b** | **内置技能级**：仓内 `mini-hermes/skills/`（随程序发布）+ 用户级共存，**用户优先**（PATH 语义）；`agent/skill_utils.py` 551 · `tests/test_skills.py` 691/7 组 · 新 `demos/ch13b_real_run.py`（17/17）· **1,457/1,453 通过** · 反验 6 条（RV-1 32 红 / RV-2 5 红 / RV-3 4 红 / 根内排序 2 红） | 并入第 13 章两篇文档（`源码讲解-13` 的 `:262`/`:272`/`:759`/`:762`/`:768` 已同步；精译无需改） | `ch13b-bundled-skills` |
 
 
 > **`cron` 面（搁置，2026-10-13 用户决定）**：`cron-internals`（380 行）与 `chronos-managed-cron-contract`（227 行）**本轮不做**。
@@ -291,17 +292,22 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ## 发布前自检
 
 ```bash
-python3 tests/test_packaging.py        # 18 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描 /
-                                       #        命令行旗标契约（宣传的 `mini --旗标` 必须真的存在）
-python3 tests/test_loop_mechanisms.py  # 57 条：agent loop 的机制（含「用量是每轮的」）
-python3 tests/test_prompt_assembly.py  # 155 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
-python3 tests/test_tools_runtime.py    # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
-python3 tests/test_compression.py      # 152 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
-python3 tests/test_session_storage.py  # 107 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
-python3 tests/test_gateway.py          # 214 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 /
-                                       #   进程身份 / profile 作用域 / 入口层 / ★ 第 8 章：会话生命周期 ·
-                                       #   两层队列 · 缓存与巡检）
-# 全套件：1,436 条断言 / 0 失败（3.13.14）· 1,432 / 0 失败（3.9.6）
+python3 tests/test_packaging.py         # 18 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描 /
+                                        #        命令行旗标契约（宣传的 `mini --旗标` 必须真的存在）
+python3 tests/test_loop_mechanisms.py   # 57 条：agent loop 的机制（含「用量是每轮的」）
+python3 tests/test_prompt_assembly.py   # 155 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
+python3 tests/test_tools_runtime.py     # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
+python3 tests/test_compression.py       # 157 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
+python3 tests/test_micro_compaction.py  # 119 条：微压缩（10 组）
+python3 tests/test_fallback_and_aux.py  # 113 条：回落与辅助模型（4 组）
+python3 tests/test_session_storage.py   # 108 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
+python3 tests/test_state_db_recovery.py # 121 条：state.db 抢修（12 组；3.9 少 4 条 —— 它拒 DROP messages_fts_data）
+python3 tests/test_gateway.py           # 266 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 / 进程身份 /
+                                        #   profile 作用域 / 入口层 / 会话生命周期 / 两层队列 / 缓存与巡检）
+python3 tests/test_provider_runtime.py  # 106 条：服务商运行时（6 组）
+python3 tests/test_skills.py            # 103 条：技能（发现 / 渐进披露 / 安全边界 / ★ 内置+用户两级共存）
+python3 tests/test_context_engine.py    # 45 条：上下文引擎插槽（发现 / 契约 / 选择与回落）
+# 全套件：1,457 条断言 / 0 失败（3.13.14）· 1,453 / 0 失败（3.9.6）
 #   （差额 4 条：3.9 的 SQLite 拒 DROP messages_fts_data，真损坏分支造不出来）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
