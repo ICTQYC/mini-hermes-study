@@ -40,11 +40,15 @@
 | **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） · ✅ 源码讲解 `f1141e8`（**1,178 行** · H1=1 · H2=15 · H3=22）· 审计后小修（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条） | `ch13-skills` |
 | **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 348 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1341 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 555/7 组 · `demos/ch14_real_run.py` 233；**1,436/1,432 通过 · 反验 4 条（RV-1/RV-2 测试 7/2 红 · 审计修复 RV-3/RV-4 各 2 红）· 真跑 12/12**） · ✅ 源码讲解 `baf9251`（**1,336 行**）· 审计修复 + 回落警告出口收口（`a3a2753`/`add7680`） | `ch14-context-engine` |
 | └ 扩展 **13b** | **内置技能级**：仓内 `mini-hermes/skills/`（随程序发布）+ 用户级共存，**用户优先**（PATH 语义）；`agent/skill_utils.py` 551 · `tests/test_skills.py` 691/7 组 · 新 `demos/ch13b_real_run.py`（17/17）· **1,457/1,453 通过** · 反验 6 条（RV-1 32 红 / RV-2 5 红 / RV-3 4 红 / 根内排序 2 红） | 并入第 13 章两篇文档（`源码讲解-13` 的 `:262`/`:272`/`:759`/`:762`/`:768` 已同步；精译无需改） | `ch13b-bundled-skills` |
+| **第 15 章** | Extending 代表作（遥测面）：`observer-hooks`（331 行）→ **只读观察者**（注册契约 + 零成本快路径 + 失败放开 + 载荷安全 + 关联 id） | ✅ 精译 `977cc85`（**526 行**）· ✅ 实现 `1ccaa50`（新 `agent/observer.py` **461** · `run_agent.py` **1704**（+395/−16）· 新 `tests/test_observers.py` **994 / 6 组 / 124 条** · 新 `demos/ch15_real_run.py` **368 / 28 条**；**1,581 / 1,577 通过 · 0 失败** · 反验 **7 条干净变红** · 真 API 收据（10 条事件 / 1 `turn_id` / 2 `api_request_id` / 8025 字符带 truncated / 0 观察者 7 构造器 0 次）） | ✅ 源码讲解 `10ca3c7`（**1,202 行** · H1=1 · H2=16 · H3=10 · 引用 354 条死 0） | `ch15-observer-hooks` |
 
 
 > **`cron` 面（搁置，2026-10-13 用户决定）**：`cron-internals`（380 行）与 `chronos-managed-cron-contract`（227 行）**本轮不做**。
 > 实测：真实 cron 面 源码 **18,839 行** + 测试 **37,214 行** ≈ **56,000 行** ≈ **mini 整个项目的 2 倍**（mini 源码 17,882 + 测试 9,847）；
 > mini 侧目前零 cron（`.py` 里 19 处提及全是“为什么还没有”）。它是第 12 章（后台回执的生产者）、第 13 章 B 批（蓝图/建议）反复指向的缺口 —— **留到收尾总览章如实记账**。
+>
+> **扩展面到此收口（用户 2026-10-14 决定）**：`extending-the-cli`（192 行）**不做** —— 它实为 **TUI 壳扩展**（5 个扩展点里 3 个是 prompt_toolkit 的部件/键位/布局），mini 没有 TUI ⇒ 只剩「受保护的扩展点 vs 私有方法」一条可讲，不值一章；
+> `subagent-lifecycle-api`（61 行）同样不做（需子代理基座，mini 零子代理）。**第 15 章之后 → 收尾总览章**（46 篇图谱 + mini 与真实版差距总账 + 冻结打最终标签）。
 三条规则：
 
 - **章号 = 主线计数**（扩展用 `7.1 / 7.2`，不占号）；
@@ -307,7 +311,9 @@ python3 tests/test_gateway.py           # 266 条：网关（会话键 / 两级�
 python3 tests/test_provider_runtime.py  # 106 条：服务商运行时（6 组）
 python3 tests/test_skills.py            # 103 条：技能（发现 / 渐进披露 / 安全边界 / ★ 内置+用户两级共存）
 python3 tests/test_context_engine.py    # 45 条：上下文引擎插槽（发现 / 契约 / 选择与回落）
-# 全套件：1,457 条断言 / 0 失败（3.13.14）· 1,453 / 0 失败（3.9.6）
+python3 tests/test_observers.py         # 124 条：观察者（注册契约 / 零成本快路径 / 失败放开 / 载荷安全 /
+                                        #   关联 id / 七事件触发点）
+# 全套件：1,581 条断言 / 0 失败（3.13.14）· 1,577 / 0 失败（3.9.6）
 #   （差额 4 条：3.9 的 SQLite 拒 DROP messages_fts_data，真损坏分支造不出来）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：
