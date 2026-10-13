@@ -38,7 +38,12 @@
 | **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
 | **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
 | **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,391/1,387 通过 · 反验 4/4 · 真跑 17/17**） | ✅ 源码讲解 `f1141e8`（**1,175 行** · H1=1 · H2=15 · H3=22 · 引用 153 条 0 死） | ｜ **审计后小修**（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）
+| **第 14 章（下一章）** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ 压缩引擎的**可替换接口** | ⏳ 精译中（`中文精译-14-ContextEnginePlugin.md`） | — |
 
+
+> **`cron` 面（搁置，2026-10-13 用户决定）**：`cron-internals`（380 行）与 `chronos-managed-cron-contract`（227 行）**本轮不做**。
+> 实测：真实 cron 面 源码 **18,839 行** + 测试 **37,214 行** ≈ **56,000 行** ≈ **mini 整个项目的 2 倍**（mini 源码 17,882 + 测试 9,847）；
+> mini 侧目前零 cron（`.py` 里 19 处提及全是“为什么还没有”）。它是第 12 章（后台回执的生产者）、第 13 章 B 批（蓝图/建议）反复指向的缺口 —— **留到收尾总览章如实记账**。
 三条规则：
 
 - **章号 = 主线计数**（扩展用 `7.1 / 7.2`，不占号）；
