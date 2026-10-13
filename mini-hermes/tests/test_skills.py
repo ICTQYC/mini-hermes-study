@@ -8,9 +8,9 @@
 |---|---|
 | 1. 索引字节稳定 ★ | 同一批技能两次构建**字节相同** · 无关操作（写无关文件 / 落一条消息 / invalidate 重建）后仍相同 · **只改 mtime 不变** · 索引在 volatile 层**首块** |
 | 2. 正文只经 `skill_view` 出现 ★ | 提示词里**有**名字+描述、**没有**正文独有句 · 描述硬截 60 · 不分页 |
-| 3. 发现容错 | 缺 name / 缺 description / frontmatter 坏 / 没有 SKILL.md → **跳过并计数**，不抛异常、不进索引 |
+| 3. 发现容错 | 缺 name / 缺 description / frontmatter 坏 / 没有 SKILL.md / 名字非法 / 多行块标记 → **跳过并计数**，不抛异常、不进索引 |
 | 4. 排序确定 | 乱序创建三个技能 → 索引按**名字**排序；两次构建字节一致 |
-| 5. `skill_view` 安全 | `..` / 绝对路径 / 斜杠 / 空白 / 不存在 → **可读 JSON 错误**；读不到技能库以外的任何文件；符号链接目录被跳过 |
+| 5. `skill_view` 安全 | `..` / 绝对路径 / 斜杠 / 空白 / 不存在 → **可读 JSON 错误**；读不到技能库以外的任何文件；符号链接**目录**与**软链 SKILL.md** 都被跳过 |
 | 6. 工具闸门（注册 → toolset → 可见） | 每个注册工具都有 toolset · `skill_view` 在 `skills` 组与默认捆里 · 发现机制认得 `tools/skills.py` · **有技能才可见**（与索引同开同关） |
 
 ★ 组 1/2 是这一章最核心的两条**不变量**（字节稳定 + 正文不进提示词）——
@@ -361,6 +361,21 @@ def test_skill_view_refuses_to_escape_the_skills_dir() -> None:
     except OSError:
         linked = False                    # 某些文件系统不给建符号链接
 
+    # ★ 同一逃逸路径的**更隐蔽**一种：真目录里塞一个软链 `SKILL.md`
+    #   （目录是真的 → 过得了"软链目录"那一关；但 is_file() 跟随软链 ⇒
+    #    库外文件的 name/description 会进提示词索引）。
+    leaked_file = HOME / "outside_skill.md"
+    leaked_file.write_text(
+        "---\nname: leaked_file\ndescription: 库外描述泄漏_文件软链\n---\n标记_库外技能正文\n",
+        encoding="utf-8")
+    linked_dir = skill_utils.skills_dir() / "linked_file"
+    linked_dir.mkdir(parents=True)
+    linked_skill_md = True
+    try:
+        (linked_dir / skill_utils.SKILL_FILENAME).symlink_to(leaked_file)
+    except OSError:
+        linked_skill_md = False
+
     attempts = ["../secret", "../secret.md", "../../etc/passwd", "/etc/passwd",
                 "..", "a/b", "sneaky", "link", "不存在的技能", "", "  "]
     for bad in attempts:
@@ -377,6 +392,22 @@ def test_skill_view_refuses_to_escape_the_skills_dir() -> None:
               and "link" in [s.dir_name for s in skill_utils.discover_skills().skipped])
     else:
         check("（这台机器不给建符号链接，跳过这一条）", True)
+
+    if linked_skill_md:
+        # ★ 与软链目录**同一处置**：软链 SKILL.md 也在发现阶段被跳过并计数
+        scan = skill_utils.discover_skills()
+        check("★ 真目录里的**软链 SKILL.md** 在发现阶段被跳过（与软链目录同一处置）",
+              "leaked_file" not in [s.name for s in scan.skills]
+              and "linked_file" in [s.dir_name for s in scan.skipped],
+              str([(s.dir_name, s.reason) for s in scan.skipped]))
+        idx = skill_utils.build_skill_index()
+        check("…其 name 与 description **都不在索引里**（描述层也不泄漏）",
+              "leaked_file" not in idx and "库外描述泄漏_文件软链" not in idx, repr(idx))
+        prompt = sp.build_system_prompt(make_agent())
+        check("…也**不在系统提示词里**（名字与描述都没有）",
+              "leaked_file" not in prompt and "库外描述泄漏_文件软链" not in prompt)
+    else:
+        check("（这台机器不给建符号链接，跳过软链 SKILL.md 这一条）", True)
 
     # 纵深防御：就算有人绕过发现，手工造一个指向库外的 Skill 也一样读不出来
     forged = skill_utils.Skill(name="sneaky", description="库外",
@@ -444,14 +475,15 @@ GROUPS = [
      [test_body_only_enters_through_skill_view,
       test_description_is_truncated_to_the_limit]),
     ("3. 发现容错",
-     "缺 name / 缺 description / frontmatter 坏 / 没有 SKILL.md / 名字非法 → 跳过并计数（不抛）",
+     "缺 name / 缺 description / frontmatter 坏 / 没有 SKILL.md / 名字非法 / 多行块标记 → 跳过并计数（不抛）",
      [test_discovery_is_tolerant_and_counts_skips,
-      test_frontmatter_parser_is_a_narrow_subset]),
+      test_frontmatter_parser_is_a_narrow_subset,
+      test_multiline_block_marker_is_dropped]),
     ("4. 排序确定",
      "乱序创建 → 索引按**名字**排序 · 两次构建一致",
      [test_index_order_is_by_name]),
     ("5. skill_view 安全",
-     "`..` / 绝对路径 / 斜杠 / 空白 / 不存在 → 可读 JSON 错误 · 读不到库外文件 · 符号链接目录被跳过",
+     "`..` / 绝对路径 / 斜杠 / 空白 / 不存在 → 可读 JSON 错误 · 读不到库外文件 · 符号链接目录与**软链 SKILL.md** 都被跳过",
      [test_skill_view_refuses_to_escape_the_skills_dir]),
     ("6. 工具闸门（注册 → toolset → 可见）",
      "每个注册工具都有 toolset · `skill_view` 在 skills 组与默认捆里 · 有技能才可见",
