@@ -32,11 +32,15 @@ PROFILES_DIRNAME = "profiles"
 # 新建 profile 时**实际建出来**的目录。
 # 真实版是 9 个（`hermes_cli/profiles.py:32`，逐字）：
 #     ["memories", "sessions", "skills", "skins", "logs", "plans", "workspace", "cron", "home"]
-# mini 只建**它真的会读写的**两个 —— 建一个没有消费者的目录，
+# mini 只建**它真的会读写的**那些 —— 建一个没有消费者的目录，
 # 后果是"用户以为那个功能存在"（真实版那条判据：没有具体消费者的东西不要先建）。
 #   logs/   ← hermes_constants.logs_dir()
 #   hooks/  ← gateway/hooks.py 的 HookRegistry（第 7 章）
-PROFILE_DIRS = ["logs", "hooks"]
+#   skills/ ← agent/skill_utils.skills_dir()（第 13 章：发现 + 提示词索引 + skill_view）
+#             ★ 第 13 章才补进来：在此之前技能库没有消费者，所以刻意不建。
+#               现在有了，"每个 profile 一套技能"这件事就该从创建那一刻成立
+#               （而不是等用户自己 mkdir —— 那也是一条隐式约定）。
+PROFILE_DIRS = ["logs", "hooks", "skills"]
 
 # `--clone` 时**复制**的文件（真实版 `:35`，逐字）：
 #     _CLONE_CONFIG_FILES = ["config.yaml", ".env", "SOUL.md"]

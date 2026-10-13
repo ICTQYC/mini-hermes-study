@@ -27,12 +27,16 @@ volatile  ← 重建时最可能变（记忆、时间戳、运行时环境）
 | **层之间** | stable 层 | context 层 → volatile 层 |
 | **volatile 层内** | 记忆快照 | …时间戳 → **运行时环境块（含 cwd）** |
 
-## 还差什么（对照真实 Hermes）
+## 技能索引（第 13 章补上的一块）
 
-Hermes 的 volatile 层**以"技能索引"打头**（理由：变化点放本层最前面 = 爆炸半径最小），
-而且它的 stable 层里有个"先占位、后回填"的技巧——因为用哪版帮助指引取决于**还没建好的**
-技能索引。**mini 还没有技能系统，所以这两处都还不存在。第 10 章补技能时回来加。**
-"""
+上面那张表里「volatile 层内」一行原来还差一块：Hermes 的 volatile 层**以"技能索引"打头**
+（理由：变化点放本层最前面 = 爆炸半径最小）。第 13 章把它补上了 ——
+`_skill_index_parts()` 就是那个块：**只放名字 + 一句话描述**，
+技能正文不在提示词里（按需经 `skill_view` 读取，见 `agent/skill_utils.py`）。
+
+Hermes 的 stable 层里还有个"先占位、后回填"的技巧（因为用哪版帮助指引取决于
+**还没建好的**技能索引）；mini 的 stable 层**没有依赖技能索引的块**，
+所以这个技巧没有前提可依托 —— 不是遗漏，是 mini 里没有它的用武之地。"""
 from __future__ import annotations
 
 import logging
@@ -188,6 +192,27 @@ def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -
     return [block] if block else []
 
 
+def _skill_index_parts(agent: Any) -> List[str]:
+    """技能索引 —— **volatile 层的首块**（第 13 章 A2）。
+
+    对应真实 Hermes `agent/system_prompt.py:705-707`（逐字）：
+
+    > *Skills are runtime-mutable, so the index leads the volatile band: on a
+    > longest-prefix backend an unchanged index stays inside the reused prefix;
+    > a changed one re-prefills from here.*
+
+    翻成人话：技能是**运行期可变**的（用户随时往技能库里丢一个 `SKILL.md`），
+    所以它**不能**进 stable / context 层 —— 放那儿一变就废掉后面所有块。
+    但它又是 volatile 层里"最不该变"的东西（记忆随时写、时间戳跨天变、cwd `cd` 就变），
+    所以它排**首块**：真变了，从它开始重新 prefill 的部分最少。
+
+    ★ 内容构造在 `prompt_builder.load_skill_index()`（与 `load_memory_block` 并列）；
+      没有技能时它返回 `""`，`_join_tier` 会把这个空项整个丢掉 ——
+      于是"无技能"的提示词里**既没有这个块、也没有多余空行**（字节确定）。
+    """
+    return [pb.load_skill_index()]
+
+
 def _memory_parts(agent: Any) -> List[str]:
     """记忆快照 + 用户画像快照。
 
@@ -276,6 +301,9 @@ def build_system_prompt_parts(
 
     # ── volatile 层（重建时最可能变，刻意放最后）────────────────
     volatile_parts: List[str] = [
+        # ★ 首块：技能索引（第 13 章 A2）。运行期可变 ⇒ 必须在 volatile 层；
+        #   又要"爆炸半径最小" ⇒ 排在本层最前（理由见 _skill_index_parts）。
+        *_skill_index_parts(agent),
         *_memory_parts(agent),
         *_timestamp_parts(agent),
         *_runtime_env_part(agent),

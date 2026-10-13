@@ -67,6 +67,14 @@ TOOLSETS: Dict[str, Dict[str, Any]] = {
         "description": "任务清单（agent 级工具：执行由 agent loop 接管，不走注册表）",
         "tools": ["todo_list"],
     },
+    # 第 13 章新增：技能库的**第二跳**（第一跳是系统提示词里的技能索引）。
+    # ★ 一条工具自己占一个 toolset，看起来"一个格子放一个工具"很浪费 ——
+    #   但这正是 toolset 的语义：它是**一组能力的名字**（"能不能读技能"），
+    #   不是工具的别名。按名字列清单会过期，按 toolset 才能"自动跟上"（见文件头）。
+    "skills": {
+        "description": "读取技能正文（渐进披露的第二跳：索引在提示词里，正文按需读）",
+        "tools": ["skill_view"],
+    },
 }
 
 # 默认捆（对应 Hermes 的 `_HERMES_CORE_TOOLS`）。
@@ -80,9 +88,17 @@ TOOLSETS: Dict[str, Dict[str, Any]] = {
 # `todo_list` / `memory` / `session_search` 这些 **agent 级**工具 ——
 # 它们的 **schema 走正常注册**，只有**执行**被 agent loop 接管。
 # 所以"暴露给谁"这件事只有一个答案来源：**这张表**。
+#
+# ★ 第 13 章为什么把 `skill_view` 放进默认捆（而不是"只在显式点名 `skills` 时暴露"）：
+#   因为**系统提示词无条件宣传它**（volatile 层那个"可用技能"索引块告诉模型
+#   "要读正文就用 skill_view(name)"）。一个只在显式点名时才暴露的工具，
+#   配上一段无条件宣告它的提示词，就是第 4 章那个 bug 的形状：
+#   **提示词在宣传一个模型拿不到的工具**（当时的主角是 `search_files`）。
+#   两个面必须同开同关 —— 只有"技能库是空的"这一种情况例外，那种情况下
+#   索引块本身也不存在（见 tools/skills.py 的 check_fn）。
 MINI_CORE_TOOLS: List[str] = [
     "read_file", "write_file", "list_dir", "search_files", "web_search",
-    "terminal", "todo_list",
+    "terminal", "todo_list", "skill_view",
 ]
 
 
@@ -175,7 +191,7 @@ def describe_toolsets() -> str:
         out.append("")
         out.append(f"{name}　{spec['description']}")
         for tool in spec["tools"]:
-            # ⚠️ 诚实标注：**当前这张表里 7 个工具全都在默认捆里**，所以下面那个 `·` 分支
+            # ⚠️ 诚实标注：**当前这张表里 8 个工具全都在默认捆里**，所以下面那个 `·` 分支
             #    现在没有数据（打印出来永远是 ✓）。它存在是因为"默认捆 ≠ 全部 toolset"，
             #    一旦加一个"只在显式点名时暴露"的 toolset，这一支立刻变成
             #    "为什么模型看不见这个工具"的第一眼答案。别把它当装饰删掉。

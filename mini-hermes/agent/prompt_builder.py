@@ -33,6 +33,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from hermes_constants import get_mini_home
+# 技能库才是"技能这件事"的唯一实现（第 13 章）：提示词里的索引与
+# `skill_view` 都调它。放在 agent/ 里 = 真实 Hermes 的同名同位
+# （`agent/skill_utils.py`），而且 prompt_builder 就在同目录，不跨层。
+from agent import skill_utils
 # 「我在哪个目录」只有一份实现，住在 hermes_constants（双方都依赖的叶子模块）。
 # ★ 为什么搬走：**工具执行也要用它** —— terminal / search_files / file_tools 的
 #   相对路径基准必须是同一个值。以前工具用 `os.getcwd()`，而启动器为了 import
@@ -631,6 +635,28 @@ def load_memory_block() -> str:
 def load_user_profile_block() -> str:
     """``~/.mini-hermes/USER.md`` → 用户画像快照。"""
     return _load_home_markdown("USER.md", "## 用户画像（USER.md）")
+
+
+# --------------------------------------------------------------------------- #
+# 技能索引（第 13 章）
+# --------------------------------------------------------------------------- #
+
+
+def load_skill_index() -> str:
+    """``<MINI_HOME>/skills/`` → 可用技能索引（渐进披露的**第一跳**）。
+
+    与 `load_memory_block` 并列：**内容构造**住这一层，
+    排序（进哪一层、排在谁前面）住 `agent/system_prompt.py` ——
+    这条分工是第 3 章定下的（想改排序只动 system_prompt，想加一种来源只动这里）。
+
+    ★ **扫描与解析只有一份实现**：真活儿在 `agent/skill_utils.py`，
+      提示词（这里）与 `tools/skills.py` 的 `skill_view` 用的是同一个模块。
+      两边各写一遍扫目录 = 一个必然会漂的"同一事实两处写"
+      （本项目已踩过三次：工具分发、结果回填、状态重建）。
+
+    ★ 没有技能时返回 `""` —— 空串不是"空块"，它会在 `_join_tier` 里被整个丢掉。
+    """
+    return skill_utils.build_skill_index()
 
 
 # --------------------------------------------------------------------------- #

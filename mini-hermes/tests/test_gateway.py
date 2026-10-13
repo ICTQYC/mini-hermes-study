@@ -704,8 +704,8 @@ def test_profile_create_and_seed():
         home = create_profile("lab")
         check("create 建出这个 profile 的 home",
               home == base / "profiles" / "lab" and home.is_dir(), str(home))
-        check("建出的目录 = mini 真的会读写的那些（logs / hooks）",
-              set(PROFILE_DIRS) == {"logs", "hooks"}
+        check("建出的目录 = mini 真的会读写的那些（logs / hooks / skills）",
+              set(PROFILE_DIRS) == {"logs", "hooks", "skills"}
               and all((home / d).is_dir() for d in PROFILE_DIRS))
         env = home / ".env"
         check("播种一份**凭据文件**（从第一天起它有自己的 .env）",
