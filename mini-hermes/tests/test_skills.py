@@ -2,7 +2,7 @@
 
 跑法：python3 tests/test_skills.py
 
-## 测的是什么（6 组）
+## 测的是什么（7 组）
 
 | 组 | 守的承诺 |
 |---|---|
@@ -12,6 +12,7 @@
 | 4. 排序确定 | 乱序创建三个技能 → 索引按**名字**排序；两次构建字节一致 |
 | 5. `skill_view` 安全 | `..` / 绝对路径 / 斜杠 / 空白 / 不存在 → **可读 JSON 错误**；读不到技能库以外的任何文件；符号链接**目录**与**软链 SKILL.md** 都被跳过 |
 | 6. 工具闸门（注册 → toolset → 可见） | 每个注册工具都有 toolset · `skill_view` 在 `skills` 组与默认捆里 · 发现机制认得 `tools/skills.py` · **有技能才可见**（与索引同开同关） |
+| 7. 内置技能与用户共存 ★ | **两个根都发现** · **用户同名覆盖内置**（内置那份进 skipped，理由说明被谁覆盖）· 跨根顺序确定 · 内置根不存在时安静 · `skill_view` 能读**内置**技能 |
 
 ★ 组 1/2 是这一章最核心的两条**不变量**（字节稳定 + 正文不进提示词）——
 改 `agent/system_prompt.py` / `agent/skill_utils.py` 时最容易破坏的就是它们。
@@ -22,12 +23,19 @@
 配一条**未注册自检**：定义了 `test_` 函数却没登记进 `GROUPS` → 直接退出（2）。
 （"写了但从来没跑"是测试里最经典的静默失败 —— 测试数量看着在涨，覆盖的却是老东西。）
 
-## 隔离
+## 隔离（**两个根都要隔离**）
 
-`MINI_HOME` 在 **import 之前**指到临时目录（见 `_TEST_HOME`）——
+`MINI_HOME` 在 **import 之前**指到临时目录（见 `_TEST_HOME`）—— 这隔离了**用户级**技能根，
 否则测试会去读用户真实的 `~/.mini-hermes/skills/`，结果就依赖
-"跑测试的这个人家里放了什么技能"。每条用例自己造技能目录、开跑前先清空
-（`reset_skills_dir()`），所以用例之间的顺序无关。
+"跑测试的这个人家里放了什么技能"。
+
+★ 第 13b 起技能有**两个**根，所以还必须隔离**内置级**根（`<repo>/mini-hermes/skills/`）：
+仓里随程序发布的内置技能会让 `has_skills()` 为真、混进这些用例的扫描结果。
+做法是在 import 之后把 `skill_utils.bundled_skills_dir` **patch 到另一个临时目录**
+（monkeypatch 风格，**生产代码里不加任何测试钩子**），并在每条用例开跑前复位。
+（实测：只隔离 `MINI_HOME` 时，仓里有内置技能 ⇒ 本文件红 10 条 + `test_tools_runtime.py` 红 1 条。）
+
+每条用例自己造技能目录、开跑前先清空**两个根**（`reset_roots()`），所以用例之间顺序无关。
 """
 from __future__ import annotations
 
@@ -51,6 +59,23 @@ import toolsets  # noqa: E402
 from agent import skill_utils  # noqa: E402
 from agent import system_prompt as sp  # noqa: E402
 from tools import registry  # noqa: E402
+
+# ★ 第二个根：**内置级**技能库。仓里随程序发布的内置技能（`mini-hermes/skills/`）
+#   必须在这里被隔离掉，否则它会混进本文件每条用例的扫描结果
+#   （实测：只隔离 MINI_HOME 时红 10 条）。做法 = 把它 patch 到一个临时目录。
+_TEST_BUNDLED = tempfile.mkdtemp(prefix="mini_ch13_bundled_")
+
+
+def isolate_bundled_root() -> None:
+    """把**内置级**技能根指到临时目录（monkeypatch 风格）。
+
+    ★ 生产代码没有、也不该有测试钩子 ⇒ 从**测试侧**替换模块属性即可
+      （`skill_utils` 内部按模块全局名 `bundled_skills_dir` 调用，替换后立即生效）。
+    """
+    skill_utils.bundled_skills_dir = lambda: Path(_TEST_BUNDLED)
+
+
+isolate_bundled_root()      # import 之后立刻生效，之后由 reset_roots() 复位
 
 PASS, FAIL = [], []
 
@@ -80,19 +105,29 @@ def make_agent(**kw):
     )
 
 
-def reset_skills_dir() -> None:
-    """清空技能库（每条用例自己造，彼此不串）。"""
+def reset_roots() -> None:
+    """清空**两个**技能根 + 确保内置根 patch 在位（夹具复位；彼此不串）。"""
+    isolate_bundled_root()
     shutil.rmtree(skill_utils.skills_dir(), ignore_errors=True)
+    shutil.rmtree(_TEST_BUNDLED, ignore_errors=True)
+
+
+def reset_skills_dir() -> None:
+    """清空技能库。★ 第 13b 起"技能库"是**两个根** —— 保留这个老名字当薄壳，
+    老用例不用改，语义却已经是"把两个根都清干净"。"""
+    reset_roots()
 
 
 def write_skill(dir_name: str, *, name: str = "", description: str = "",
-                body: str = "正文。", raw: str | None = None) -> Path:
-    """造一个技能目录。
+                body: str = "正文。", raw: str | None = None,
+                root: Path | None = None) -> Path:
+    """造一个技能目录（默认在**用户根**，`root=` 可指定内置根）。
 
     `raw` 给了就**逐字**写（用来造坏 frontmatter）；否则按 name/description 拼。
     故意支持 name 与 dir_name 不同（排序那组要证明排序键是**名字**）。
     """
-    d = skill_utils.skills_dir() / dir_name
+    base = Path(root) if root is not None else skill_utils.skills_dir()
+    d = base / dir_name
     d.mkdir(parents=True, exist_ok=True)
     if raw is None:
         front = []
@@ -103,6 +138,11 @@ def write_skill(dir_name: str, *, name: str = "", description: str = "",
         raw = "---\n" + "\n".join(front) + "\n---\n" + body
     (d / skill_utils.SKILL_FILENAME).write_text(raw, encoding="utf-8")
     return d
+
+
+def write_bundled_skill(dir_name: str, **kw) -> Path:
+    """在**内置根**里造一个技能（其余参数同 `write_skill`）。"""
+    return write_skill(dir_name, root=skill_utils.bundled_skills_dir(), **kw)
 
 
 def index_lines() -> list:
@@ -464,6 +504,122 @@ def test_skill_view_visibility_tracks_the_index() -> None:
           "skill_view" not in defnames(), str(defnames()))
 
 
+# ═══════════════════════════════ 7. 内置技能与用户共存（用户优先）★
+def test_both_roots_are_discovered() -> None:
+    """★ 两个根**都**参与发现：内置技能与用户技能合并进**同一个**索引块。"""
+    reset_roots()
+    write_skill("user-only", name="user-only", description="用户的技能")
+    write_bundled_skill("bundled-only", name="bundled-only", description="内置的技能")
+
+    names = [s.name for s in skill_utils.discover_skills().skills]
+    check("用户根与内置根**都**被扫描（两个技能都进库）",
+          names == ["bundled-only", "user-only"], str(names))
+    check("skill_roots() = [用户根, 内置根]（用户在前 ⇒ 优先级高）",
+          [Path(p) for p in skill_utils.skill_roots()]
+          == [skill_utils.skills_dir(), Path(_TEST_BUNDLED)],
+          str([str(p) for p in skill_utils.skill_roots()]))
+    idx = skill_utils.build_skill_index()
+    check("索引是**一个合并块**：内置与用户的技能行都在里面",
+          "- bundled-only: 内置的技能" in idx and "- user-only: 用户的技能" in idx, repr(idx))
+
+
+def test_user_skill_overrides_bundled() -> None:
+    """★ 用户同名技能**覆盖**内置技能（首见胜出 = PATH 语义）。"""
+    reset_roots()
+    discover()
+    write_bundled_skill("alpha", name="alpha", description="内置版", body="内置正文")
+    write_skill("alpha", name="alpha", description="用户版", body="用户正文")
+
+    scan = skill_utils.discover_skills()
+    check("同名时**用户版胜出**（索引里是用户的描述）",
+          [s.name for s in scan.skills] == ["alpha"] and scan.skills[0].description == "用户版",
+          str([(s.name, s.description) for s in scan.skills]))
+    reasons = {s.dir_name: s.reason for s in scan.skipped}
+    check("★ 内置那份进了 skipped，理由是**被哪个根的哪份**覆盖（可诊断）",
+          "alpha" in reasons and "用户/alpha" in reasons["alpha"], str(reasons))
+    check("索引里只有一行 alpha（用户版）", index_lines() == ["- alpha: 用户版"], str(index_lines()))
+    got = skill_view("alpha")
+    check("读取路径也一致：skill_view('alpha') 拿到的是**用户版正文**",
+          got.get("content", "").strip() == "用户正文", str(got)[:140])
+
+
+def test_cross_root_order_is_deterministic() -> None:
+    """★ 跨根顺序确定：两次发现**完全一致**（索引字节稳定的前提）。"""
+    reset_roots()
+    for n in ("zeta", "alpha", "mu"):
+        write_skill(n, name=n, description=f"用户 {n}")
+    for n in ("beta", "gamma"):
+        write_bundled_skill(n, name=n, description=f"内置 {n}")
+
+    first_names = [s.name for s in skill_utils.discover_skills().skills]
+    second_names = [s.name for s in skill_utils.discover_skills().skills]
+    check("两次发现的技能序列**完全一致**（跨根顺序确定，无抖动）",
+          first_names == second_names, f"{first_names} vs {second_names}")
+    first = skill_utils.build_skill_index()
+    check("两次构建索引字节一致", first == skill_utils.build_skill_index() and first != "")
+    check("跨根合并后按**技能名**全局升序",
+          line_names() == ["alpha", "beta", "gamma", "mu", "zeta"], str(line_names()))
+    check("顺序与**根**无关（不是\"用户全在前、内置全在后\"：内置的 beta 排进用户姓名之间）",
+          line_names().index("beta") < line_names().index("mu"), str(line_names()))
+
+
+def test_same_name_in_one_root_is_deterministic() -> None:
+    """★ **同一根内**两个目录取同名时，胜出者由**扫描顺序**唯一决定（不是创建顺序）。
+
+    `_iter_one_root` 按目录名排序 ⇒ 目录名小的先被看见 ⇒ 它胜出（首见胜出）。
+    这条钉住的是"首见胜出的**确定性**"：索引最后还会按技能名再排一次，所以索引本身看不出
+    差别 —— 但 `skipped` 的理由、以及 `skill_view("dup")` 拿到谁的正文，都会跟着扫描顺序漂移。
+    （对照：去掉根内 `sorted()`，索引仍字节稳定，只有这条会红。）
+    """
+    reset_roots()
+    for d in ("yankee", "arizona"):        # 故意先建 yankee、后建 arizona：创建顺序 ≠ 名字顺序
+        write_skill(d, name="dup", description=f"{d} 版")
+
+    scan = skill_utils.discover_skills()
+    winner = [s.dir.name for s in scan.skills if s.name == "dup"]
+    check("同根内同名 → **目录名小的胜出**（看扫描顺序，不看创建顺序）",
+          winner == ["arizona"], str(winner))
+    check("…落败那份进 skipped，理由里写明被**哪份**覆盖（带上胜出者所在目录名）",
+          any(r.dir_name == "yankee" and "arizona" in r.reason for r in scan.skipped),
+          str([(r.dir_name, r.reason) for r in scan.skipped]))
+
+
+def test_missing_bundled_root_is_quiet() -> None:
+    """★ 内置根不存在时**安静**跳过（兼容"只有用户级"的旧环境）。"""
+    reset_roots()
+    write_skill("alpha", name="alpha", description="用户技能")
+    shutil.rmtree(skill_utils.bundled_skills_dir(), ignore_errors=True)   # 假装没有内置根
+
+    scan = skill_utils.discover_skills()
+    check("内置根不存在 ⇒ 用户技能照常发现、不抛异常",
+          [s.name for s in scan.skills] == ["alpha"], str([s.name for s in scan.skills]))
+    check("…也不产生任何 skipped（不把\"目录不存在\"当成坏技能）",
+          scan.skipped == [], str([(s.dir_name, s.reason) for s in scan.skipped]))
+    check("索引照常产出（只有用户技能）", index_lines() == ["- alpha: 用户技能"], str(index_lines()))
+
+    reset_roots()
+    check("两个根都不存在 ⇒ 索引是空串（不留空块）", skill_utils.build_skill_index() == "")
+
+
+def test_skill_view_reads_bundled_skill() -> None:
+    """★ `skill_view` 能读出**内置**技能的正文（不是"只进索引、读不出"）。"""
+    reset_roots()
+    discover()
+    marker = "内置正文标记_只读内置根"
+    write_bundled_skill("conventions", name="conventions",
+                        description="随程序发布的约定", body=f"第一段。\n{marker}\n")
+
+    got = skill_view("conventions")
+    check("skill_view 能读内置技能：返回正文（含独有句）",
+          "error" not in got and marker in got.get("content", ""), str(got)[:140])
+    check("…返回里带着它来自**内置**根（path 落在内置根下）",
+          str(skill_utils.bundled_skills_dir()) in got.get("path", ""), got.get("path", ""))
+    check("…同时给出目录列表（渐进披露第二跳入口）",
+          isinstance(got.get("files"), list) and bool(got["files"]), str(got.get("files"))[:80])
+    check("只有内置技能时 skill_view 也**可见**（has_skills 覆盖两个根）",
+          skill_utils.has_skills() and "skill_view" in defnames(), str(defnames()))
+
+
 # ══════════════════════════════════════════════════════════════════════════════ #
 GROUPS = [
     ("1. 索引字节稳定 ★",
@@ -489,6 +645,15 @@ GROUPS = [
      "每个注册工具都有 toolset · `skill_view` 在 skills 组与默认捆里 · 有技能才可见",
      [test_skill_view_is_registered_and_exposed,
       test_skill_view_visibility_tracks_the_index]),
+    ("7. 内置技能与用户共存（用户优先）★",
+     "两个根都发现 · **用户同名覆盖内置**（内置进 skipped，理由说明被谁覆盖）· 跨根顺序确定 · "
+     "内置根不存在时安静 · `skill_view` 能读**内置**技能 · **同根内同名时胜出者确定**",
+     [test_both_roots_are_discovered,
+      test_user_skill_overrides_bundled,
+      test_cross_root_order_is_deterministic,
+      test_same_name_in_one_root_is_deterministic,
+      test_missing_bundled_root_is_quiet,
+      test_skill_view_reads_bundled_skill]),
 ]
 
 
@@ -518,6 +683,7 @@ def main() -> None:
     if FAIL:
         print("失败项：" + "; ".join(FAIL))
     shutil.rmtree(_TEST_HOME, ignore_errors=True)
+    shutil.rmtree(_TEST_BUNDLED, ignore_errors=True)
     sys.exit(1 if FAIL else 0)
 
 

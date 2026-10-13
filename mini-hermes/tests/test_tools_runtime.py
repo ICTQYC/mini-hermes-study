@@ -44,7 +44,16 @@ os.environ["MINI_HOME"] = _TEST_HOME
 
 import model_tools  # noqa: E402
 import toolsets  # noqa: E402
+from agent import skill_utils  # noqa: E402
 from tools import registry  # noqa: E402
+
+# ★ 第 13b：技能现在有**两个**根（用户 + 内置）。本文件的"默认工具集"断言
+#   假设技能库是空的 —— 但仓里已随程序发布一个内置技能（`mini-hermes/skills/`），
+#   它会让 `skill_view` 变成可见（`has_skills()` 为真 ⇒ 默认工具从 6 个变 7 个）。
+#   所以这里把**内置根**也指到临时目录（monkeypatch 风格，生产代码不加测试钩子），
+#   "默认"才真的是"一个技能都没有"。
+_BUNDLED_HOME = tempfile.mkdtemp(prefix="mini_tools_bundled_")
+skill_utils.bundled_skills_dir = lambda: Path(_BUNDLED_HOME)
 
 PASS, FAIL = [], []
 
@@ -916,4 +925,5 @@ if __name__ == "__main__":
     if FAIL:
         print("失败项：" + "; ".join(FAIL))
     shutil.rmtree(_TEST_HOME, ignore_errors=True)
+    shutil.rmtree(_BUNDLED_HOME, ignore_errors=True)
     raise SystemExit(1 if FAIL else 0)

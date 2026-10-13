@@ -30,6 +30,28 @@ curator（无长命进程）。
 窄在哪、为什么敢窄：mini 没有"分类"这个消费者（没有 browse、没有 hub 安装），
 一层够用；等真有分类需求再补递归 —— 不做投机性实现。
 
+## 两个根：用户级 + 内置级（用户优先）
+
+★ 技能有两个来源，**共存**：
+
+```text
+<MINI_HOME>/skills/            ← 用户级：每人一套，用户随手写、随手改（skills_dir()）
+<repo>/mini-hermes/skills/     ← 内置级：随程序发布、只读、升级时可能被整体替换（bundled_skills_dir()）
+```
+
+`skill_roots()` 按 **`[用户, 内置]`** 的顺序把它们拼起来 —— **首见胜出**，
+于是**用户同名技能覆盖内置技能**（PATH 语义：前面的目录优先）。真实侧
+`agent/skill_utils.py:398-400` 逐字写着 *"Skill dirs: local `~/.hermes/skills/`
+first, then create_dir, then external."*，mini 抄的就是"用户在前"这一条
+（少了 create_dir / external 两层，因为 mini 没有那两个来源）。
+
+★ **为什么不做信任门**：真实侧对"项目内技能"另有一道门 ——
+只有 root 进了 `skills.trusted_project_dirs` 才加载（`agent/skill_utils.py:409-413`），
+理由是*"a prompt-injection vector if auto-sourced from any clone"*。
+判据是**来源是否可信**：那些技能可能**从任意 clone 里被自动加载**。
+mini **没有这个来源** —— 两个根都可信（内置随程序发布、用户根是用户本人机器上手写的），
+不存在"从外部 clone 自动加载"的路径，信任门没有可保护的攻击面 ⇒ **不做**。
+
 ## 这个文件是「技能这件事」的唯一实现
 
 `agent/prompt_builder.load_skill_index()`（进提示词的索引）与
@@ -52,7 +74,8 @@ __all__ = [
     "SKILL_FILENAME", "SKILL_PROMPT_DESC_LIMIT", "SKILL_INDEX_HEADING",
     "EXCLUDED_SKILL_DIRS", "SUPPORT_DIRS",
     "Skill", "SkippedSkill", "SkillScan",
-    "skills_dir", "iter_skill_dirs", "split_frontmatter", "parse_frontmatter",
+    "skills_dir", "bundled_skills_dir", "skill_roots", "iter_skill_dirs",
+    "split_frontmatter", "parse_frontmatter",
     "is_valid_skill_name", "truncate_description", "read_skill",
     "discover_skills", "resolve_skill", "load_skill_body",
     "build_skill_index", "has_skills",
@@ -130,17 +153,63 @@ def skills_dir() -> Path:
     return get_mini_home() / "skills"
 
 
-def iter_skill_dirs(root: Optional[Path] = None) -> List[Path]:
-    """**候选**技能目录（排序后返回；跳过隐藏目录 / 排除目录 / 非目录）。
+def bundled_skills_dir() -> Path:
+    """**内置技能库**根目录：``<repo>/mini-hermes/skills``（随程序发布）。
 
-    ★ 为什么必须排序：索引要**字节稳定**（A4 的第一条不变量），而
-      `iterdir()` 的顺序是文件系统给的、不保证稳定。真实 Hermes 也是
-      "扫完排序再 yield"（`iter_skill_index_files`：`yield from map(Path, sorted(matches))`）。
-    ★ 这个函数**只回答"去哪儿看"**，"看到的算不算技能"归 `read_skill()`——
-      包括"符号链接目录不算"。为什么不在这里悄悄滤掉：漏看的技能
-      和"看见了但拒绝"的技能在诊断时是两件事，后者要出现在 `skipped` 里（有计数、有原因）。
+    ★ 与 `skills_dir()` 的区别：`skills_dir()` 是**用户级**（`<MINI_HOME>/skills`，
+      每人一套、用户随手写随手改）；这里是**随程序发布的内置技能** —— 它跟着源码走，
+      不该由用户改，升级（重新拉一份代码）时可能被**整体替换**。
+      这正是真实 Hermes 里 `skills/`（随包内置）与 `~/.hermes/skills/`（用户本地）的分工。
+    ★ 路径 = `Path(__file__).resolve().parent.parent / "skills"`：本文件住在
+      `mini-hermes/agent/` 下，上翻两级即 `mini-hermes/`，内置技能就在它的 `skills/`。
+      `resolve()` 是为了让"经由符号链接启动的仓库"也指到真身。
+    ★ 目录**可能不存在**（还没放内置技能的检出）—— 那不算错：发现层面安静跳过
+      （见 `discover_skills`；兼容"只有用户级"的旧环境）。
     """
-    base = Path(root) if root is not None else skills_dir()
+    return Path(__file__).resolve().parent.parent / "skills"
+
+
+def skill_roots() -> List[Path]:
+    """所有技能库根，**用户优先、内置兜底**（顺序 = 优先级，不得调换）。
+
+    ``[skills_dir(), bundled_skills_dir()]`` —— 逐字对齐真实侧
+    `agent/skill_utils.py:398-400` 的 *"Skill dirs: local ``~/.hermes/skills/`` first,
+    then create_dir, then external."*：**第一个找到的胜出**（首见胜出），
+    于是用户同名技能能覆盖内置技能 —— 这就是 PATH 的语义（前面的目录优先）。
+    真实侧还多两层（`skills.create_dir` / `skills.external_dirs`），mini 没有那两个来源
+    （见模块 docstring 的"没有来源这个概念"），只留"用户 → 内置"两层。
+    """
+    return [skills_dir(), bundled_skills_dir()]
+
+
+def _root_label(root: Path) -> str:
+    """技能根的**诊断短名**（让人一眼看出覆盖/命中发生在哪个根）。
+
+    ★ 为什么不能直接用 `root.name`：用户根与内置根的 basename **都是 `skills`**，
+      光看目录名分不开"谁覆盖了谁"。所以按**角色**取名：用户根 → ``用户``，
+      内置根 → ``内置``；显式传入的其它根（如测试的临时目录）回退到目录名。
+    ★ 用 `resolve()` 比较：用户根可能是 `/var/...`（macOS 上 `/var` 是 `/private/var`
+      的软链），不解析就会与 `skills_dir()` 的写法对不上。
+    """
+    p = Path(root)
+    try:
+        rp = p.resolve()
+        user_root = skills_dir().resolve()
+        bundled_root = bundled_skills_dir().resolve()
+    except OSError:
+        return p.name or "根"
+    if rp == user_root:
+        return "用户"
+    if rp == bundled_root:
+        return "内置"
+    return p.name or "根"
+
+
+def _iter_one_root(base: Path) -> List[Path]:
+    """**单个根**下的候选技能目录（排序后返回；跳过隐藏目录 / 排除目录 / 非目录）。
+
+    这是 `iter_skill_dirs` 的**逐根实现**；多根只是把它按根序拼起来（扫描规则只写这一处）。
+    """
     if not base.is_dir():
         return []
     out: List[Path] = []
@@ -149,6 +218,38 @@ def iter_skill_dirs(root: Optional[Path] = None) -> List[Path]:
             continue
         if entry.is_dir():
             out.append(entry)
+    return out
+
+
+def _within(path: Path, base: Path) -> bool:
+    """``path`` 落在 ``base`` 目录内吗（不含等于 base 本身之外的特殊分支，纯前缀判定）。"""
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def iter_skill_dirs(root: Optional[Path] = None) -> List[Path]:
+    """**候选**技能目录（排序后返回；跳过隐藏目录 / 排除目录 / 非目录）。
+
+    ★ 显式传 `root=` ⇒ **只看这一个根**（单根语义，调用方与测试依赖）；
+      不传 ⇒ 遍历 `skill_roots()`（用户根 → 内置根），把各根结果**按根序拼接**。
+    ★ 跨根顺序必须确定：**根顺序固定**（`skill_roots()` 的顺序）×
+      **根内按目录名排序**（`_iter_one_root` 的 sorted）⇒ 同一批技能两次扫描得到
+      同一个候选序列。这是"索引字节稳定"（A4 第一条不变量）的一半；
+      另一半是 `discover_skills` 最后按**技能名**再排一次。
+    ★ 真实 Hermes 也是"扫完排序再 yield"（`iter_skill_index_files`：
+      `yield from map(Path, sorted(matches))`）。
+    ★ 这个函数**只回答"去哪儿看"**，"看到的算不算技能"归 `read_skill()`——
+      包括"符号链接目录不算"。为什么不在这里悄悄滤掉：漏看的技能
+      和"看见了但拒绝"的技能在诊断时是两件事，后者要出现在 `skipped` 里（有计数、有原因）。
+    """
+    if root is not None:
+        return _iter_one_root(Path(root))
+    out: List[Path] = []
+    for base in skill_roots():
+        out.extend(_iter_one_root(base))
     return out
 
 
@@ -320,8 +421,12 @@ def discover_skills(root: Optional[Path] = None) -> SkillScan:
       真实 Hermes 有磁盘快照 + 进程内 LRU（`_SKILLS_PROMPT_CACHE`，32 条），
       那是为了 ~100 个技能 × 每轮重建；mini 现在不需要 —— 等真慢了再补
       （代价说清：同一批技能会被重复解析，数量级是几个文件）。
-    ★ 同名技能：**目录名靠前的胜出**（对应真实侧的"首见胜出"），
-      另一个进跳过清单 —— 否则 `skill_view(name)` 就有了两个答案。
+    ★ 扫描面 = `skill_roots()`（**用户根 → 内置根**），所以内置技能与用户技能**合并**进
+      同一个 `SkillScan`（索引里也是同一块）。
+    ★ 同名技能：**首见胜出**（对应真实侧），所以按根序 **用户同名覆盖内置**；
+      落败的那份进跳过清单，理由带上它被哪个根的哪份覆盖
+      （`<根名>/<目录名>`，例：``名字与 用户/alpha 重复（首见胜出）``）——
+      否则 `skill_view(name)` 就有了两个答案，也没法诊断"到底谁覆盖了谁"。
     """
     skills: List[Skill] = []
     skipped: List[SkippedSkill] = []
@@ -337,7 +442,9 @@ def discover_skills(root: Optional[Path] = None) -> SkillScan:
                              reason=f"名字与 {seen[skill.name]} 重复（首见胜出）")
             )
             continue
-        seen[skill.name] = directory.name
+        # ★ 记的是 `<根名>/<目录名>` 而不是光目录名：跨根重名时，落败者要能看出
+        #    "被哪个根的哪份覆盖了"（两个根的 basename 都是 `skills`，光看目录名分不开）。
+        seen[skill.name] = f"{_root_label(directory.parent)}/{directory.name}"
         skills.append(skill)
     skills.sort(key=lambda s: s.name)          # ← 索引字节稳定的前提
     skipped.sort(key=lambda s: s.dir_name)     # ← 跳过清单也确定序（方便测试/诊断）
@@ -366,14 +473,22 @@ def load_skill_body(skill: Skill, root: Optional[Path] = None) -> Optional[str]:
     """读技能**正文**（剥掉 frontmatter）。读不到 → `None`。
 
     ★ 纵深防御（两道都过才返回）：
-      ① 路径必须落在技能库内 —— 挡"库外文件"（比如有人在技能目录里塞符号链接）；
+      ① 路径必须落在**某个技能库根内** —— 挡"库外文件"（比如有人在技能目录里塞符号链接）；
+         没有显式 `root=` 时对 `skill_roots()` **逐个根**判定 —— 内置技能住在内置根里，
+         只看用户根会把内置技能的正文全挡下（内含技能也就成了"进索引但读不出"）。
       ② `Skill` 对象**只能**由 `read_skill()` 造出来 —— 挡"这不是技能"。
       因此"读出技能目录以外的文件"这条路在实现上是关着的，不是靠调用方自觉。
     """
-    base = (Path(root) if root is not None else skills_dir()).resolve()
+    if root is not None:
+        bases = [Path(root).resolve()]
+    else:
+        bases = [r.resolve() for r in skill_roots()]
     try:
-        skill.path.resolve().relative_to(base)
-    except (ValueError, OSError):
+        path = skill.path.resolve()
+    except OSError:
+        logger.warning("技能路径解析失败，拒绝读取：%s", skill.path)
+        return None
+    if not any(_within(path, base) for base in bases):
         logger.warning("技能路径逃出技能库，拒绝读取：%s", skill.path)
         return None
     try:

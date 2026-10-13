@@ -25,6 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import model_tools  # noqa: E402
 from agent import prompt_builder, skill_utils, system_prompt  # noqa: E402
 
+# ★ 技能从第 13b 起有**两个**根（用户 + 仓内内置 `mini-hermes/skills/`）。本 demo 断言的是
+#   **用户根**的行为（"空库 ⇒ 索引为空"与"恰好两个好技能"），所以把内置根也指到临时空目录 ——
+#   否则仓里随程序发布的那个内置技能会污染这两条断言（对照：tests/test_tools_runtime.py 同处置）。
+_BUNDLED = Path(tempfile.mkdtemp(prefix="mini_ch13_bundled_"))
+skill_utils.bundled_skills_dir = lambda: _BUNDLED
+
 RESULTS = []
 BODY_SECRET = "正文独有句：鹦鹉会在凌晨三点背诵圆周率。"  # 只该出现在 skill_view 里
 
@@ -156,4 +162,5 @@ if __name__ == "__main__":
         _code = main()
     finally:
         shutil.rmtree(_HOME, ignore_errors=True)
+        shutil.rmtree(_BUNDLED, ignore_errors=True)
     sys.exit(_code)
