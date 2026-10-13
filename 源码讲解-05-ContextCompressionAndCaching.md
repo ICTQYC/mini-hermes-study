@@ -39,6 +39,9 @@ mini 版（本仓库，第 5 章末）
   ~/.hermes/hermes-agent/
 ```
 
+※ 上表是**第 5 章末**的快照。其后章节有增补：`context_engine.py` → **112 行**（第 14 章补 `name`）、
+`context_compressor.py` → **1046 行**（第 10/14 章）、`run_agent.py` → **1305 行**。
+
 **先记住这条**：本章的"规模差"主要不在代码量，而在**分支数**。
 第 4 章 mini 对着 977 行的 `registry.py` 写 362 行还基本同构；本章 mini 对着
 5,061 行的压缩器写 954 行，**差的是那些"出过 bug 才长出来的分支"** ——
@@ -57,7 +60,7 @@ mini 版（本仓库，第 5 章末）
 
 | 角色 | 是谁 | 什么时候干活 |
 |---|---|---|
-| **接口** | `class ContextEngine(ABC)` `agent/context_engine.py:47` | 定义"引擎必须提供什么"，让压缩引擎**可替换**（Hermes 另有一个 `lcm` 引擎） |
+| **接口** | `class ContextEngine(ABC)` `agent/context_engine.py:47` | 定义"引擎必须提供什么"，让压缩引擎**可替换**（Hermes 另有一个 `lcm` 引擎；★ mini 侧第 14 章补上插槽：`context.engine` + 目录发现 + 唯一构造点改查表 ⇒ 见《源码讲解-14》） |
 | **实现** | `class ContextCompressor(...)` `agent/context_compressor.py:1782` | agent **跑一轮时**醒来：该不该压 → 压 |
 | **兜底** | `_hmwa_run_session_hygiene` `gateway/run_turn.py:1261` | **两轮之间**（消息刚到、还没交给 agent） |
 
@@ -286,11 +289,17 @@ from []"""`。它宁可不答，也不让 agent 从空历史里编故事。
 
 ### mini 版怎么做的
 
-`agent/context_engine.py`（82 行）：两个抽象方法 + 四个可选方法。
+`agent/context_engine.py`（**112 行**）：**三个**抽象方法 + 四个可选方法。
+
+> ★ 第 5 章写这篇时是**两个**抽象方法；第 14 章把这个部件补成可替换插槽，加了 `name`（引擎靠名字被选中），
+> 并补了 `context.engine` 配置与目录发现、把唯一构造点改成查表 —— 见《源码讲解-14-ContextEnginePlugin》。
 
 ```python
 # mini-hermes/agent/context_engine.py
 class ContextEngine(ABC):
+    @property                                             # ★ 第 14 章补：引擎靠名字被选中
+    @abstractmethod
+    def name(self) -> str: ...                            # 短标识（如 "compressor"）
     @abstractmethod
     def should_compress(self, messages) -> bool: ...      # 每轮问一次，判据必须便宜
     @abstractmethod
@@ -1696,7 +1705,7 @@ tests/test_compression.py     152 通过 / 0 失败　（9 组）
 
 ```text
 mini-hermes/agent/
-  context_engine.py       82 行   ContextEngine ABC（2 抽象 + 4 可选）
+  context_engine.py      112 行   ContextEngine ABC（**3** 抽象 + 4 可选；`name` 是第 14 章补的）
   usage_anchor.py        154 行   UsageAnchor（指纹 + 只估增量 + 零用量不覆盖 + 可序列化）
   context_compressor.py  954 行   四阶段（含去重）+ 无进展守卫 + 契约检查 + 窗口表 + 三步阈值
   prompt_caching.py      226 行   system_and_3 断点 + 四种落位 + 先剥后插 + plan() 说明
