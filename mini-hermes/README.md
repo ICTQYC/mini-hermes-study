@@ -37,7 +37,7 @@
 | 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
 | **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
 | **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
-| **第 13 章（下一章）** | 转 Extending 代表作：`creating-skills`（438 行） | 待建 | — |
+| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 410 · `tools/skills.py` 136 · `tests/test_skills.py` 453/6 组；**1,381/1,377 通过 · 反验 4/4 · 真跑 19/19**） | ⏳ 源码讲解待建 |
 
 三条规则：
 
