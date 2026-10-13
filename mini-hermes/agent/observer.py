@@ -58,7 +58,7 @@
   · **返回值一律忽略**：`emit()` 不看回调返回什么，也不把它交给任何人
     （真实侧 `plugins.py:138-142` 逐字：*returns ignored — plugins cannot veto or pre-answer*）。
   · 想在 mini 里**阻断/改写**一条工具调用，请走 `approval_callback`
-    （`run_agent.py:984-990`）或网关守卫 —— 观察者**不是**第二套控制流。
+    （`run_agent.py:1149-1151`）或网关守卫 —— 观察者**不是**第二套控制流。
   · 回调抛异常 ⇒ 记警告后继续（A3），**绝不**让异常穿出 agent 轮次。
 
 ## 零成本快路径（A2 · 本章★核心）
