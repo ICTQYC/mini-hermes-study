@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import queue
 import socket
 import ssl
@@ -43,6 +44,8 @@ from agent import fallback as _fallback
 from agent.iteration_budget import IterationBudget
 from agent.system_prompt import build_system_prompt
 from tools.todo import AGENT_LEVEL_TOOLS, MAX_TODO_RESULT_CHARS, TodoStore
+
+logger = logging.getLogger(__name__)
 
 # 触发回退的 HTTP 状态码（★ 第 8 章 A7：判据收敛到 agent/fallback.py 一处；
 # 这里保留同名符号是为了不打破"从 run_agent 读它"的老读法）
@@ -479,6 +482,37 @@ class AIAgent:
                 self.status_callback(text)
             except Exception:  # noqa: BLE001 —— 提示失败不该影响 turn
                 pass
+
+    def _emit_engine_warning(self, text: str) -> None:
+        """**引擎回落警告**的专用出口（第 14 章）。
+
+        ★ 为什么不能直接复用 `_emit_status`：`_emit_status` 在
+          `status_callback is None` 时**什么都不做**。而网关
+          （`gateway/run_turn.py` 传 `status_callback=None`）与
+          `doctor.py`（干脆不传）正是这样的入口 —— 于是"未知名回落"这条警告
+          在这些入口会被**静默丢弃**，用户以为换了引擎。静默降级是本章最坏的一种。
+
+        ★ 为什么**不**改 `_emit_status` 本身的全局行为：它还被截断警告 / 微压缩
+          状态等复用，在网关入口把那些全掎到 stderr 是噪声（本该走结构化日志 /
+          静默）。所以只针对"回落"这一条加兜底：
+
+          | 情形 | 出口 |
+          |---|---|
+          | 有 `status_callback`（CLI 等） | 走它（保持"系统要说的话不进历史"的原语义） |
+          | **没有**（网关 / doctor） | `logger.warning` + `print(..., file=sys.stderr)` |
+
+        ⇒ "回落有**声**"在**所有**入口都成立，且默认路径（零配置）依旧安静。
+        """
+        if self.status_callback is not None:
+            try:
+                self.status_callback(text)
+            except Exception:  # noqa: BLE001 —— 同 `_emit_status`：提示失败不影响 turn
+                pass
+            return
+        # 没有 status 出口的入口（网关 / doctor）：结构化日志 + stderr 双写，
+        # 保证"回落有声"不因入口不同而消失。
+        logger.warning("%s", text)
+        print(text, file=sys.stderr)
 
     def _ensure_system_prompt(self, messages: List[Dict], system_message: str) -> None:
         """系统消息永远在 index 0，且**只在这里建一次**。
@@ -1117,7 +1151,9 @@ class AIAgent:
             )
             if selection.warning:
                 # ★ 回落**必须有声** —— 静默降级是这一章最坏的一种（用户以为换了引擎）。
-                self._emit_status(selection.warning)
+                #   走 `_emit_engine_warning`（不是 `_emit_status`）：后者在
+                #   `status_callback is None` 的网关 / doctor 入口会**静默丢弃**警告。
+                self._emit_engine_warning(selection.warning)
             c = selection.engine
             self._compressor_obj = c
         return c

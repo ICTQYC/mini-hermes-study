@@ -7,9 +7,9 @@
 | 不变量 | 守的承诺 |
 |---|---|
 | **I1** 选中的引擎**真的被用** | 行为可观测：插件的 `compress()` 返回的标记**真的进了最终历史**（不是只看返回的名字） |
-| **I2** 未知名 ⇒ 回落内置 + **有声**警告 | 回落要有声：status 里能读出**被请求的那个名字**（静默降级是最坏的一种） |
+| **I2** 未知名 ⇒ 回落内置 + **有声**警告 | 回落要有声：**所有入口**（含 `status_callback=None` 的网关 / doctor）都能观测到警告，且能读出**被请求的那个名字**（静默降级是最坏的一种） |
 | **I3** 漏实现抽象方法 ⇒ 实例化即 `TypeError` | `abc.ABC` 免费给的契约；谁删了 `@abstractmethod` 这条就变红 |
-| **I4** 默认引擎行为与改造前**逐字节一致** | 零配置 ⇒ `ContextCompressor`，关键字段一致 + 同一输入输出逐条相等 |
+| **I4** 默认引擎**零配置零行为漂移** | 零配置 ⇒ `ContextCompressor`；9 个具名字段 + `threshold_tokens` + `describe()` 逐条相等、`compress` 输出逐条 `==`、入参列表未被改（**不是** `vars()` 全字段比）；且 `micro_compact_*` 3 个字段真从配置接线进默认引擎 |
 | **I5** 好引擎入库、坏目录进 `skipped` 并计数 | 宽容 + 计数：坏目录永不抛、永不进候选 |
 | **I6** 名字唯一（保留名 + 确定性） | 目录不得占用内置保留名 `compressor`；两次发现顺序/名字完全一致 |
 | **I7** 契约满足 + `name` 与目录名一致 | 默认与插件引擎都满足 ABC；插件 `name == 目录名 == config 值` 三处一致 |
@@ -29,7 +29,10 @@
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import logging
 import os
 import shutil
 import sys
@@ -90,11 +93,17 @@ def reset_home() -> None:
         pass
 
 
-def write_config(engine=None) -> None:
-    """写 `config.json`。`engine=None` ⇒ **不写 context 段**（= 零配置）。"""
+def write_config(engine=None, compression=None) -> None:
+    """写 `config.json`。`engine=None` ⇒ **不写 context 段**（= 零配置）。
+
+    `compression` 给了就写 `compression` 段（I4 加固用：配非默认的
+    `micro_compact_*` 值，才能把"默认引擎接线"与"默认值恰好相等"区分开）。
+    """
     data = {}
     if engine is not None:
         data["context"] = {"engine": engine}
+    if compression is not None:
+        data["compression"] = compression
     cfg.config_path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
@@ -202,6 +211,45 @@ def test_silent_when_engine_is_default() -> None:
     check("零配置（没有 context 段）同样安静", isinstance(c2, ContextCompressor) and seen2 == [], str(seen2))
 
 
+def test_fallback_warning_audible_without_status_callback() -> None:
+    """★ 回落有声的**跨入口**面：`status_callback=None` 时也必须能观测到警告。
+
+    为什么单列一条：`_emit_status` 在 `status_callback is None` 时**什么都不做**，
+    而**网关**（`gateway/run_turn.py` 传 `status_callback=None`）与 **`doctor.py`**
+    （干脆不传）正是这样的入口。若回落只走 `_emit_status`，这两个入口里
+    "未知名回落"会被**静默丢弃** —— 用户以为换了引擎（静默降级 = 本章最坏的一种）。
+    实现把这条件单独收进 `_emit_engine_warning`：无 callback ⇒
+    `logger.warning` + stderr 兜底。这条用例守的就是那个兜底还在。
+    """
+    reset_home()
+    write_config("nope")
+    ag = make_agent(status_callback=None)          # ← 网关 / doctor 的入口形状
+    assert ag.status_callback is None, "夹具必须模拟「无 status 出口」的入口"
+
+    buf = io.StringIO()
+    records: list = []
+    handler = logging.Handler()
+    handler.emit = lambda rec: records.append(rec.getMessage())   # type: ignore[method-assign]
+    lg = logging.getLogger("run_agent")
+    lg.addHandler(handler)
+    old_level = lg.level
+    lg.setLevel(logging.WARNING)
+    try:
+        with contextlib.redirect_stderr(buf):
+            c = ag._compressor()
+    finally:
+        lg.removeHandler(handler)
+        lg.setLevel(old_level)
+
+    stderr_text = buf.getvalue()
+    check("★ `status_callback=None`（网关 / doctor 入口）回落**仍然有声**：stderr 里读得到被请求的名字",
+          "nope" in stderr_text, repr(stderr_text[:200]))
+    check("…同一警告也进了 `logger`（结构化日志可见，不止是一行 stderr）",
+          any("nope" in m for m in records), repr(records[:2]))
+    check("…且仍然是回落的内置压缩器（有声 ≠ 换了行为）",
+          isinstance(c, ContextCompressor), type(c).__name__)
+
+
 # ═══════════════════════════════ I3. 漏抽象方法 ⇒ TypeError ★
 def test_missing_abstract_member_raises_on_construction() -> None:
     class Bad(ContextEngine):
@@ -250,7 +298,7 @@ def test_missing_abstract_member_raises_on_construction() -> None:
           isinstance(Good(), ContextEngine))
 
 
-# ═══════════════════════════════ I4. 默认引擎行为逐字节一致 ★
+# ═══════════════ I4. 零配置零行为漂移（关键字段 + 微压缩接线）★
 def test_default_engine_matches_prechange_behavior() -> None:
     reset_home()                                       # 零配置
     ag = make_agent()
@@ -287,6 +335,48 @@ def test_default_engine_matches_prechange_behavior() -> None:
           f"{len(msgs1)} → {len(out1)}")
     check("…传进去的列表逐字节没被改（引擎不碰 agent 状态）",
           json.dumps(msgs1, ensure_ascii=False, sort_keys=True) == snapshot)
+
+
+def test_default_engine_wires_micro_compaction_config() -> None:
+    """★ I4 的**加固**（审计发现的口径松）：默认引擎真的接上了第 10 章的微压缩接线。
+
+    原 I4 只比 `_compressor()` 造的对象与一份"直接构造（也**没写**这 3 个参数）"
+    的副本 —— 零配置下两边默认值恰好相等，于是**把
+    `_build_default_compressor()` 里 3 个 `micro_compact_*` 关键字全删掉，
+    I4 仍全绿**（接线断了却测不出来）。
+
+    加固办法：配**非默认值**（True / 3 / 777），让"接了线"与"用默认值"**可区分**，
+    再断言默认引擎在这 3 个字段上 == 显式传入配置值时所构造的副本。
+    """
+    reset_home()
+    write_config(None, compression={                    # 零 context 段（走默认引擎）
+        cfg.KEY_MICRO_COMPACT: True,
+        cfg.KEY_MICRO_COMPACT_EVERY_N_TURNS: 3,
+        cfg.KEY_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS: 777,
+    })
+    ag = make_agent()
+    c = ag._compressor()
+
+    # "改造前参数表"：这 3 个字段必须从配置接线进默认引擎（不是构造默认值）。
+    direct = ContextCompressor(
+        context_length=int(getattr(ag, "context_length", 0) or DEFAULT_CONTEXT_LENGTH),
+        status_callback=ag._emit_status,
+        micro_compact=True,
+        micro_compact_every_n_turns=3,
+        micro_compact_defrag_threshold_tokens=777,
+    )
+    keys = ["micro_compact_enabled", "micro_compact_every_n_turns",
+            "micro_compact_defrag_threshold_tokens"]
+    diffs = {k: (getattr(c, k), getattr(direct, k)) for k in keys
+             if getattr(c, k) != getattr(direct, k)}
+    check("★ 微压缩接线没断：3 个 `micro_compact_*` 字段与显式配置构造结果逐个一致",
+          not diffs, str(diffs))
+    check("…且真的等于配置里写的显式值（True / 3 / 777），不是构造默认值（False / 1 / 2000）",
+          c.micro_compact_enabled is True
+          and c.micro_compact_every_n_turns == 3
+          and c.micro_compact_defrag_threshold_tokens == 777,
+          f"{c.micro_compact_enabled} / {c.micro_compact_every_n_turns} / "
+          f"{c.micro_compact_defrag_threshold_tokens}")
 
 
 # ═══════════════════════════════ I5. 发现容错（跳过并计数）
@@ -396,15 +486,19 @@ GROUPS = [
      "多态真的换掉 · name == 目录名 · `compress()` 的标记**进了最终历史**（行为可观测）",
      [test_selected_engine_really_takes_over]),
     ("I2. 未知名 ⇒ 回落 + 有声 ★",
-     "回落内置（不拒绝启动） · status 里读得到被请求的名字与可用清单 · 默认路径**安静**",
+     "回落内置（不拒绝启动） · status 里读得到被请求的名字与可用清单 · "
+     "**`status_callback=None` 的网关 / doctor 入口也仍能观测到**（stderr + logger） · 默认路径**安静**",
      [test_unknown_engine_falls_back_with_audible_warning,
-      test_silent_when_engine_is_default]),
+      test_silent_when_engine_is_default,
+      test_fallback_warning_audible_without_status_callback]),
     ("I3. 漏抽象方法 ⇒ 实例化即 TypeError ★",
      "全漏 / 只漏 compress 都在实例化时报错 · 补齐后正常",
      [test_missing_abstract_member_raises_on_construction]),
-    ("I4. 默认引擎行为与改造前逐字节一致 ★",
-     "零配置 ⇒ ContextCompressor · 关键字段相同 · threshold_tokens 相同 · 输出逐条相等 · 不改传入列表",
-     [test_default_engine_matches_prechange_behavior]),
+    ("I4. 零配置零行为漂移（关键字段 + 微压缩接线）★",
+     "9 个具名字段 + threshold_tokens + describe() 逐条相等 · `compress` 输出逐条 `==` · "
+     "入参列表未被改（**不是** `vars()` 全字段比） · `micro_compact_*` 3 个字段真从配置接线进默认引擎",
+     [test_default_engine_matches_prechange_behavior,
+      test_default_engine_wires_micro_compaction_config]),
     ("I5. 发现容错（跳过并计数）",
      "缺文件 / 语法错 / 没子类 / 名字不符 / 漏抽象方法 → 跳过并计数（不抛） · 空库安静",
      [test_discovery_is_tolerant_and_counts_skips]),

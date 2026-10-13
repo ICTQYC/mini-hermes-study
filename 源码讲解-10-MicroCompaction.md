@@ -217,7 +217,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | # | 面 | 真实 Hermes | mini 现状 | 性质 |
 |---|---|---|---|---|
 | 1 | 开关与默认 | `micro_compact: False`（`hermes_cli/config_defaults.py:573`），理由写在注释里（`:569-572`） | ✅ 已抄（`f261aa2`）：同名同默认（`hermes_cli/config.py:80`），理由注释照抄 | 已对齐 |
-| 2 | 入口与挂载 | `MicroCompactionMixin`（`agent/micro_compaction.py:36`）混进压缩器（`agent/context_compressor.py:28`）；入口 `_micro_compact`（`:199`），由 `turn_finalizer.py:291` 调 | ✅ 已抄：同形 mixin（`agent/micro_compaction.py:274`）+ 入口 `micro_compact()`（`:446`）；收尾钩在 `run_agent.py:1253` | 已对齐 |
+| 2 | 入口与挂载 | `MicroCompactionMixin`（`agent/micro_compaction.py:36`）混进压缩器（`agent/context_compressor.py:28`）；入口 `_micro_compact`（`:199`），由 `turn_finalizer.py:291` 调 | ✅ 已抄：同形 mixin（`agent/micro_compaction.py:274`）+ 入口 `micro_compact()`（`:446`）；收尾钩在 `mini-hermes/run_agent.py:1289` | 已对齐 |
 | 3 | 交换边界三条判据（A1） | `_find_one_exchange`（`agent/micro_compaction.py:62-90`） | ✅ 已抄：`find_one_exchange`（`:75`），三条判据逐条对齐 | 已对齐 |
 | 4 | 滚动摘要 + 游标恢复（A2） | 只留一份累积摘要；游标失效则扫转写本最后一条标记重建（`:39-60` / `:292-301`），**不另落盘状态** | ✅ 已抄：`_resolve_micro_cursor`（`:292`）/ `rolling_summary_from_marker`（`:119`） | 已对齐 |
 | 5 | 一回合一个交换 + no-op（A3） | `n_messages >= 4` + `if exchange is None: return messages`（`:216-218`） | ✅ 已抄（`:473-477`）：no-op 零 LLM 调用 | 已对齐 |
@@ -226,13 +226,13 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | 8 | 头部/尾部保护（A6） | 复用压缩器的 `_protect_head_size`（`agent/context_compressor.py:4041`）/ `_align_boundary_forward`（`:4016`）/ `_find_tail_cut_by_tokens`（`:4343`） | ✅ 已抄：复用第 5 章 `determine_boundaries`（`agent/context_compressor.py:884`）+ `tail_token_budget`（`:569`），**未另起一套** | 已对齐 |
 | 9 | 尾部预算口径 | 默认 `tail_mode=lean`：`max(10_000, min(25_000, ctx×0.025))`（`agent/context_compressor.py:1927-1931`，常量 `:757`） | 已对齐（第 5 章已做同公式） | 已对齐 |
 | 10 | defrag | `_needs_defrag` / `_defrag_rolling_summary`（`:158-193`）：**就地重写最新 micro 标记**，另加 `pop(_DB_PERSISTED_MARKER)` + `_flush_scan_cursor_invalidated` 去失效有界 flush 游标（`:182-188`） | ✅ 已抄主体（`_needs_defrag` `:409` / `_defrag_rolling_summary` `:415`）；**无** flush 游标失效那套（mini 每消息即时落库、无此游标） | 架构性 |
-| 11 | 落库归档 | `archive_and_compact(..., tail_count=len-1)` —— rewind-style **部分**归档（`hermes_state_messages.py:567`） | 用第 6 章既有的 `record_compaction` **整份**归档（`run_agent.py:1302`）；同样原子、同样不双载，粒度不同 | 架构性 |
-| 12 | 遥测 | `_emit_micro_compaction_telemetry`（`:309-342`）：**19 字段** JSON 行 + `passes_total` / `tokens_saved_total` 跨会话累计 | ⬜ 没做（量级）：`status_callback` 吐一行人话（`run_agent.py:1283-1286`），无累计、无 `occupancy_pct` | 量级 |
+| 11 | 落库归档 | `archive_and_compact(..., tail_count=len-1)` —— rewind-style **部分**归档（`hermes_state_messages.py:567`） | 用第 6 章既有的 `record_compaction` **整份**归档（`mini-hermes/run_agent.py:1338`）；同样原子、同样不双载，粒度不同 | 架构性 |
+| 12 | 遥测 | `_emit_micro_compaction_telemetry`（`:309-342`）：**19 字段** JSON 行 + `passes_total` / `tokens_saved_total` 跨会话累计 | ⬜ 没做（量级）：`status_callback` 吐一行人话（`mini-hermes/run_agent.py:1319-1322`），无累计、无 `occupancy_pct` | 量级 |
 | 13 | 回收量闸门 | **没有** —— 只有频率旋钮 `micro_compact_every_n_turns`；对比剪枝有 `proactive_prune_min_reclaim_tokens`（默认 4096，`config_defaults.py:568`） | 同：**没有**（mini 的 `proactive_prune_min_reclaim_tokens` 键只做了默认值/夹取，未接剪枝路径） | 已对齐 |
 | 14 | 与批量压缩的互操作 | 标记格式相同；只有 micro 标记可被 supersede/defrag/rehydrate（`agent/context_compressor.py:228-230`） | ✅ 已抄：`is_micro_marker` 只认带 micro 键的标记（`agent/context_compressor.py:114-122`）；批量标记永不被丢 | 已对齐 |
 | 15 | 跨进程 resume 回标 | `_resolve_compact_cursor` 会把扫到的**最后一条标记（含批量）**就地打上 `MICRO_COMPACT_MARKER_KEY`（`:55-57`），从而让它可被 supersede | ⏭ 不抄（B4）：mini **只读回正文**、**不回标** —— 回标会让批量标记可被 supersede，风险大 | 不抄 |
 | 16 | `checkpoint_required` 互斥 | 为真时强制把微压缩关掉（`agent/agent_init.py:1880-1886`），因为它没有 pre-compress checkpoint hook | ⬜ 没做：mini 没有 checkpoint-gated 压缩路径，这个互斥无对象 | 不抄 |
-| 17 | 辅助调用中断保护 | `aux_interrupt_protection()` 上下文管理器 + `main_runtime` 五字段透传（`agent/micro_compaction.py:126-136`） | ⏭ 不抄（B5）：mini 的辅助调用是**同步一次性**（`agent/auxiliary.py`），无 aux 线程中断语义；只透传一份只读 `main_runtime` 快照（`run_agent.py:1125`） | 不抄 |
+| 17 | 辅助调用中断保护 | `aux_interrupt_protection()` 上下文管理器 + `main_runtime` 五字段透传（`agent/micro_compaction.py:126-136`） | ⏭ 不抄（B5）：mini 的辅助调用是**同步一次性**（`agent/auxiliary.py`），无 aux 线程中断语义；只透传一份只读 `main_runtime` 快照（`mini-hermes/run_agent.py:1161`） | 不抄 |
 | 18 | 摘要提示词与标记包装 | 合并指令逐字（`:92-114`）+ `_render_micro_marker_content` 用 `SUMMARY_PREFIX` 上百行长引导块（`:393-396`）；另有日志报告器 `scripts/micro_compaction_report.py`（171 行） | ✅ 已抄合并指令（逐字，`build_micro_summary_prompt` `:235`）；标记包装用第 5 章 `COMPACTION_HEADER` + `SUMMARY_END_MARKER` 两行（B6）；记报告器 ⬜ 没做（量级） | 量级 |
 
 ## §一 为什么要"分期付款"：账单不对称
@@ -258,13 +258,13 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 
 要害：默认关不是"没做好"，而是一条**成本判断**写死在默认值里 —— "amortizing"（摊销）是卖点，"breaks the prefix EVERY turn"是代价，两者一起交给用户去称。
 
-**③ mini 的实现（现状）**：✅ 已抄（`f261aa2`）。`agent/micro_compaction.py:9-15` 把上面那段注释**逐字**搬进模块 docstring，当"为什么默认关"的理由；配置层在 `hermes_cli/config.py:74-76` 定义三个键、`:296-298` 给出默认值表（`micro_compact=False` / `every_n_turns=1` / `defrag_threshold_tokens=2000`）；压缩器构造处 `agent/context_compressor.py:491-493` 收参数、`:514-517` 做夹取（`max(1, int)`）；回合钩子 `run_agent.py:1265` 用 `if not getattr(c, "micro_compact_enabled", False): return` 落实"默认关 = 零 LLM 调用"。
+**③ mini 的实现（现状）**：✅ 已抄（`f261aa2`）。`agent/micro_compaction.py:9-15` 把上面那段注释**逐字**搬进模块 docstring，当"为什么默认关"的理由；配置层在 `hermes_cli/config.py:74-76` 定义三个键、`:296-298` 给出默认值表（`micro_compact=False` / `every_n_turns=1` / `defrag_threshold_tokens=2000`）；压缩器构造处 `agent/context_compressor.py:491-493` 收参数、`:514-517` 做夹取（`max(1, int)`）；回合钩子 `mini-hermes/run_agent.py:1301` 用 `if not getattr(c, "micro_compact_enabled", False): return` 落实"默认关 = 零 LLM 调用"。
 
 **④ 与真实版的差别**：
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 默认值 | `micro_compact=False`（`config_defaults.py:573`，真值解析 `agent_init.py:1507`） | 已对齐（`config.py:309-316` + `run_agent.py:1265` 同默认） |
+| 默认值 | `micro_compact=False`（`config_defaults.py:573`，真值解析 `agent_init.py:1507`） | 已对齐（`config.py:309-316` + `mini-hermes/run_agent.py:1301` 同默认） |
 | 回收量闸门 | 主动剪枝有 `proactive_prune_min_reclaim_tokens=4096`（`config_defaults.py:566-568`）；微压缩**没有** | ⏭ 不抄（微压缩只有频率旋钮） |
 | 与 checkpoint 互斥 | `checkpoint_required` 为真时**强制关微压缩**（`agent_init.py:1880-1886`，因它无 checkpoint hook） | ⬜ 没做（mini 无 checkpoint 概念） |
 
@@ -478,7 +478,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | 归档粒度 | rewind-style **部分**归档 + `tail_count=len-1`（`hermes_state_messages.py:567-628`） | 整份世代归档 + 整份重插（`record_compaction`）—— 粒度不同，结果同：不双载 |
 | “已持久化”盖戳 | `stamp_db_persisted_markers` / `_DB_PERSISTED_MARKER`（`context_compressor.py:311-319`）使随后追加落盘跳过它们 | ⏭ 不抄（B3）：mini 逐条即时 append、不逐回合全表重扫 ⇒ 无需盖戳 |
 | 落库闸门 | 无 dirty 概念，靠 `_micro_compact` 内部只在成功后调 `_sync...` | `_micro_dirty` 布尔（`micro_compaction.py:460 / :506`），调用方依此决定是否落库 |
-| DB 步骤失败 | 记 log、会话继续，代价是下次批量压缩前恢复双载（`:356-360`） | 同款语义，经 `status_callback` 示意（`run_agent.py:1301-1305`） |
+| DB 步骤失败 | 记 log、会话继续，代价是下次批量压缩前恢复双载（`:356-360`） | 同款语义，经 `status_callback` 示意（`mini-hermes/run_agent.py:1337-1341`） |
 
 ## §八 它与批量压缩的关系
 
@@ -565,7 +565,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 
 ★ 这次真跑顺带抓出并**修掉**了一处 mini 状态文案缺陷。原写法（`run_agent._micro_compact_after_turn`）用"消息条数变没变"反推 absorb / defrag，而**吸收只吞 1 条消息时是"删 1 加 1"**（交换区间 `(4,5)`）⇒ 一次**真正的吸收**被误报成"微压缩：defrag 重压了滚动摘要（条数不变）"。本次两次跑的回合 1 都是这种情况（诊断实测：滚动摘要 0 → 135 字符、游标 0 → 5、`needs_defrag=False`，走的是**吸收**分支）。
 
-修法：**分支由当次真的走了哪条决定**，不再由结果形状反推 —— 压缩器在三条出口各记一个 `_micro_last_action`（`agent/micro_compaction.py:463` 复位 / `:490` `defrag` / `:511` `absorb`），钩子照它标文案（`run_agent.py:1283-1286`）。回归证据：新增 3 条契约测试（第 10 组），其中钩子那条把旧写法还原后会**干净变红**并原样复现旧症状（`statuses=['微压缩：defrag 重压了滚动摘要（条数不变）']`）；反向验证 **3/3 红**（钩子退回按条数 → 1 红 · 压缩器不记 absorb / defrag → 各 1 红）。教训：**状态文案要按"当次走了哪条分支"标，不能按"结果形状"反推**。
+修法：**分支由当次真的走了哪条决定**，不再由结果形状反推 —— 压缩器在三条出口各记一个 `_micro_last_action`（`agent/micro_compaction.py:463` 复位 / `:490` `defrag` / `:511` `absorb`），钩子照它标文案（`mini-hermes/run_agent.py:1319-1322`）。回归证据：新增 3 条契约测试（第 10 组），其中钩子那条把旧写法还原后会**干净变红**并原样复现旧症状（`statuses=['微压缩：defrag 重压了滚动摘要（条数不变）']`）；反向验证 **3/3 红**（钩子退回按条数 → 1 红 · 压缩器不记 absorb / defrag → 各 1 红）。教训：**状态文案要按"当次走了哪条分支"标，不能按"结果形状"反推**。
 
 ## §十 差距清单
 
@@ -580,14 +580,14 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 | **A3** | 一回合最多吸收**一个**交换 + no-op 零代价（没可吸收交换 / 少于 4 条 ⇒ 一次模型调用都不花） | `micro_compaction.py:199-218` | `MicroCompactionMixin.micro_compact`（:446-477） | ✅ 已抄（f261aa2） |
 | **A4** | 失败**不吸收、不落盘**；同一交换**连续 3 次失败**就把游标推过它 | `micro_compaction.py:265-280` + 常量 `context_compressor.py:646` | `_record_micro_failure`（:395-405）+ `run_agent._micro_compact_after_turn`（:1243-1245，只在 `_micro_dirty` 时落库） | ✅ 已抄（f261aa2） |
 | **A5** | 标记形状：`role="assistant"` + 三键；supersede 只丢**带 micro 键的**旧标记，**批量标记绝不能丢**；丢后合并相邻纯文本 user 行 | `micro_compaction.py:362-390`、`:31-33` + `context_compressor.py:226-230` | `make_micro_marker`（:152-166）/ `splice_micro_marker`（:193-214）/ `merge_adjacent_user_turns`（:169-190）+ 三个常量（`context_compressor.py:90-94`） | ✅ 已抄（f261aa2） |
-| **A6** | 头部/尾部保护**沿用第 5 章那一套**（`_protect_head_size` + `_find_tail_cut_by_tokens`）；外加 defrag + 原子归档 | `micro_compaction.py:282-289`、`:158-193`、`:343-360` | `_next_micro_exchange`（复用 `determine_boundaries` :320-338）/ `_defrag_rolling_summary`（:415-445）/ `_persist_micro_compaction`（`run_agent.py:1288-1306`，走 `record_compaction`） | ✅ 已抄（f261aa2） |
+| **A6** | 头部/尾部保护**沿用第 5 章那一套**（`_protect_head_size` + `_find_tail_cut_by_tokens`）；外加 defrag + 原子归档 | `micro_compaction.py:282-289`、`:158-193`、`:343-360` | `_next_micro_exchange`（复用 `determine_boundaries` :320-338）/ `_defrag_rolling_summary`（:415-445）/ `_persist_micro_compaction`（`mini-hermes/run_agent.py:1324-1342`，走 `record_compaction`） | ✅ 已抄（f261aa2） |
 
 ### B 批（不抄 / 没做）
 
 | # | 条目 | 真实出处 | 理由 | mini 现状 |
 |---|---|---|---|---|
 | **B1** | `archive_and_compact(..., tail_count=len-1)` 的 **rewind 式部分归档** | `micro_compaction.py:352` + `hermes_state_messages.py:567` | **① 基座**：mini 没有「部分活跃行 / 携带尾部」的概念 | ⏭ 用第 6 章 `record_compaction` **整份世代归档**（老世代 active=0 全归档 + 新世代重插），同样原子、同样不双载，只是粒度不同 |
-| **B2** | `_emit_micro_compaction_telemetry` 的 **19 字段 JSON 遥测** + `tokens_saved_total` 跨会话累计 | `micro_compaction.py:309-342` | **② 规模**：mini 用 `status_callback` 的**一行人话**代替（第 5 章同款口径） | ⏭ `run_agent.py:1283-1286` 只发 `微压缩：吸收 1 个交换 · N → M 条消息` / defrag 一行 |
+| **B2** | `_emit_micro_compaction_telemetry` 的 **19 字段 JSON 遥测** + `tokens_saved_total` 跨会话累计 | `micro_compaction.py:309-342` | **② 规模**：mini 用 `status_callback` 的**一行人话**代替（第 5 章同款口径） | ⏭ `mini-hermes/run_agent.py:1319-1322` 只发 `微压缩：吸收 1 个交换 · N → M 条消息` / defrag 一行 |
 | **B3** | `_flush_scan_cursor_invalidated` / `_DB_PERSISTED_MARKER` / `stamp_db_persisted_markers` | `micro_compaction.py:182-188` + `context_compressor.py:246,311-319` | **① 基座**：那套是「有界 flush 扫描游标」的产物 | ⏭ mini 每消息**即时落库**、无该游标，defrag 直接改写标记即可（`_defrag_rolling_summary` 注释 :425-427 写明） |
 | **B4** | 跨进程 resume 时把**批量标记回标**成 micro 标记（rehydrate 升级） | `micro_compaction.py:55-57` | **③ 用不上的复杂度**：回标会让批量标记变成可被 supersede ⇒ 有毁历史风险 | ⏭ mini 只**读回**摘要正文（`rolling_summary_from_marker`），**不回标** |
 | **B5** | `aux_interrupt_protection()` 上下文管理器 + `main_runtime` 五字段透传 | `micro_compaction.py:118,129-132` | **① 基座**：mini 的辅助调用是**同步一次性**（`agent/auxiliary.py`），无 aux 线程中断语义 | ⏭ 摘要调用走 `run_agent._summary_llm` 直接调，无中断保护壳 |
@@ -805,20 +805,20 @@ def _micro_compact_after_turn(agent, messages, final_response, logger) -> None:
 | 精译节 | 真实侧（文件:函数） | mini 落点 | 状态 |
 |---|---|---|---|
 | **§0** 这一章在回答什么（摊销 / 默认关） | `micro_compaction.py:1-5`；`config_defaults.py:569-573` | `agent/micro_compaction.py:1-15` 模块 docstring；`hermes_cli/config.py:80` `DEFAULT_MICRO_COMPACT` | ✅ 已抄（f261aa2） |
-| **§1** What it does（三步 / 一回合一个） | `turn_finalizer.py:272-303` `_micro_compact_after_turn`；`micro_compaction.py:199-263` `_micro_compact` | `run_agent.py:1253-1283` `_micro_compact_after_turn`；`micro_compaction.py:446-507` `micro_compact` | ✅ 已抄（f261aa2） |
+| **§1** What it does（三步 / 一回合一个） | `turn_finalizer.py:272-303` `_micro_compact_after_turn`；`micro_compaction.py:199-263` `_micro_compact` | `mini-hermes/run_agent.py:1289-1319` `_micro_compact_after_turn`；`micro_compaction.py:446-507` `micro_compact` | ✅ 已抄（f261aa2） |
 | **§2** 你的消息永不被压缩 | `micro_compaction.py:62-90` `_find_one_exchange` | `micro_compaction.py:75-112` `find_one_exchange` | ✅ 已抄（f261aa2） |
 | **§3** 它从不触碰什么（头 / 尾） | `context_compressor.py:4041-4048` `_protect_head_size`；`:4343+` `_find_tail_cut_by_tokens` | `context_compressor.py:884-913` `determine_boundaries`；`:569-580` `tail_token_budget` | ✅ 已抄（复用第 5 章） |
 | **§4** 游标 | `micro_compaction.py:39-60` `_resolve_compact_cursor` | `micro_compaction.py:292-316` `_resolve_micro_cursor` | ✅ 已抄（f261aa2） |
 | **§4** 滚动摘要 | `micro_compaction.py:116-156` `_micro_summarize_one`；`:242-263` | `micro_compaction.py:342-387` `_micro_summarize_one` | ✅ 已抄（f261aa2） |
 | **§4** 碎片整理（defrag） | `micro_compaction.py:158-193` `_needs_defrag` / `_defrag_rolling_summary` | `micro_compaction.py:409-442` 同名两个方法 | ✅ 已抄（f261aa2） |
-| **§4** 与会话数据库同步 | `micro_compaction.py:343-360` `_sync_micro_compact_to_db`；`hermes_state_messages.py:567` `archive_and_compact` | `run_agent.py:1285-1302` `_persist_micro_compaction`（走 `record_compaction`） | ✅ 已抄（粒度不同，见 §十 B1） |
+| **§4** 与会话数据库同步 | `micro_compaction.py:343-360` `_sync_micro_compact_to_db`；`hermes_state_messages.py:567` `archive_and_compact` | `mini-hermes/run_agent.py:1321-1338` `_persist_micro_compaction`（走 `record_compaction`） | ✅ 已抄（粒度不同，见 §十 B1） |
 | **§4** 摘要器失败 | `micro_compaction.py:265-280` `_record_micro_failure` | `micro_compaction.py:395-405` `_record_micro_failure` | ✅ 已抄（f261aa2） |
 | **§5** 与批量压缩的交互 | `micro_compaction.py:382-389`（supersede 只丢 micro / 不丢批量） | `micro_compaction.py:193-214` `splice_micro_marker` + `is_micro_marker` | ✅ 已抄（f261aa2） |
 | **§6** Configuration | `config_defaults.py:569-578`；`agent_init.py:1506-1515` | `hermes_cli/config.py:289-325` `get_compression_config`（四键 + 夹取） | ✅ 已抄（f261aa2） |
-| **§7** Prompt caching（你要付的成本） | `micro_compaction.py:206-207`；`config_defaults.py:569-573` 注释 | `run_agent.py:1259-1262` 三个门；`config.py:80`（每次 pass 破前缀） | ✅ 已抄（无回收量闸门、只有频率旋钮） |
+| **§7** Prompt caching（你要付的成本） | `micro_compaction.py:206-207`；`config_defaults.py:569-573` 注释 | `mini-hermes/run_agent.py:1295-1298` 三个门；`config.py:80`（每次 pass 破前缀） | ✅ 已抄（无回收量闸门、只有频率旋钮） |
 | **§8** 选择压缩模型 | `micro_compaction.py:126-132`（`summary_model` / `main_runtime`） | `run_agent._summary_llm` → `agent/auxiliary.py`（A8 路由） | ✅ 已抄（f261aa2） |
 | **§9** Measuring it（遥测 / 报告脚本） | `micro_compaction.py:309-341` `_emit_micro_compaction_telemetry`；`scripts/micro_compaction_report.py` | —（无遥测面、无报告脚本；`status_callback` 一行人话） | ⏭ 不抄（B2 / B7） |
-| **§10** Failure behaviour（尽力而为） | `turn_finalizer.py:303` `except` 吞异常 | `run_agent.py:1271-1273` `try/except` 吞 | ✅ 已抄（f261aa2） |
+| **§10** Failure behaviour（尽力而为） | `turn_finalizer.py:303` `except` 吞异常 | `mini-hermes/run_agent.py:1307-1309` `try/except` 吞 | ✅ 已抄（f261aa2） |
 | **附录 A** 术语表 | —（术语） | —（术语） | — |
 | **附录 B** 本篇提到的实现文件 | 六个真实文件（`f5d1926110`） | 对应 mini 模块（`agent/micro_compaction.py` **531 行** 等） | — |
 | **附录 C** 本篇与上游的出入 | — | — | 本轮新增两处，见下附录 C |

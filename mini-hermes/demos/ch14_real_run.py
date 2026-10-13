@@ -12,7 +12,11 @@
   ② 真配置：`{"context": {"engine": "under_lossy"}}` → 真发现：它进候选
   ③ 真 `AIAgent` + **真系统提示词**（`system_prompt.build_system_prompt`）+ 真工具群历史
   ④ ★ `agent._preflight_compression(msgs)` → 断言：选中的**就是它** · 它的 `compress()`
-     **真被执行过**（计数）· 标记**真进了最终历史** · **真进了会话库** · 系统提示词未被碰
+     **真被执行过**（计数）· 标记**真进了最终历史**（= 默认引擎那条路没被走到，**同一条件**）
+     · **真进了会话库** · 系统提示词未被碰
+     〔第 14 章审计后修订：原「标记进最终历史」（`marker_positions>=1`）与
+       「默认引擎没被走到」（`MARKER in json.dumps(...)`）是同一条件的复述 ⇒ **合并为一条**，
+       条目数 **13 → 12**。〕
   ⑤ 未知名（`"nope"`）⇒ 回落内置 + **有声警告**（I2 真跑版）
   ⑥ 零配置 ⇒ 内置压缩器，且 `compress()` 输出与**直接构造**逐条相等（I4 真跑版）
 
@@ -126,7 +130,9 @@ def marker_positions(msgs) -> int:
 
 def main() -> int:
     print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}")
-    print(f"MINI_HOME = {_HOME}（临时）\n")
+    print(f"MINI_HOME = {_HOME}（临时）")
+    print("（第 14 章审计后修订：④「标记进最终历史」与「默认引擎没被走到」实为"
+          "同一条件，已合并 —— 条目 **13 → 12**。）\n")
 
     # ── ① 真引擎库 + ② 真配置 → 真发现 ──────────────────────────────────
     eng_dir = write_engine()
@@ -170,8 +176,9 @@ def main() -> int:
 
     record("④ ★ 引擎的 `compress()` 真的被执行过（计数 >= 1，不是只看类型）",
            getattr(engine, "compress_calls", 0) >= 1, str(getattr(engine, "compress_calls", None)))
-    record("④ ★ 那个标记文本**真进了最终历史**（引擎接管了压缩，行为可观测）",
-           marker_positions(messages) >= 1, f"标记条数={marker_positions(messages)}")
+    record("④ ★ 那个标记文本**真进了最终历史**（引擎接管了压缩；默认引擎那条路**没被走到**）",
+           marker_positions(messages) >= 1 and MARKER in json.dumps(messages, ensure_ascii=False),
+           f"标记条数={marker_positions(messages)}")
     record("④ ★ 标记**也进了会话库** active 行（压缩作为新世代落库）",
            len(db_marker) >= 1, f"DB 命中 {len(db_marker)} 行 · active={after}")
     record("④ 消息数变少了（确实压了）", len(messages) < n_before,
@@ -179,8 +186,6 @@ def main() -> int:
     record("④ 引擎**不碰系统提示词**：首条 system 逐字还是真提示词（明确选此条断言）",
            bool(messages) and messages[0].get("role") == "system"
            and messages[0].get("content") == real_prompt)
-    record("④ 默认引擎那条路**没有**被走到（历史里没有内置摘要的痕迹）",
-           MARKER in json.dumps(messages, ensure_ascii=False))
     db.close()
 
     # ── ⑤ 未知名 ⇒ 回落内置 + 有声警告（I2 真跑版）──────────────────────
