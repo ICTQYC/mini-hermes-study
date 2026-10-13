@@ -37,8 +37,8 @@
 | 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
 | **第 11 章（当前）** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
 | **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
-| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,391/1,387 通过 · 反验 4/4 · 真跑 17/17**） | ✅ 源码讲解 `f1141e8`（**1,175 行** · H1=1 · H2=15 · H3=22 · 引用 153 条 0 死） | ｜ **审计后小修**（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）
-| **第 14 章（下一章）** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ 压缩引擎的**可替换接口** | ⏳ 精译中（`中文精译-14-ContextEnginePlugin.md`） | — |
+| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） | ✅ 源码讲解 `f1141e8`（**1,175 行** · H1=1 · H2=15 · H3=22 · 引用 153 条 0 死） | ｜ **审计后小修**（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）
+| **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 335 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1305 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 450/7 组 · `demos/ch14_real_run.py` 228；**1,430/1,426 通过 · 反验 RV-1 7红/RV-2 2红 · 真跑 13/13**） | ✅ 源码讲解 `baf9251`（**1,334 行** · 死引用 0） |
 
 
 > **`cron` 面（搁置，2026-10-13 用户决定）**：`cron-internals`（380 行）与 `chronos-managed-cron-contract`（227 行）**本轮不做**。
