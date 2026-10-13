@@ -15,6 +15,9 @@
       —— 实现见 agent/fallback.py；本文件的接缝是 `_try_activate_fallback` 与
       `_post_chat_completions` 的失败分支。
  10. 辅助模型路由（压缩摘要经 agent/auxiliary.py 选 provider/model；未配置 = 主模型）
+ 11. ★ 只读遥测观察者（observer hooks；第 15 章）—— 7 个事件名 + **零成本快路径**
+     （fire-site 先问 `has()`，没人听就连载荷都不构造）+ 失败放开（坏回调崩不掉轮次）。
+     实现与契约见 `agent/observer.py`。
 
 没实现的（后面章节补）：prompt 缓存标记、上下文压缩、记忆落盘、
 流式输出、工具审批的持久化白名单。
@@ -42,6 +45,10 @@ from datetime import datetime
 import model_tools
 from agent import fallback as _fallback
 from agent.iteration_budget import IterationBudget
+
+# ★ 第 15 章：只读遥测观察者（observer hooks）。`OBSERVERS` 是进程级默认表 ——
+#   构造时可传 `observer=` 换一份进来（测试隔离 / 多租户 / 网关按会话分表）。
+from agent.observer import OBSERVERS, CallIds, ObserverRegistry
 from agent.system_prompt import build_system_prompt
 from tools.todo import AGENT_LEVEL_TOOLS, MAX_TODO_RESULT_CHARS, TodoStore
 
@@ -144,6 +151,37 @@ INLINE_TOOL_EXECUTORS: Dict[str, Callable[["AIAgent", Dict[str, Any]], str]] = {
 }
 
 
+def _raw_tool_call_count(response: Any) -> int:
+    """响应里 `choices[0].message.tool_calls` 的条数（第 15 章 `post_llm_call` 的载荷项）。
+
+    ★ 为什么不复用 `_parse_response` 的返回值：那个函数**顺手记了 usage**，只能被调一次
+      （记账不能算两遍）。这里只做一次**只读**的取值，不碰任何状态
+      （真实侧同样把"给钩子的字段"和"记账"分开：`turn_response_intake.py` 与 `_parse_response` 各司其职）。
+    """
+    msg = ((response or {}).get("choices") or [{}])[0].get("message") or {}
+    return len(msg.get("tool_calls") or [])
+
+
+def _tool_result_observer_fields(result: Any) -> tuple:
+    """从**工具结果**推导 `(status, error_type, error_message)`（第 15 章 `post_tool_call`）。
+
+    ★ 逐字照真实侧 `model_tools.py:656-671` 的判据第一段：结果是 JSON 且带 `error` 键
+      ⇒ `("error", "tool_error", <那条消息>)`，否则 `("ok", None, None)`。
+      mini 的工具运行时**不抛异常**：它把任何异常转成 `tool_error(...)` 的 JSON 字符串
+      （`model_tools.py:286` 逐字 `工具执行异常：<类型>: <消息>`）—— 所以"工具失败了"
+      这件事**只有在结果里才看得见**，观察者必须去读结果，而不是等异常。
+    （真实侧还有第二段 `_detect_tool_failure` 的启发式：识别非 JSON 的失败文本。
+      mini 的工具结果**契约上必是 JSON**（`tools/registry.py:349-352`），故不抄那一段。）
+    """
+    try:
+        parsed = json.loads(result) if isinstance(result, str) else result
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return "error", "tool_error", str(parsed.get("error"))
+    except Exception:                               # noqa: BLE001 —— 读不出来就当成功（fail-open）
+        pass
+    return "ok", None, None
+
+
 class AgentInterrupted(Exception):
     """用户主动打断（Ctrl-C / /stop）。"""
 
@@ -169,6 +207,10 @@ class AIAgent:
         step_callback: Optional[Callable[[int], None]] = None,
         approval_callback: Optional[Callable[[str], bool]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
+        # ---- 第 15 章：只读遥测观察者（observer hooks）----
+        #   ★ 与上面 7 个回调的**区别**：那些是"固定形参、只能构造时给一次、返回值为准"，
+        #     观察者是"事件名的注册表、只读、返回值一律忽略"。不传 = 用进程级 `OBSERVERS`。
+        observer: Optional[ObserverRegistry] = None,
         debug: bool = False,
         # ---- 第 3 章：提示词装配的开关（对应 Hermes agent_init 里那批同名属性）----
         session_id: Optional[str] = None,
@@ -232,6 +274,21 @@ class AIAgent:
         #   混进正文会污染历史、还会让角色交替出问题。
         self.status_callback = status_callback
         self.debug = debug               # 异常时是否直接把 traceback 打到 stderr
+
+        # ══════════════════════════════════════════════════════════════
+        # 第 15 章：只读遥测观察者（observer hooks）
+        # ══════════════════════════════════════════════════════════════
+        # ★ 为什么观察者**必须挂在 agent 上**（而不是 gateway 的目录式钩子那层）：
+        #   ① 本章的四个边界里有三个（回合 / API 请求 / 工具执行）**只存在于本文件**；
+        #   ② 只有 AIAgent 同时握着 `session_id` / `task_id` / `usage` / `budget` ——
+        #      观察者要的关联 id 全在这里；
+        #   ③ `has()` 是"有没有人听"的**唯一事实源**：任何"要不要发/要不要显示"的判断都走它，
+        #      不另立标志位（真实侧 `has_hook()`，`plugins_dispatch.py:445-447`）。
+        self._observers: ObserverRegistry = observer if observer is not None else OBSERVERS
+        # ★ 关联 id 的两个"每轮/每请求"计数器（真实侧：`turn_id` 每轮一个、
+        #   `api_request_id = f"{turn_id}:api:{api_call_count}"`）。都在轮次入口复位。
+        self._current_turn_id: Optional[str] = None
+        self._api_call_count = 0
 
         # ══════════════════════════════════════════════════════════════
         # 第 3 章：系统提示词的状态
@@ -300,6 +357,18 @@ class AIAgent:
         # 1. 没有 task_id 就生成一个
         task_id = task_id or f"task_{uuid.uuid4().hex[:8]}"
         self._current_task_id = task_id
+
+        # 1b. ★ 第 15 章：**每轮一个 turn_id**（观察者的关联 id 之一）。
+        #     形状照真实侧 `agent/turn_context.py:476-478`：
+        #         f"{agent.session_id or 'session'}:{effective_task_id}:{uuid4().hex[:8]}"
+        #     ★ 为什么不用一个自增计数器：`turn_id` 要能跨进程/跨库对上，且 agent 对象会被
+        #       网关缓存复用（第 8 章）—— 计数器会跨会话撞号，uuid 后缀不会。
+        #     ★ 同一轮内所有事件（LLM/API/工具）共用**同一个** turn_id；下一轮必然不同。
+        self._current_turn_id = (
+            f"{self.session_id or 'session'}:{task_id}:{uuid.uuid4().hex[:8]}"
+        )
+        # `api_request_id` 的后半段序号：**每轮归零**（一次 LLM 调用可能发多次请求 ⇒ 一轮多个）。
+        self._api_call_count = 0
 
         # 2. 用户消息进历史
         messages: List[Dict[str, Any]] = list(conversation_history or [])
@@ -429,6 +498,21 @@ class AIAgent:
             self._validate_alternation(api_messages)
 
             # 8. 发请求（可中断，带回退）
+            # ══════════════════════════════════════════════════════════════
+            # 第 15 章接缝 ①：pre_llm_call / post_llm_call
+            # ══════════════════════════════════════════════════════════════
+            # ★ **零成本快路径**（本章★核心）：先问一次 `has()`（一次 dict 探针），
+            #   没人听 ⇒ 连载荷字典都不构造（`_payload_*` 调用次数为 0 —— 有测试盯着）。
+            #   真实侧同款：*every call site short-circuits on has_hook(), so when nothing
+            #   subscribes no payload is built*（`kanban_db_dispatch.py:1197-1201`）。
+            _pre_llm = self._observers.has("pre_llm_call")
+            _post_llm = self._observers.has("post_llm_call")
+            if _pre_llm:
+                self._observers.emit("pre_llm_call", **self._payload_pre_llm_call(
+                    iteration=self.budget.used, message_count=len(api_messages)))
+            _llm_started = time.monotonic() if _post_llm else 0.0
+            _llm_tool_calls = 0
+            _llm_status = "ok"                      # 失败时被 except 改写，finally 照发
             if self.thinking_callback:
                 self.thinking_callback(True)
             try:
@@ -439,9 +523,21 @@ class AIAgent:
                 _usage = (response or {}).get("usage") or {}
                 if _usage:
                     self._compressor().update_usage(_usage, _history_at_request)
+                if _post_llm:
+                    _llm_tool_calls = _raw_tool_call_count(response)
+            except BaseException as exc:            # noqa: BLE001 —— 先标结局，再原样穿出去
+                # ★ 观察者**绝不改控制流**：异常该怎么走还怎么走（这里只顺手标一下 status）。
+                _llm_status = "interrupted" if isinstance(exc, AgentInterrupted) else "error"
+                raise
             finally:
                 if self.thinking_callback:
                     self.thinking_callback(False)
+                # ★ 成功 / 失败 / 被中断**都发**（用 status 区分）—— 放在 finally 里正是为此。
+                if _post_llm:
+                    self._observers.emit("post_llm_call", **self._payload_post_llm_call(
+                        iteration=self.budget.used, message_count=len(api_messages),
+                        status=_llm_status, tool_call_count=_llm_tool_calls,
+                        duration_ms=int((time.monotonic() - _llm_started) * 1000)))
 
             # 9. 解析响应
             assistant_msg, tool_calls = self._parse_response(response)
@@ -829,19 +925,69 @@ class AIAgent:
         ★ 判据是**二元**的：只有 `is_fallbackable_status(code)` 为真才换 provider。
           `400` / `422` 这类确定性错误**直接抛** —— 换谁都一样，换了只是把同一个错误
           再收一次（还搭上一次额外的调用）。
+
+        ★ 第 15 章：真正的"一次请求"边界在 `_one_api_request`（每次重发都是**新**的
+          `api_request_id`，这正是 A5 的口径）。
         """
         if runtime is not None:
-            return self._http_post(self._candidate_for(runtime), api_messages)
+            # 辅助调用：一次性，不走回退链 ⇒ attempt 恒为 1。
+            return self._one_api_request(self._candidate_for(runtime), api_messages, attempt=1)
 
+        attempt = 0
         while True:
+            attempt += 1
             try:
-                return self._http_post(self._candidate_for(self._client_kwargs), api_messages)
+                return self._one_api_request(
+                    self._candidate_for(self._client_kwargs), api_messages, attempt=attempt)
             except ApiHTTPError as exc:
                 if not is_fallbackable_status(exc.code):
                     raise                     # 400 / 422 … → 确定性错误，不回退
                 # 429 / 5xx / 401 / 403 … → 按序换下一个 provider，然后用新运行时重发
                 if not self._try_activate_fallback(reason=f"http_{exc.code}", status=exc.code):
                     raise                     # 链耗尽 / 全被跳过 → 把原始错误交出去
+
+    def _one_api_request(self, cand: Dict[str, Any], api_messages: List[Dict], *,
+                         attempt: int = 1) -> Dict[str, Any]:
+        """**一次真发 HTTP** 的边界（第 15 章接缝 ②③④：pre/post/_error 三个事件）。
+
+        ★ 为什么要单独抽这一层：回退链（`_post_chat_completions` 的 while）里"重发"是
+          **一次新的请求**，观察者要能分开看（`api_request_id` 每请求一个、`attempt` 递增）。
+          真实侧的对应物是 `agent/turn_api_request.py` / `turn_response_intake.py` /
+          `api_request_hooks.py` 三处 —— 它们围着**一次** SDK 调用，重试在外层。
+        ★ `_http_post` 里还有一次**传输层**重试（`for attempt in (1, 2)`，同一请求换个连接
+          再试一次）：那不算新请求，所以**不**各发一次钩子（真实侧 SDK 内部的 transport
+          retry 同样不单独发）。
+        """
+        pre = self._observers.has("pre_api_request")
+        post = self._observers.has("post_api_request")
+        error = self._observers.has("api_request_error")
+        if pre or post or error:
+            self._api_call_count += 1
+            api_request_id = f"{self._current_turn_id or 'turn'}:api:{self._api_call_count}"
+        else:
+            api_request_id = ""
+        started = time.monotonic() if (post or error) else 0.0
+
+        if pre:
+            self._observers.emit("pre_api_request", **self._payload_pre_api_request(
+                api_request_id=api_request_id, attempt=attempt,
+                message_count=len(api_messages)))
+        try:
+            response = self._http_post(cand, api_messages)
+        except BaseException as exc:                # noqa: BLE001 —— 标结局后原样穿出去
+            if error:
+                self._observers.emit("api_request_error", **self._payload_api_request_error(
+                    api_request_id=api_request_id, attempt=attempt,
+                    message_count=len(api_messages), error=exc,
+                    duration_ms=int((time.monotonic() - started) * 1000)))
+            raise
+        if post:
+            self._observers.emit("post_api_request", **self._payload_post_api_request(
+                api_request_id=api_request_id, attempt=attempt,
+                message_count=len(api_messages),
+                usage=(response or {}).get("usage") or None,
+                duration_ms=int((time.monotonic() - started) * 1000)))
+        return response
 
     def _http_post(self, cand: Dict[str, Any], api_messages: List[Dict]) -> Dict[str, Any]:
         """真正发 HTTP 请求。
@@ -971,28 +1117,245 @@ class AIAgent:
 
     def _run_one_tool(self, p: Dict[str, Any], task_id: str) -> str:
         name, args = p["name"], p["args"]
+        # ★ 第 15 章：`tool_call_id` **优先用 provider 给的**（真实侧
+        #   `agent_runtime_helpers.py:267` 同口径）；没有才轮到空串（线协议里 = "没身份"）。
+        tool_call_id = p["call"].get("id") or p["call"].get("call_id") or ""
+
+        # ── 接缝 ⑥：pre_tool_call（**三路都发**：agent 级工具 / 审批拒绝 / 参数解析失败）──
+        # 零成本快路径：先问再构造载荷。
+        if self._observers.has("pre_tool_call"):
+            self._observers.emit("pre_tool_call", **self._payload_pre_tool_call(
+                tool_call_id=tool_call_id, tool_name=name, args=args))
+        _post_tool = self._observers.has("post_tool_call")
+        _tool_started = time.monotonic() if _post_tool else 0.0
+        # ★ `None` = "还没定"（届时从**工具结果**推导，照真实侧 `model_tools.py:689-690`）。
+        #   只有"被拒绝 / 参数解析失败 / 结果之外的意外"这三路才显式给 status。
+        _tool_status, _tool_error_type, _tool_error_message = None, None, None
 
         if self.tool_progress_callback:
             self.tool_progress_callback(name, args, "start")
 
-        if "parse_error" in p:
-            content = f"[error] {p['parse_error']}"
-        elif name in INLINE_TOOL_EXECUTORS:
-            # ★ agent 级工具：在到达 handle_function_call **之前**就被吃掉了
-            content = INLINE_TOOL_EXECUTORS[name](self, args)
-        else:
-            if model_tools.registry.looks_approval_needed(name, args):
-                shown = args.get("command") or json.dumps(args, ensure_ascii=False)
-                if not (self.approval_callback and self.approval_callback(shown)):
-                    content = "[denied] 用户拒绝执行这条危险命令。"
-                    if self.tool_progress_callback:
-                        self.tool_progress_callback(name, args, "denied")
-                    return content
-            content = model_tools.handle_function_call(name, args, task_id=task_id)
+        try:
+            if "parse_error" in p:
+                content = f"[error] {p['parse_error']}"
+                # ★ 参数解析失败是 mini 特有的一种结局（真实侧没有这条路径）：
+                #   结果不是 `tool_error` 的 JSON 形状，所以这里**显式**给 status，不靠结果推导。
+                _tool_status, _tool_error_type = "error", "parse_error"
+                _tool_error_message = p.get("parse_error")
+            elif name in INLINE_TOOL_EXECUTORS:
+                # ★ agent 级工具：在到达 handle_function_call **之前**就被吃掉了
+                content = INLINE_TOOL_EXECUTORS[name](self, args)
+            else:
+                if model_tools.registry.looks_approval_needed(name, args):
+                    shown = args.get("command") or json.dumps(args, ensure_ascii=False)
+                    if not (self.approval_callback and self.approval_callback(shown)):
+                        content = "[denied] 用户拒绝执行这条危险命令。"
+                        if self.tool_progress_callback:
+                            self.tool_progress_callback(name, args, "denied")
+                        # ★ 被拒绝也是一次**结局**（真实侧 `status="blocked"` 那一族）
+                        self._emit_post_tool_call(
+                            tool_call_id=tool_call_id, tool_name=name, args=args,
+                            status="denied", result=content, started=_tool_started)
+                        return content
+                content = model_tools.handle_function_call(name, args, task_id=task_id)
+        except BaseException as exc:                # noqa: BLE001 —— 标结局后原样穿出去
+            # 工具运行时自己把 handler 异常转成 JSON 结果（`model_tools.py:286`），所以这条
+            # 兜的是"结果之外"的意外（审批回调 / 参数序列化 / 用户中断…）。
+            self._emit_post_tool_call(
+                tool_call_id=tool_call_id, tool_name=name, args=args, status="error",
+                result=None, error_type=type(exc).__name__, error_message=str(exc),
+                started=_tool_started)
+            raise
 
         if self.tool_progress_callback:
             self.tool_progress_callback(name, args, "done")
+        # ── 接缝 ⑦：post_tool_call（成功 / 被拒绝 / 失败三种结局用 `status` 区分）──
+        # ★ 与真实侧同一分工（`model_tools.py:689-690`）：**status 是 None 时从结果推导**，
+        #   否则用调用方显式给的那一个。
+        if _tool_status is None:
+            _tool_status, _tool_error_type, _tool_error_message = _tool_result_observer_fields(content)
+        self._emit_post_tool_call(
+            tool_call_id=tool_call_id, tool_name=name, args=args, status=_tool_status,
+            result=content, error_type=_tool_error_type, error_message=_tool_error_message,
+            started=_tool_started)
         return content
+
+    def _emit_post_tool_call(self, *, tool_call_id: str, tool_name: str, args: Dict[str, Any],
+                             status: str, result: Optional[str], started: float,
+                             error_type: Optional[str] = None,
+                             error_message: Optional[str] = None) -> None:
+        """`post_tool_call` 的唯一出口（被拒绝那一路会提前 return，所以单独开一个方法）。
+
+        ★ 又是零成本快路径：**先问 `has()`，没人听就直接返回** —— `args`/`result` 可能是
+          几万字符的工具输出，把它塞进载荷再丢掉是最蠢的一种开销。
+        """
+        if not self._observers.has("post_tool_call"):
+            return
+        self._observers.emit("post_tool_call", **self._payload_post_tool_call(
+            tool_call_id=tool_call_id, tool_name=tool_name, args=args, status=status,
+            result=result, error_type=error_type, error_message=error_message,
+            duration_ms=int((time.monotonic() - started) * 1000)))
+
+    # ------------------------------------------------------------------ #
+    # 第 15 章：观察者载荷的装配（★ **全部**载荷都在这里造）
+    # ------------------------------------------------------------------ #
+    #
+    # 规矩（改这里之前先读 `agent/observer.py` 的模块 docstring）：
+    #   · 每个方法 = **一个事件**的载荷（`_payload_<事件名>`），字段名与真实侧同名；
+    #   · **调用点先问 `_observers.has(<事件>)` 再调这里** —— 没人听就一次都不调（零成本快路径）；
+    #   · 这里只**取值**，不做截断/脱敏/版本注入 —— 那三件事在 `ObserverRegistry.emit`
+    #     这个**唯一出口**统一做（A4/A6）；本文件里任何地方都不许再拼一遍。
+    #   · 五个关联 id 一律经 `CallIds.hook_kwargs()`（None → ""），不手写 `or ""`。
+
+    def _observer_ids(self, *, tool_call_id: Optional[str] = None,
+                      api_request_id: Optional[str] = None) -> Dict[str, str]:
+        """5 个关联 id 的**线协议**形状（真实侧 `model_tools.py:643-653`）。
+
+        `session_id` / `task_id` / `turn_id` 一律取 agent 自己的当前值：
+          · `task_id` 取 `self._current_task_id`（**每轮**那个），不是 `_post_chat_completions`
+            的形参 —— 后者在辅助调用（压缩摘要）里是 `"compression"` 这类**用途**标签；
+          · `turn_id` 取 `self._current_turn_id`（`run_conversation` 入口生成），
+            没跑过轮次时为 `""`（线协议里 = "没这个身份"）。
+        """
+        return CallIds(
+            task_id=self._current_task_id,
+            session_id=self.session_id,
+            tool_call_id=tool_call_id,
+            turn_id=self._current_turn_id,
+            api_request_id=api_request_id,
+        ).hook_kwargs()
+
+    def _payload_pre_llm_call(self, *, iteration: int, message_count: int) -> Dict[str, Any]:
+        """`pre_llm_call` 载荷（每次模型调用**前**）。
+
+        字段取自真实侧 `agent/turn_context.py:666-715` 那一发里 mini **真的有**的部分。
+        """
+        return {
+            **self._observer_ids(),
+            "iteration": iteration,
+            "model": self.model,
+            "provider": self.provider,
+            "platform": self.platform,
+            "message_count": message_count,
+        }
+
+    def _payload_post_llm_call(self, *, iteration: int, message_count: int, status: str,
+                               tool_call_count: int, duration_ms: int) -> Dict[str, Any]:
+        """`post_llm_call` 载荷（该调用返回 / 失败 / 被中断后；`status` 区分）。
+
+        ★ 与真实侧的口径差异：真实侧 `post_llm_call` **每回合只发一次**
+          （`agent/turn_finalizer.py:411-441`，工具循环跑完才发）；mini 没有 `finalize_turn`
+          这一层收尾，所以取"每次模型调用"口径、与 `pre_llm_call` 成对。
+          mini **没有** `assistant_response`（那是"回合最终回答"，在每次调用这一层还不存在）
+          —— 按"没有的字段不编"的规矩不发。
+        """
+        return {
+            **self._payload_pre_llm_call(iteration=iteration, message_count=message_count),
+            "status": status,
+            "tool_call_count": tool_call_count,
+            "duration_ms": duration_ms,
+        }
+
+    def _payload_api_request_common(self, *, api_request_id: str, attempt: int,
+                                    message_count: int) -> Dict[str, Any]:
+        """三个 API 事件（pre / post / error）的**公共字段**（一处装配，三处引用）。
+
+        真实侧 `agent/turn_api_request.py:52-80` / `turn_response_intake.py:63-88` /
+        `api_request_hooks.py:161-198` 三处发的 id 与路由字段是同一套；mini 收在这里。
+        """
+        return {
+            **self._observer_ids(api_request_id=api_request_id),
+            "attempt": attempt,
+            "api_mode": self.api_mode,
+            "model": self.model,
+            "provider": self.provider,
+            "message_count": message_count,
+        }
+
+    def _payload_pre_api_request(self, *, api_request_id: str, attempt: int,
+                                 message_count: int) -> Dict[str, Any]:
+        """`pre_api_request` 载荷（每次真发 HTTP 前，含回退重发）。
+
+        ★ 不带真实侧的 `request=`（脱敏后的请求体）—— 理由见 `agent/observer.py` docstring：
+          "每次请求都塞整份 messages"会让总上限稳定挤掉最有用的字段。
+        """
+        return self._payload_api_request_common(
+            api_request_id=api_request_id, attempt=attempt, message_count=message_count)
+
+    def _payload_post_api_request(self, *, api_request_id: str, attempt: int, message_count: int,
+                                  usage: Optional[Dict[str, Any]], duration_ms: int
+                                  ) -> Dict[str, Any]:
+        """`post_api_request` 载荷（HTTP 响应回来后）。
+
+        `status` 恒为 `"ok"`：`_http_post` 对 4xx/5xx **抛异常**（`ApiHTTPError`），
+        所以"能返回到这里"就等于成功。留着这个字段是为了与 `pre` / `error` 成对
+        （真实侧 `post_api_request` 的 status 也从结果推导，见 `model_tools.py:685-691` 同款做法）。
+        `usage` 只给 token 桶（真实侧 `_usage_summary_for_api_request_hook` 会
+        `pop("raw_usage")` —— 不给原始 usage 对象）。
+        """
+        return {
+            **self._payload_api_request_common(
+                api_request_id=api_request_id, attempt=attempt, message_count=message_count),
+            "status": "ok",
+            "usage": usage,
+            "duration_ms": duration_ms,
+        }
+
+    def _payload_api_request_error(self, *, api_request_id: str, attempt: int, message_count: int,
+                                   error: BaseException, duration_ms: int) -> Dict[str, Any]:
+        """`api_request_error` 载荷（该请求抛错时）。
+
+        · `error` 形状照真实侧：`{"type": <异常类名>, "message": <str(exc)>}`
+          （`api_request_hooks.py:194`）—— 长 message 由 `emit` 里的截断兜住。
+        · `retryable` 用的是 **mini 自己的判据**：`is_fallbackable_status(code)`
+          （"这条错误会被回退链接手吗"）。真实侧的 `retryable` 来自 SDK 的重试判定 ——
+          口径相近、来源不同，已记入报告的"存疑点"。
+        """
+        code = getattr(error, "code", None)
+        return {
+            **self._payload_api_request_common(
+                api_request_id=api_request_id, attempt=attempt, message_count=message_count),
+            "error": {"type": type(error).__name__, "message": str(error)},
+            "retryable": is_fallbackable_status(code) if isinstance(code, int) else False,
+            "status_code": code,
+            "duration_ms": duration_ms,
+        }
+
+    def _payload_pre_tool_call(self, *, tool_call_id: str, tool_name: str,
+                               args: Dict[str, Any]) -> Dict[str, Any]:
+        """`pre_tool_call` 载荷（工具执行前）。
+
+        字段名照真实侧 `hermes_cli/plugins.py:1817-1820`（`tool_name` / `args` + 五个 id）。
+        ★ 这里只做观测：mini **不**采纳 `{"action": "block"}` 之类的返回值
+          （那是 B2 不抄的部分，阻断归 `approval_callback`）。
+        """
+        return {
+            **self._observer_ids(tool_call_id=tool_call_id),
+            "tool_name": tool_name,
+            "args": args,
+        }
+
+    def _payload_post_tool_call(self, *, tool_call_id: str, tool_name: str, args: Dict[str, Any],
+                                status: str, result: Optional[str], duration_ms: int,
+                                error_type: Optional[str] = None,
+                                error_message: Optional[str] = None) -> Dict[str, Any]:
+        """`post_tool_call` 载荷（工具执行后；`status` 区分结局）。
+
+        字段名照真实侧 `model_tools.py:676-695`（`tool_name` / `args` / `result` /
+        `status` / `error_type` / `error_message` + 五个 id）。`status` 取值：
+        `ok` / `denied`（审批拒绝）/ `error`（`error_type` 再细分：
+        `parse_error` = 参数不是合法 JSON；`tool_error` = 结果里带着 `error` 键，
+        即工具自己失败了 —— 判据见 `_tool_result_observer_fields`；其余是异常类名）。
+        """
+        return {
+            **self._payload_pre_tool_call(
+                tool_call_id=tool_call_id, tool_name=tool_name, args=args),
+            "status": status,
+            "result": result,
+            "error_type": error_type,
+            "error_message": error_message,
+            "duration_ms": duration_ms,
+        }
 
     # ------------------------------------------------------------------ #
     # agent 私有状态的重建
