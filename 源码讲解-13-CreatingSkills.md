@@ -133,7 +133,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 6. `skill_view` 解析名字 → 读正文 → 返回**全文 + `linked_files`**；同时 `bump_view` / `bump_use`。
 7. 需要附文件时**第二次**调 `skill_view(name, file_path="references/x.md")`。
 
-逐字引（`agent/system_prompt.py:301-302`）：
+逐字引（`agent/system_prompt.py:302-310`）：
 
 ```text
     """Skills index (empty without skills tools).  Focus mode demotes non-coding
@@ -387,7 +387,7 @@ mini 写了一个**零第三方依赖的子集解析器**（`agent/skill_utils.p
 
 **② 读 Hermes 的代码**
 
-逐字引（`agent/skill_utils.py:632-635`）：
+逐字引（`agent/skill_utils.py:633-635`）：
 
 ```text
 # ``session_platforms`` is the gateway-channel gate: session platforms the skill
