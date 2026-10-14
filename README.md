@@ -42,6 +42,23 @@ ls 官方文档-Developer-Guide/*.md | wc -l    # 期望 49
 ```
 
 **平台**：`mini` 是 bash 启动脚本 + 纯标准库 ⇒ **macOS / Linux 直接跑**；
+
+### 装成全局命令（可选）
+
+装完之后，**在任意目录敲 `mini` 就能用**；而且**工作区 = 你敲命令时所在的目录**
+（启动器把调用目录记在 `MINI_LAUNCH_CWD`，所以你在某个项目里敲 `mini`，agent 的工作区就是那个项目）。
+
+```bash
+./mini-hermes/install.sh                    # 默认装到 ~/.local/bin
+./mini-hermes/install.sh /usr/local/bin     # 或指定目录（Homebrew 用户通常可直接写）
+```
+
+脚本只做三件事：建一个符号链接 → 不在 PATH 里就告诉你加哪一行 → **自检一次**（`mini --list-toolsets`）。
+卸载：`rm ~/.local/bin/mini`（它只建链接，不写别的东西）。
+
+启动器**自己会解开符号链接**（绝对 / 相对链接 / 链的链都行）—— 这条能力有契约测试守着：
+`tests/test_packaging.py::test_launcher_via_symlink`（它甚至把「macOS 上 `/var` 是 `/private/var` 的符号链接，
+不 `.resolve()` 算相对路径会多退一级」那个坑写在了注释里）。
 **Windows 需要 WSL 或 Git-Bash**（没在原生 cmd / PowerShell 上验证过）。
 
 **跑 mini**：
