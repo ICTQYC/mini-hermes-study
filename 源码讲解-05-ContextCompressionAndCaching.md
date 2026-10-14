@@ -1,4 +1,4 @@
-# 源码讲解 · 第 5 章 Context Compression & Caching
+# 源码讲解 · 第 5 章：上下文压缩与缓存（Context Compression and Caching）
 
 > 配套《中文精译-05-ContextCompressionAndCaching.md》。那篇讲**原理**（原文说了什么），
 > 这篇讲**差异**：mini 版和真实版差在哪、每处差价值不值得改，外加本章实现时抓出的真问题。

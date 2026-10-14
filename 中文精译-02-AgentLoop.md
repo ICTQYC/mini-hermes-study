@@ -1,4 +1,4 @@
-# 第 2 章 · Agent Loop Internals（中文精译 + 源码对照 + 动手实现）
+# 中文精译 · 第 2 章：Agent 循环内部（Agent Loop Internals）
 
 > 原文：`官方文档-Developer-Guide/agent-loop.md`
 > 源码对照：`~/.hermes/hermes-agent/`

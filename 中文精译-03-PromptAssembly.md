@@ -1,4 +1,4 @@
-# 第 3 章 · Prompt Assembly（系统提示词拼装）
+# 中文精译 · 第 3 章：系统提示词拼装（Prompt Assembly）
 
 > 官方原文：`官方文档-Developer-Guide/prompt-assembly.md`（336 行）
 > 对照源码：`~/.hermes/hermes-agent/agent/system_prompt.py`（817 行）、

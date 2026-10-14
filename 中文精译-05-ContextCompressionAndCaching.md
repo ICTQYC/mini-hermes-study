@@ -1,4 +1,4 @@
-# 中文精译 · 第 5 章：上下文压缩与缓存
+# 中文精译 · 第 5 章：上下文压缩与缓存（Context Compression and Caching）
 
 > **原文**：`website/docs/developer-guide/context-compression-and-caching.md`（645 行）
 > **本篇定位**：翻译为主，目标是**看懂原理**。差异对比、源码深挖、实现日志都不在这里 ——

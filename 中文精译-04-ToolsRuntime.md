@@ -1,4 +1,4 @@
-# 第 4 章 · Tools Runtime（工具运行时）
+# 中文精译 · 第 4 章：工具运行时（Tools Runtime）
 
 > 官方原文：`官方文档-Developer-Guide/tools-runtime.md`（250 行）
 > 对照源码：`tools/registry.py`（977 行）、`model_tools.py`（987 行）、`toolsets.py`（485 行）、

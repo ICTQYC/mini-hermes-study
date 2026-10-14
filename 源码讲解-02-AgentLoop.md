@@ -1,4 +1,4 @@
-# 源码讲解 · 第 2 章 Agent Loop
+# 源码讲解 · 第 2 章：Agent 循环内部（Agent Loop Internals）
 
 > 每节的结构都一样：
 > **mini 版怎么做的 → 真实 Hermes 怎么做的 → 差在哪 / 为什么。**
