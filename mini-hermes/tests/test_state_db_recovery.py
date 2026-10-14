@@ -796,6 +796,53 @@ def test_legacy_db_without_state_meta_is_diagnosed_not_confused() -> None:
     check("★ 判不健康（旧库待 repair 升级）", v["healthy"] is False)
 
 
+def test_inspection_uri_preserves_special_path_characters() -> None:
+    """Read-only URI must address the requested file, including URI metacharacters."""
+    with tempfile.TemporaryDirectory(prefix="mini_inspect_uri_") as root:
+        for index, label in enumerate(("profile#lab", "profile?lab", "profile%23lab")):
+            path = Path(root) / label / "state.db"
+            db = hermes_state.SessionDB(path)
+            try:
+                _seed(db)
+                for extra in range(index):
+                    db.append_message("s1", "user", "unique URI fixture %d" % extra)
+            finally:
+                db.close()
+            before = path.read_bytes()
+            siblings = set(Path(root).iterdir())
+            v = hermes_state_repair.inspect_state_db(path)
+            check("URI 特殊字符仍读取目标库：" + label,
+                  v["healthy"] and v["canonical_rows"] == 2 + index, repr(v))
+            check("只读体检不创建错误路径的库：" + label,
+                  set(Path(root).iterdir()) == siblings)
+            check("只读体检不改目标主文件：" + label, path.read_bytes() == before)
+
+
+def test_inspection_detects_missing_fts_without_stale_marker() -> None:
+    """Canonical rows and trigger names alone cannot prove the FTS index is readable."""
+    with tempfile.TemporaryDirectory(prefix="mini_inspect_fts_") as root:
+        path = Path(root) / "state.db"
+        db = hermes_state.SessionDB(path)
+        try:
+            _seed(db)
+        finally:
+            db.close()
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute("DROP TABLE messages_fts")
+            conn.commit()
+        finally:
+            conn.close()
+        v = hermes_state_repair.inspect_state_db(path)
+        check("FTS 缺失时权威消息与触发器仍在场",
+              v["canonical_rows"] == 2 and not v["missing_triggers"] and v["marker"] is None)
+        check("FTS 缺失不能被误报健康", not v["healthy"])
+        check("FTS 读取失败留下独立病因", not v.get("fts_readable") and bool(v.get("reason_fts")))
+        with _home_scope(root):
+            check("FTS 缺失时 check-only 返回失败",
+                  sessions_cmd.cmd_repair(_ns(check_only=True)) == sessions_cmd.EXIT_UNHEALTHY)
+
+
 GROUPS = [
     ("1. 损坏分类谓词", "码优先于文本 · 三组不混 · 类型只是类型", [test_corruption_classification]),
     ("2. fts_stale 标记跨重启", "落在 state_meta · 关掉重开仍为真 · 触发器不被复活",
@@ -817,7 +864,9 @@ GROUPS = [
      [test_close_refuses_reopen_and_never_checkpoints]),
     ("11. repair --check-only 三态（+ 旧库）", "健康库/降级库/结构损坏库/旧库的判定与退出码",
      [test_repair_check_only_verdicts,
-      test_legacy_db_without_state_meta_is_diagnosed_not_confused]),
+      test_legacy_db_without_state_meta_is_diagnosed_not_confused,
+      test_inspection_uri_preserves_special_path_characters,
+      test_inspection_detects_missing_fts_without_stale_marker]),
     ("12. repair 真修回来（A8）", "三段验证 · raw-copy 备份 · 标记清/触发器回/搜索回 FTS",
      [test_repair_fixes_verifies_and_leaves_raw_backup]),
 ]

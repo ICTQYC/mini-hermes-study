@@ -157,7 +157,7 @@ def redact_sensitive_text(text: str) -> str:
 # CJK 一个汉字约 1 token；ASCII 约 3.5 字符一个 token。
 ASCII_CHARS_PER_TOKEN = 3.5
 
-# mini 的默认窗口。Hermes 是按模型查表的；mini 只有一个模型，所以给一个常量 +
+# mini 的默认窗口。mini 已有逐模型窗口表，这里仍给一个默认常量 +
 # 一个可被环境变量覆盖的口子（测试和 demo 要能改小）。
 DEFAULT_CONTEXT_LENGTH = 64_000
 

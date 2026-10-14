@@ -23,7 +23,7 @@ SCHEMA_VERSION = 1
 SQLITE_TIMEOUT_S = 1.0
 """连接级 busy timeout。
 
-★ 为什么不用默认的 30 秒：多进程抢锁时，长等会把"谁先拿到写锁"从毫秒级
+★ Python sqlite3 默认 timeout 为 5 秒；本项目缩短等待：多进程抢锁时，长等会把"谁先拿到写锁"从毫秒级
   拖成秒级（真实版注释的理由就是这个）；真正解决争用的是下面那套**应用层重试**。
 """
 
@@ -112,14 +112,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     title              TEXT,
     message_count      INTEGER DEFAULT 0,
     tool_call_count    INTEGER DEFAULT 0,
-    api_call_count     INTEGER DEFAULT 0,      -- 这个会话调了几次模型（≈ 迭代次数）
+    api_call_count     INTEGER DEFAULT 0,      -- 模型逻辑请求次数（含回退和辅助摘要，不等于迭代次数）
     input_tokens       INTEGER DEFAULT 0,
     output_tokens      INTEGER DEFAULT 0,
     -- ══ 第 8 章：会话生命周期状态（对应真实版 SessionEntry 的那些标志位）══
     --   真实版把它们放在 `sessions.json` 镜像 + SQLite 两处（`gateway/session.py:756/787`）；
     --   mini 只有库这一个读者 → **只落库**（差异与代价写在第 8 章差距清单 B4）。
     updated_at         REAL,                   -- 最后活动时间：资源巡检靠它（真实版 SessionEntry.updated_at）
-    suspended          INTEGER DEFAULT 0,      -- 硬擦除：/stop 或卡死循环 → 下次访问换新会话
+    suspended          INTEGER DEFAULT 0,      -- 硬轮转：异常重复等原因挂起；/stop 只中断当前回合
     resume_pending     INTEGER DEFAULT 0,      -- 软恢复：崩溃/drain 超时 → 下次访问**接着**旧会话
     resume_reason      TEXT,                   -- restart_timeout / shutdown_timeout / restart_interrupted
     last_resume_marked_at REAL,

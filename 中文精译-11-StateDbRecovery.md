@@ -4,7 +4,7 @@
 > **来源**：`官方文档-Developer-Guide/state-db-recovery.md`（**107 行**，H1 + 3 个 H2；副标题逐字：*How Hermes recovers state.db when the FTS index or the file itself is corrupt*）。
 > **上游**：commit `f5d1926110` · `version = "0.21.3"` · 原文 **107 行**
 
-> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；体检额外验证路径 URI 编码及 FTS MATCH 可读性，结果不代表完整性证明。原文翻译与历史实测不代替当前实现契约。
 
 [TOC]
 

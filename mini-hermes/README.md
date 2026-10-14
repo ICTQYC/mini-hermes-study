@@ -7,8 +7,8 @@
 
 ## 发布前维护
 
-已修复审查确认的 19 项代码问题和启动路径文档问题，并补齐工具探测缓存的 profile 隔离；明细见仓库根《发布前修复记录.md》。
-当前全套 **1,674 / 1,670 通过 · 0 失败**（Python 3.13 / 3.9），共 **15 个测试文件**；其中跨模块回归 **86 条 / 6 组**。章表里的统计保留章节交付时点。
+已修复审查确认的 19 项代码问题和启动路径文档问题，并补齐工具探测缓存的 profile 隔离；后续实测又修复 2 项会话库只读体检问题。明细见仓库根《发布前修复记录.md》。
+当前全套 **1,687 / 1,683 通过 · 0 失败**（Python 3.13 / 3.9），共 **15 个测试文件**；其中跨模块回归 **86 条 / 6 组**。章表里的统计保留章节交付时点。
 
 ## 历史复现入口
 
@@ -316,7 +316,7 @@ python3 tests/test_compression.py       # 157 条：压缩与缓存（token 记�
 python3 tests/test_micro_compaction.py  # 119 条：微压缩（10 组）
 python3 tests/test_fallback_and_aux.py  # 114 条：回落与辅助模型（4 组）
 python3 tests/test_session_storage.py   # 108 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
-python3 tests/test_state_db_recovery.py # 121 条：state.db 抢修（12 组；3.9 少 4 条 —— 它拒 DROP messages_fts_data）
+python3 tests/test_state_db_recovery.py # 134 条：state.db 抢修（12 组；3.9 少 4 条 —— 它拒 DROP messages_fts_data）
 python3 tests/test_gateway.py           # 266 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 / 进程身份 /
                                         #   profile 作用域 / 入口层 / 会话生命周期 / 两层队列 / 缓存与巡检）
 python3 tests/test_provider_runtime.py  # 106 条：服务商运行时（6 组）
@@ -324,7 +324,7 @@ python3 tests/test_skills.py            # 103 条：技能（发现 / 渐进披�
 python3 tests/test_context_engine.py    # 45 条：上下文引擎插槽（发现 / 契约 / 选择与回落）
 python3 tests/test_observers.py         # 124 条：观察者（注册契约 / 零成本快路径 / 失败放开 / 载荷安全 /
                                         #   关联 id / 七事件触发点）
-# 全套件：1,674 条断言 / 0 失败（3.13.14）· 1,670 / 0 失败（3.9.6）
+# 全套件：1,687 条断言 / 0 失败（3.13.14）· 1,683 / 0 失败（3.9.6）
 #   （差额 4 条：3.9 的 SQLite 拒 DROP messages_fts_data，真损坏分支造不出来）
 
 # ⚠️ 改了代码但测试结果"看着没变"？先清字节码缓存再跑：

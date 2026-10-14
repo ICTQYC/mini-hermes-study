@@ -48,10 +48,10 @@ def _check_only(db_path) -> int:
         return EXIT_UNHEALTHY
     print("  健康探针   ✅ 能打开、schema 能解析")
     if not v.get("marker_readable"):
-        print("  fts_stale  ❓ 读不到（%s）—— 这是**旧库**：第 11 章之前建的库没有 `state_meta` 表；"
+        print("  fts_stale  ❓ 读不到（%s）—— 库可能尚未建立 `state_meta` 表；"
               "跑 `sessions repair` 会补上" % (v.get("reason_marker") or "未知原因"))
     elif v["marker"] is None:
-        print("  fts_stale  ✅ 没有（FTS 索引处于“完整”状态）")
+        print("  fts_stale  ✅ 没有降级标记（不单凭此判断索引健康）")
     else:
         print("  fts_stale  ❌ 标记在场（值 = %r）—— FTS 处于“摘除/降级”状态" % v["marker"])
     if v["missing_triggers"]:
@@ -63,8 +63,10 @@ def _check_only(db_path) -> int:
               % (len(v["triggers"]), len(v["expected_triggers"])))
     rows = v["canonical_rows"]
     print("  权威行数   %s（messages 表）" % ("读不出来（%s）" % v.get("reason_rows") if rows is None else rows))
+    print("  FTS 读取   %s" % ("✅ MATCH 查询通过" if v.get("fts_readable")
+                              else "❌ %s" % v.get("reason_fts")))
     if v["healthy"]:
-        print("\n结论：**健康**（标记零行 · 预期触发器在场）")
+        print("\n结论：**基础体检通过**（标记零行 · 预期触发器在场 · MATCH 可读；非完整性证明）")
         return EXIT_HEALTHY
     if not v.get("marker_readable"):
         print("\n结论：**不健康**（旧库缺 `state_meta` 表 ⇒ 跑 `mini sessions repair` 升级并重建索引）")

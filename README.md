@@ -22,7 +22,7 @@
 ### 开箱即用清单
 
 **clone 下来直接就能跑的**：`./mini-hermes/mini --list-toolsets`、`./mini-hermes/mini --doctor`（**不需要密钥**）；
-测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,674 / 1,670 · 0 失败**。
+测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,687 / 1,683 · 0 失败**。
 
 **要自己准备的三样**（前两样按需）：
 
@@ -87,7 +87,7 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 ```
 
-用两个解释器各跑一遍，期望 **1,674 通过 / 0 失败**（3.13.14）与 **1,670 通过 / 0 失败**（3.9.6），共 **15 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
+用两个解释器各跑一遍，期望 **1,687 通过 / 0 失败**（3.13.14）与 **1,683 通过 / 0 失败**（3.9.6），共 **15 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
 
 跑之前先清 `__pycache__`：`.pyc` 的失效判据是 `(mtime, size)`，**两块长度相同的代码对调**会被判成新鲜缓存，实际跑的是旧字节码。
 
@@ -98,12 +98,12 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 板块 | 篇数 / 规模 |
 |---|---|
 | 中文精译（每章一篇，翻译为主，目标看懂原理） | **17 篇** · 11,599 行 |
-| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,958 行 |
+| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,962 行 |
 | 跟读文档（消息旅程 / 代码解读 / 测试怎么写） | 3 份 · 2,073 行 |
 | 收尾总览（46 篇图谱 / 差距总账 / 冻结清单 —— 全库的账） | 1 篇 · 470 行 |
-| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 103 行 |
-| `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 18,535 行 · 78 个文件 |
-| `mini-hermes/tests/`（15 个测试文件） | 12,215 行 |
+| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 118 行 |
+| `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 18,551 行 · 78 个文件 |
+| `mini-hermes/tests/`（15 个测试文件） | 12,264 行 |
 | `mini-hermes/demos/`（故障复现 + 真跑脚本） | 1,761 行 · 10 个 |
 
 **17 章清单**（精译 / 源码讲解行数为实测）：
@@ -122,7 +122,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 08 | Provider Runtime（服务商运行时） | 366 | 982 |
 | 09 | Programmatic Integration（程序化集成） | 284 | 788 |
 | 10 | Micro Compaction（微压缩） | 362 | 845 |
-| 11 | State DB Recovery（state.db 抢修） | 172 | 971 |
+| 11 | State DB Recovery（state.db 抢修） | 172 | 975 |
 | 12 | Codebase Ownership & Completion Backlog（归属与投递债） | 204 | 838 |
 | 13 | Creating Skills（技能系统） | 684 | 1176 |
 | 14 | Context Engine Plugin（上下文引擎插槽） | 420 | 1349 |

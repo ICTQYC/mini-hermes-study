@@ -5,8 +5,8 @@ mini 只保留其中**足够复演 §3 外观**的那几级。逐条列清楚"�
 
 | 真实版机制 | 真实实现（`f5d1926110`） | mini | 为什么 |
 |---|---|---|---|
-| 跨进程准入锁 | `_cross_process_repair_lock`（`hermes_state_repair.py:164`，flock） | **不做**（B1） | mini 单进程，没有第二个 repairer 可竞争 |
-| 外部持有者 fail-closed | `_live_writer_holds_db`（`:827`）+ `_exclusive_repair_db_guard`（`:641`） | **不做**（B2） | Linux `/proc/<pid>/fd` 侦查 + 多进程处境；mini 里"另一个进程持有我的库"不存在 |
+| 跨进程准入锁 | `_cross_process_repair_lock`（`hermes_state_repair.py:164`，flock） | **不做**（B1） | CLI 与网关可同时开库；显式修复前须停止其他持有者 |
+| 外部持有者 fail-closed | `_live_writer_holds_db`（`:827`）+ `_exclusive_repair_db_guard`（`:641`） | **不做**（B2） | 不自动侦查外部持有者，不能用“单进程”作为安全保证 |
 | `state-snapshots/` 快照目录 | `hermes_cli/backup.py:37/1212/1255` | **不做**（B6） | 运维设施，与"恢复机制的形状"无关 |
 | 内部在线备份 API 快照 | `_copy_database_snapshot`（`:664`）+ `source.backup(pages=256)`（`:684`） | **不做**（B5） | mini 用 raw-copy 备份就够；`pages=`/进度/截止是给长库修复用的 |
 | 受守卫的 snapshot-and-promotion | `_repair_state_db_schema_locked`（`:966`）：scratch 副本 → 跑策略 → **事务提升**（禁 `os.replace`） | **简化掉** | mini 的修复是"重建 FTS 索引 + 装回触发器 + 清标记"，**不动 canonical 数据** ⇒ 不需要 scratch 副本、也不需要把结果提升回主文件 |
@@ -54,7 +54,8 @@ _DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 
 def _read_only_connection(db_path) -> sqlite3.Connection:
     """开一条**只读**连接（体检 / 验证查询都在它上面跑，绝不改文件）。"""
-    return sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=SQLITE_TIMEOUT_S)
+    return sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
+                           uri=True, timeout=SQLITE_TIMEOUT_S)
 
 
 # ── ① 健康探针 ────────────────────────────────────────────────────────────
@@ -87,10 +88,11 @@ def _db_opens_cleanly(db_path) -> Optional[str]:
 def inspect_state_db(db_path) -> Dict[str, Any]:
     """`--check-only` 用的**只读**体检：健康探针 + 标记 + 触发器集合 + 权威行数。
 
-    判定"健康"的口径（三条必须同时成立）：
+    基础体检通过的口径（还包括权威行数可读与 MATCH 查询可读）：
       · 健康探针通过（能打开、schema 能解析）；
       · `state_meta` 里**没有** `fts_stale` 标记（标记在 ⇒ FTS 处于摘除/降级态）；
       · 三个同步触发器**全在场**（缺一个 ⇒ 有写入路径没在同步索引）。
+    这是有限探测，不证明每个 FTS 索引项都与权威消息一致。
     "不健康"分两种，病因不同、出路也不同：
       · 打不开 ⇒ **结构性损坏**，FTS 重建修不了（走离线恢复/从备份恢复）；
       · 能开但标记在/触发器缺 ⇒ **FTS 降级**，`repair` 能修（重建索引）。
@@ -108,6 +110,8 @@ def inspect_state_db(db_path) -> Dict[str, Any]:
         "marker_readable": False,        # 旧库（第 11 章之前建的）没有 state_meta 表 ⇒ 读不到标记
         "reason_marker": None,
         "canonical_rows": None,
+        "fts_readable": False,
+        "reason_fts": None,
         "healthy": False,
     }
     reason = _db_opens_cleanly(path)
@@ -141,11 +145,21 @@ def inspect_state_db(db_path) -> Dict[str, Any]:
                 conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
         except sqlite3.Error as exc:
             result["reason_rows"] = "%s: %s" % (type(exc).__name__, exc)
+        # COUNT(*) on an external-content table reads canonical rows, not the index.
+        # A MATCH query must actually open the FTS index; it remains read-only.
+        try:
+            conn.execute(
+                "SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? LIMIT 1",
+                ("mini_fts_readability_probe",)).fetchone()
+            result["fts_readable"] = True
+        except sqlite3.Error as exc:
+            result["reason_fts"] = "%s: %s" % (type(exc).__name__, exc)
     finally:
         conn.close()
     # 健康 = 读得到标记 · 标记不在场 · 触发器齐 · 行数读得出来（旧库缺 state_meta ⇒ 不健康：待 repair 升级）
     result["healthy"] = (result["marker_readable"] and result["marker"] is None
-                         and not result["missing_triggers"] and result["canonical_rows"] is not None)
+                         and not result["missing_triggers"] and result["canonical_rows"] is not None
+                         and result["fts_readable"])
     return result
 
 
