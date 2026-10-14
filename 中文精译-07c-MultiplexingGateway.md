@@ -12,6 +12,8 @@
 > 🧭 原文是**维护者设计说明**（通篇模块名/类名/issue 号），所以译文**先给白话**，
 > 逐字标识符与 issue 号收进《源码讲解-07c》的【源码要点】；译文只把 issue 号降为「出处」一行。
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -219,7 +221,7 @@ A 更新完、B 又更新，**两边都会读到 B 的值**；而且 `subprocess
 事件会被拒绝（丢弃），而不是投错地方**。
 
 完整 schema 与匹配规则在用户向文档里：
-[Routing shared-bot chats to profiles](../user-guide/multi-profile-gateways.md#routing-shared-bot-chats-to-profiles-profile_routes)。
+[Routing shared-bot chats to profiles](https://hermes-agent.nousresearch.com/docs/user-guide/multi-profile-gateways#routing-shared-bot-chats-to-profiles-profile_routes)。
 
 "共享 bot"是多路复用最现实的场景：**同一个 Telegram bot 同时给两个 profile 干活**
 （比如团队群里 @ 一次服务"工作"，另一个群里服务"个人"）。没有路由表，

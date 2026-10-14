@@ -199,7 +199,7 @@ required_environment_variables:
 用户可以跳过设置，照常继续加载该技能。Hermes **永不**把原始密文值暴露给模型。网关与消息会话会展示本地设置指引，而不是在带内收集密文。
 
 > 💡 **提示 · 沙箱透传（Sandbox Passthrough）**
-> 技能被加载时，任何**已设置**的、声明过的 `required_environment_variables` 都会被**自动透传**给 `execute_code` 与 `terminal` 沙箱 —— 包括 Docker、Modal 这类远端后端。你的技能脚本可以用 `$TENOR_API_KEY`（Python 里是 `os.environ["TENOR_API_KEY"]`），用户无需再做任何额外配置。细节见[环境变量透传](/user-guide/security#environment-variable-passthrough)（Environment Variable Passthrough）。
+> 技能被加载时，任何**已设置**的、声明过的 `required_environment_variables` 都会被**自动透传**给 `execute_code` 与 `terminal` 沙箱 —— 包括 Docker、Modal 这类远端后端。你的技能脚本可以用 `$TENOR_API_KEY`（Python 里是 `os.environ["TENOR_API_KEY"]`），用户无需再做任何额外配置。细节见[环境变量透传](https://hermes-agent.nousresearch.com/docs/user-guide/security#environment-variable-passthrough)（Environment Variable Passthrough）。
 
 旧的 `prerequisites.env_vars` 作为向后兼容别名，仍然受支持。
 
@@ -306,7 +306,7 @@ required_credential_files:
 
 ### 以文档形式投递媒体（Deliver media as documents · `[[as_document]]`）
 
-如果你的技能会产出高分辨率截图、图表，或任何"有损预览压缩会造成伤害"的图像 —— 在响应的某处（通常是最后一行）发出字面指令 `[[as_document]]`。网关会剥掉这条指令，并把该次响应里抽取到的每一个媒体路径**作为可下载的文件附件**投递，而不是内联的图片气泡。完整语义见[技能输出与媒体投递](../user-guide/features/skills.md#skill-output-and-media-delivery)（Skill output and media delivery）。
+如果你的技能会产出高分辨率截图、图表，或任何"有损预览压缩会造成伤害"的图像 —— 在响应的某处（通常是最后一行）发出字面指令 `[[as_document]]`。网关会剥掉这条指令，并把该次响应里抽取到的每一个媒体路径**作为可下载的文件附件**投递，而不是内联的图片气泡。完整语义见[技能输出与媒体投递](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills#skill-output-and-media-delivery)（Skill output and media delivery）。
 
 #### 从 SKILL.md 引用随包脚本（Referencing bundled scripts from SKILL.md）
 
@@ -407,6 +407,8 @@ hermes skills install owner/morning-brief
 蓝图这一层**没有**引入新的对象类型、存储或传输 —— 蓝图就是技能，排程就是定时任务，分享走的是既有的 publish/tap/index 路径。
 
 ---
+
+<a id="suggested-cron-jobs"></a>
 
 ## 8. Suggested Cron Jobs —— 建议的定时任务
 

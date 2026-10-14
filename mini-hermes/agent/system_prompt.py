@@ -30,7 +30,7 @@ volatile  ← 重建时最可能变（记忆、时间戳、运行时环境）
 ## 技能索引（第 13 章补上的一块）
 
 上面那张表里「volatile 层内」一行原来还差一块：Hermes 的 volatile 层**以"技能索引"打头**
-（理由：变化点放本层最前面 = 爆炸半径最小）。第 13 章把它补上了 ——
+（理由：索引未变时可保留在记忆块之前的公共前缀中）。第 13 章把它补上了 ——
 `_skill_index_parts()` 就是那个块：**只放名字 + 一句话描述**，
 技能正文不在提示词里（按需经 `skill_view` 读取，见 `agent/skill_utils.py`）。
 
@@ -302,7 +302,7 @@ def build_system_prompt_parts(
     # ── volatile 层（重建时最可能变，刻意放最后）────────────────
     volatile_parts: List[str] = [
         # ★ 首块：技能索引（第 13 章 A2）。运行期可变 ⇒ 必须在 volatile 层；
-        #   又要"爆炸半径最小" ⇒ 排在本层最前（理由见 _skill_index_parts）。
+        #   索引未变时要随前缀复用 ⇒ 排在记忆块之前（见 _skill_index_parts）。
         *_skill_index_parts(agent),
         *_memory_parts(agent),
         *_timestamp_parts(agent),

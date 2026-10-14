@@ -5,7 +5,7 @@
 >
 > 重点回答三件事：**整个环节用哪个文件、跑哪里的代码、怎么沟通**。
 >
-> 配套源码：`~/.hermes/hermes-agent/`（git 源码版）。
+> 配套源码：`~/.hermes/hermes-agent/`（git 源码版）；源码核对与规模声明锚上游 `f5d1926110`。
 >
 > 📖 和桌面的《Hermes消息完整旅程.md》是**两个互补视角**：那篇是「横切」——一条消息从头到尾跨过所有模块；这篇是「纵切」——每个模块是什么、文件在哪、谁依赖谁。建议先读这篇建立地图，再回那篇看一条消息怎么穿过地图。
 
@@ -34,7 +34,7 @@ flowchart TD
 
     subgraph Base["底座"]
         SS["Session 存储<br/>SQLite + FTS5<br/>hermes_state.py"]
-        TB["工具后端<br/>Terminal(6) Browser(5)<br/>Web(4) MCP File Vision"]
+        TB["工具后端<br/>Terminal(7) Browser(5)<br/>Web(4) MCP File Vision"]
     end
 
     Entry --> Core
@@ -42,7 +42,7 @@ flowchart TD
     Core --> TB
 ```
 
-**这条最关键**：所有入口汇到同一个 `AIAgent`。CLI、网关、ACP、批处理、API server 只是不同的「壳」，唯一区别是**怎么收输入、怎么吐输出**；真正的思考、工具调用、记忆，全在 `run_agent.py` 那一个类里。
+**这条最关键**：这些入口复用同一个 `AIAgent` 接口。CLI、网关、ACP、批处理、API server 各自负责输入输出、授权和会话管理；模型调用、工具编排、压缩等核心行为由 agent 子系统实现。`run_agent.py` 是对外门面，循环真身在 `agent/conversation_loop.py` 与 `agent/turn_*.py` 中。
 
 这就是设计原则里的 **「platform-agnostic core」（平台无关的核心）**——平台差异活在入口，不在大脑。
 
@@ -54,11 +54,11 @@ flowchart TD
 
 ```text
 hermes-agent/
-├── run_agent.py            # ★ AIAgent 核心循环（大文件，一切的中枢）
-├── cli.py                  # 终端交互 UI（大文件）
+├── run_agent.py            # ★ AIAgent 门面（循环在 agent/ 下的兄弟模块）
+├── cli.py                  # 终端交互门面（实现还分布在 hermes_cli/ 下）
 ├── model_tools.py          # 工具发现 + 分发
 ├── toolsets.py             # 工具分组（28 个 toolset 的定义）
-├── hermes_state.py         # ★ SQLite 库（state.db 读写全在这）
+├── hermes_state.py         # ★ SQLite 门面（读写实现在 hermes_state_*.py 中）
 ├── hermes_constants.py     # HERMES_HOME、profile 路径解析
 │
 ├── agent/                  # 大脑内部零件
@@ -72,7 +72,7 @@ hermes-agent/
 ├── hermes_cli/             # 所有 `hermes` 子命令的入口
 │   ├── main.py             # 入口（hermes chat/setup/model/...）
 │   ├── config.py           # 默认配置 DEFAULT_CONFIG
-│   ├── commands.py         # ★ 命令注册表 COMMAND_REGISTRY
+│   ├── commands.py         # ★ 斜杠命令注册表 COMMAND_REGISTRY
 │   ├── auth.py             # PROVIDER_REGISTRY + 凭证解析
 │   ├── runtime_provider.py # provider → api_mode + key + url
 │   └── plugins.py          # PluginManager（发现/加载/钩子）
@@ -128,7 +128,7 @@ hermes-agent/
 
 #### ② hermes_state.py — 底座的唯一数据库
 
-`~/.hermes/state.db` 的所有读写都在这。管的是一整套表（对应官方 `session-storage.md`）：
+`~/.hermes/state.db` 的读写通过这个门面及 `hermes_state_*.py` 兄弟模块完成。管的是一整套表（对应官方 `session-storage.md`）：
 
 - `sessions` — 会话元数据、token 计数、billing
 - `messages` — 完整消息历史
@@ -142,7 +142,7 @@ hermes-agent/
 
 **为什么三张 FTS5 表（分词器决定切法）**
 
-FTS5 是 SQLite 内置的全文搜索引擎，靠倒排索引做关键词匹配，比 `LIKE '%x%'` 快几个数量级。全文搜索第一步是「分词」（tokenize）——把文本切成一个个「词」再建索引，而**一张 FTS5 表只能绑一个分词器（tokenizer）**，所以 Hermes 为三种需求建了三张并行表：
+FTS5 是 SQLite 内置的全文搜索引擎，靠倒排索引做关键词匹配；相对 `LIKE '%x%'` 的性能收益取决于数据规模、查询和索引状态。全文搜索第一步是「分词」（tokenize）——把文本切成一个个「词」再建索引，而**一张 FTS5 表只能绑一个分词器（tokenizer）**，所以 Hermes 为三种需求建了三张并行表：
 
 | 表 | 分词器 | 切法（例：`智能计算系统很有意思`） | 定位 |
 |---|---|---|---|
@@ -156,13 +156,13 @@ FTS5 是 SQLite 内置的全文搜索引擎，靠倒排索引做关键词匹配�
 
 #### ③ commands.py — CLI 的命令注册表
 
-`COMMAND_REGISTRY` 这张表决定 `hermes` 后面能跟哪些子命令。加一条命令 = 往注册表 register 一个条目 + 在 `hermes_cli/main.py` 接线。理解它就能看懂「`hermes gateway` / `hermes cron` / `hermes model`」其实是同一套注册机制挂上去的兄弟命令。
+`COMMAND_REGISTRY` 管的是会话中的斜杠命令，例如 `/new`、`/model`，以及它们在不同入口中的可用性和忙时策略。`hermes gateway`、`hermes cron`、`hermes model` 则是命令行子命令，解析入口在 `hermes_cli/main.py` 和 `hermes_cli/subcommands/`。这两套命令不能混为一谈。
 
-> ⚠️ 官方没有单独的 commands.py 详解：`extending-the-cli.md` 讲的是 TUI 扩展钩子（加 widget / 快捷键 / 斜杠命令），跟「子命令怎么注册」相关但不同。这块要靠读源码补。
+> ⚠️ `extending-the-cli.md` 讲 TUI 扩展钩子（加 widget / 快捷键 / 斜杠命令）；命令行子命令的接线需要另外查看 `hermes_cli/subcommands/`。
 
 #### ④ registry.py — 工具系统的中央注册表
 
-整个框架最巧妙的自举设计。每个 `tools/*.py` 在 **import 时**就调 `registry.register(name, toolset, schema, handler, check_fn, ...)` 把自己登记进单例 `ToolRegistry._tools` 字典。`discover_builtin_tools()` 用 **AST 解析**扫 `tools/` 目录、找所有顶层有 `register()` 调用的文件再 import 它们——所以加新工具 = 丢一个文件进去 register 一下，**别的地方一行都不用改**（这就是第四节依赖链图的含义）。
+整个框架最巧妙的自举设计。每个 `tools/*.py` 在 **import 时**就调 `registry.register(name, toolset, schema, handler, check_fn, ...)` 把自己登记进单例 `ToolRegistry._tools` 字典。`discover_builtin_tools()` 用 **AST 解析**扫 `tools/` 目录、找所有顶层有 `register()` 调用的文件再 import 它们——所以新增工具模块可自动被发现；模型可见性还要经过 toolset 白名单和 `check_fn`（这就是第四节依赖链图的含义）。
 
 **AST 解析是什么**
 
@@ -178,9 +178,9 @@ Expr（表达式语句）
     └── keyword: handler=f
 ```
 
-为什么用 AST 而非「直接 import 所有文件」：import 会真的执行代码（副作用/依赖/慢），AST 是「静态读一遍」、只挑真正注册了工具的再 import。判断函数 `_is_registry_register_call` 在树上走三层 `Expr → Call → func`，确认 `func.attr == "register"` 且 `func.value.id == "registry"`——所以 `foo.register(...)` 或注释里的 `register(` 都不会误命中（正则做不到）。
+为什么用 AST 而非「直接 import 所有文件」：import 会真的执行代码（副作用/依赖/慢），AST 是「静态读一遍」、只挑真正注册了工具的再 import。判断函数 `_is_registry_register_call` 在树上走三层 `Expr → Call → func`，确认 `func.attr == "register"` 且 `func.value.id == "registry"`——所以 `foo.register(...)` 或注释里的 `register(` 都不会误命中（单纯子串检索容易误命中；AST 直接判断语法结构）。
 
-两个实现巧思：① **便宜文本预过滤**——源码里同时没有 "registry" 和 "register" 两词就直接跳过，省掉 `ast.parse` 开销；② 只查 `tree.body`（模块顶层语句），「在函数内部才调 register」的辅助模块不会被误选。扫描结果按 `(mtime_ns, size)` 缓存磁盘（100 文件约 145ms，不值得每次重扫）。
+两个实现巧思：① **便宜文本预过滤**——源码缺少 "registry" 或 "register" 中任意一个词就直接跳过，省掉 `ast.parse` 开销；② 只查 `tree.body`（模块顶层语句），「在函数内部才调 register」的辅助模块不会被误选。扫描结果按 `(mtime_ns, size)` 缓存磁盘（100 文件约 145ms，不值得每次重扫）。
 
 **这个设计 vs 其他框架的优劣**
 
@@ -193,7 +193,9 @@ Expr（表达式语句）
 | 原生 function calling | OpenAI 原始用法 | N 处（每个工具手写 schema + 组装） |
 | **自注册 + AST 发现** | **Hermes** | **1 处（只写工具文件）** |
 
-优点：① 去中心化——无中央清单，加工具零改动调用点，并行贡献不抢文件；② 一工具一文件，review/test/blame 清晰；③ AST 静态发现只读不执行，避免 import 副作用；④ 注册与使用解耦 + 用 `check_fn`（按需可用）/ `override`（防冲突）治理全局单例。
+上表的“改几处”只比较注册与发现接线；模型可见性还受 toolset 白名单控制。
+
+优点：① 去中心化——无中央清单，加工具零改动调用点，并行贡献不抢文件；② 一工具一文件，review/test/blame 清晰；③ AST 筛选本身只读不执行；选中的模块随后仍要 import，仍会产生注册等副作用；④ 注册与使用解耦 + 用 `check_fn`（按需可用）/ `override`（防冲突）治理全局单例。
 
 代价（诚实版）：① import 副作用——依赖模块顶层执行，非「纯」函数式；② 全局单例可变状态，测试隔离要额外治理；③ 约定优于配置——依赖「顶层 register」约定，函数内 register 会被故意排除。
 
@@ -205,7 +207,7 @@ Expr（表达式语句）
 
 **你自己加一个工具，差多少？**
 
-手动清单式：写 `my_tool.py` → 还要去中央文件 `import` + `append` + 加 schema（2–4 处，且要**记得**去改）。自注册式：只写 `my_tool.py` 顶层 `registry.register(...)`（1 处，结束）。加 **1 个**工具时差别就一两行、体感不大；差别在规模化才放大——① 多人并行：两人都去改中央文件同一行 → git 冲突，自注册各写各的互不干扰；② 插件/MCP 也能贡献工具：第三方模块 import 时自动进注册表，手动清单做不到；③ 删/禁用工具：自注册用 `check_fn` 返回 False 即可，不动注册表。
+手动清单式：写 `my_tool.py` → 还要去中央文件 `import` + `append` + 加 schema（2–4 处，且要**记得**去改）。自注册式：只写 `my_tool.py` 顶层 `registry.register(...)`（1 处，结束）。加 **1 个**工具时差别就一两行、体感不大；差别在规模化才放大——① 多人并行：两人都去改中央文件同一行 → git 冲突，自注册各写各的互不干扰；② 插件/MCP 也能贡献工具：第三方模块 import 时可以登记进注册表；手动清单也能支持插件，但需要另建扩展接线；③ 删/禁用工具：自注册用 `check_fn` 返回 False 即可，不动注册表。
 
 一句话：它省的不是写代码量，是「人肉同步清单」这个易错环节；为的是「多来源 + 多人 + 频繁增删」。你个人加 1 个工具，手动清单真不差多少。
 
@@ -299,7 +301,7 @@ run_agent.py, cli.py, batch_runner.py, environments/
 
 **含义：工具注册发生在 import 时，早于任何 agent 实例创建。**
 
-所以 `tools/` 里任何带顶层 `registry.register()` 的 `.py` 文件都会被**自动发现**——不需要手写导入清单。你想加一个新工具，就是往 `tools/` 丢一个文件、在里面 register 一下，别的什么都不用改。
+所以 `tools/` 里带顶层 `registry.register()` 的工具模块会被**自动发现**，不需要手写导入清单。但模型是否能看见它，还取决于 toolset 选择、工具名白名单及 `check_fn`；mini 新增工具通常还要在 `toolsets.py` 登记。
 
 ### 4.1 术语辨析：钩子 vs 注册表 vs 回调
 
@@ -402,7 +404,7 @@ hermes desktop/gui → 启动桌面 App（自动拉起一个 serve 后端）
 
 一句话：网关是个 24 小时坐着的前台，从各渠道接电话、问清身份、转接 AI 大脑、再把回话转回。
 
-> 和 OpenClaw 的关系：`openclaw gateway start` ≈ `hermes gateway start`，同一个概念。这类 Agent 框架（OpenClaw / Claude Code / Codex / Hermes）网关设计大同小异，都是「让一个 AI 大脑被多个渠道访问」。
+> 和 OpenClaw 的关系：`openclaw gateway start` ≈ `hermes gateway start`，同一个概念。这里的类比仅指常驻进程接收消息、调用 agent、投递回复的职责，不能据此推断其他产品具有相同的网关接口。
 
 ### 7.4 实锤：查你自己机器上的进程
 
@@ -442,9 +444,7 @@ python -m hermes_cli.main serve       pid 951   ← hermes serve 后端
 ```text
 你打字/点击
    ↓
-Electron 主进程
-   ↓
-React renderer（你看到的界面）
+React renderer（你看到的界面；Electron 主进程管理应用生命周期）
    ↓ WebSocket 连 127.0.0.1:<随机端口>
 hermes serve 后端（监听本机端口）
    ↓
@@ -468,6 +468,6 @@ AIAgent（同一个大脑）
 
 两条设计公理（来自源码 `AGENTS.md`，理解一切的钥匙）：
 
-> 1. **Per-conversation prompt caching is sacred**（每轮对话的 prompt 缓存是神圣的）——除压缩外，绝不在对话中途改动上下文。
+> 1. **Per-conversation prompt caching is sacred**（每个会话的 prompt 缓存是神圣的）——保持可复用前缀稳定；压缩、显式模型切换等边界按对应规则使缓存失效。
 >
 > 2. **The core is a narrow waist; capability lives at the edges**（核心是窄腰，能力长在边缘）——新能力优先走 skill/plugin/MCP，最后才加核心工具。

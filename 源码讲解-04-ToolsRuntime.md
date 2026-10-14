@@ -13,13 +13,21 @@
 
 [TOC]
 
+## 发布前维护 · 工具探测与失败结果
+
+`tools/registry.py` 的探测 TTL 缓存与 last-good 抖动保护都按 `(check_fn, MINI_HOME 的解析绝对路径)` 分键，避免复用其他 profile 的可用性结果。`tools/terminal.py` 的非零退出状态通过 `tool_error` 返回，仍保留 `exit_code`、`stdout`、`stderr`，不会仅因进程成功启动就报工具成功。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
+
 ---
 
 ## 两份代码的路径
 
 ```text
 mini 版（本仓库，第 4 章末）
-  $HOME/Desktop/study/hermes学习/mini-hermes/
+  $HOME/projects/hermes-study/mini-hermes/
     tools/registry.py      362 行    ←  tools/registry.py              977 行
     model_tools.py         293 行    ←  model_tools.py                 987 行
     toolsets.py            144 行    ←  toolsets.py                    485 行
@@ -314,7 +322,7 @@ _no_cache: Set[Callable] = set()
 
 ### 真实 Hermes 怎么做的
 
-机制内核**完全对齐**（TTL + 抖动保护 + `no_cache` + 两层缓存），另外三处 mini 没有：
+机制内核**完全对齐**（TTL + 抖动保护 + `no_cache` + 两层缓存），其中 profile 分键已在发布前维护中补齐；其余差异如下：
 
 **① 缓存必须按 profile 分键**：`_check_fn_cache` 的 key 是 `(fn, hermes_home_key())`。
 一个 Hermes 进程服务多个 profile（`~/.hermes/profiles/<name>/`），
@@ -334,18 +342,12 @@ _no_cache: Set[Callable] = set()
 | TTL / 抖动窗口 | 30s / 60s | 30s / 60s ✅ 同 |
 | 两层缓存（memo + TTL） | ✅ | ✅ 同 |
 | `@no_cache_check_fn` | ✅ | ✅ 同 |
-| 按 profile 分键 | ❌ | ✅ |
+| 按 profile 分键 | ✅ `(fn, MINI_HOME 的解析绝对路径)`；TTL 与抖动保护均分键 | ✅ |
 | 条数上限 | ❌ | 512 |
 | tool defs 缓存 | ❌ | 最多 8 份 |
 | 分级日志 | ⚠️ 只有 warning | WARNING / INFO 分级 |
 
-**为什么 mini 不做 profile 分键**：mini 是**单 profile** 的（没有 `profiles/` 目录）。
-⚠️ 但这是**有意的简化**，代价写在 `tools/registry.py` 的模块 docstring 里：
-**如果以后支持多 profile，一个 profile 的探测结果会被另一个复用**——那时必须补。
-
-**📌 这个"代价写在原地"的做法值得照抄**：简化本身不可怕，
-可怕的是**简化了但没人知道代价在哪**。下次有人加多 profile 时，
-他会在读注册表的第一屏看到这句话。
+**历史与现状**：第 4 章快照没有按 profile 分键；第 7 章后已支持多 profile，发布前维护补上了 `(fn, home)` 键。不能继续用“单 profile”解释当前实现。若只给 TTL 分键、却让 last-good 抖动保护共用一个键，仍可能跨 profile 借到旧的成功结果。
 
 ---
 

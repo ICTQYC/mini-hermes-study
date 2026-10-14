@@ -25,23 +25,23 @@ Hermes 是一个大仓库，而绝大多数贡献**恰好只碰一个子系统**
 
 | 子系统 | 源码目录 | 文档入口 |
 |-----------|-------------------|------------------|
-| Agent core（循环、传输、压缩） | `agent/`, `run_agent.py` | [Agent Loop](agent-loop.md)（代理循环）, [Context Compression & Caching](context-compression-and-caching.md)（上下文压缩与缓存） |
-| Prompt assembly（提示词组装） | `agent/prompt_builder.py`, `agent/system_prompt.py` | [Prompt Assembly](prompt-assembly.md)（提示词组装） |
-| Model providers & transports（模型提供方与传输） | `agent/transports/`, `plugins/model-providers/`, `hermes_cli/models.py` | [Adding Providers](adding-providers.md)（添加提供方）, [Model Provider Plugins](model-provider-plugin.md)（模型提供方插件）, [Provider Runtime](provider-runtime.md)（提供方运行时） |
-| Built-in tools（内置工具） | `tools/` | [Adding Tools](adding-tools.md)（添加工具）, [Tools Runtime](tools-runtime.md)（工具运行时） |
-| Messaging gateway（消息网关） | `gateway/`, `plugins/platforms/` | [Gateway Internals](gateway-internals.md)（网关内部）, [Adding Platform Adapters](adding-platform-adapters.md)（添加平台适配器） |
-| CLI（命令行） | `hermes_cli/` | [Extending the CLI](extending-the-cli.md)（扩展 CLI） |
-| Plugins system（插件系统） | `plugins/` | [Build a Hermes Plugin](plugins/index.md)（构建一个 Hermes 插件） |
-| Skills（bundled & optional，随包内置与可选） | `skills/`, `optional-skills/` | [Creating Skills](creating-skills.md)（创建技能） |
-| Cron / scheduled jobs（定时任务） | `cron/` | [Cron Internals](cron-internals.md)（Cron 内部） |
-| Session storage（会话存储） | `hermes_state.py`, `hermes_state_*.py` | [Session Storage](session-storage.md)（会话存储） |
-| Browser stack（浏览器栈） | `tools/browser_tool.py`, `tools/browser_supervisor.py`, `tools/browser_cdp_tool.py` | [Browser Supervisor](browser-supervisor.md)（浏览器监督器） |
-| Egress firewall（出向防火墙） | `agent/proxy_sources/iron_proxy.py` | [Egress Internals](egress-internals.md)（出向内部） |
-| ACP (IDE integration)（IDE 集成） | `acp_adapter/` | [ACP Internals](acp-internals.md)（ACP 内部） |
-| Desktop app（桌面应用） | `apps/desktop/` | [Desktop Plugin SDK](desktop-plugin-sdk.md)（桌面插件 SDK）, [Worktree UI Development](worktree-ui-dev.md)（Worktree UI 开发） |
-| TUI（终端界面） | `ui-tui/`, `tui_gateway/` | [Worktree UI Development](worktree-ui-dev.md)（Worktree UI 开发） |
-| Docs site（文档站） | `website/` | [Contributing](contributing.md)（贡献指南） |
-| Tests（测试） | `tests/`, `tests-js/` | [Contributing → Before Submitting](contributing.md#before-submitting)（贡献指南 → 提交之前） |
+| Agent core（循环、传输、压缩） | `agent/`, `run_agent.py` | [Agent Loop](https://hermes-agent.nousresearch.com/docs/developer-guide/agent-loop)（代理循环）, [Context Compression & Caching](https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching)（上下文压缩与缓存） |
+| Prompt assembly（提示词组装） | `agent/prompt_builder.py`, `agent/system_prompt.py` | [Prompt Assembly](https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly)（提示词组装） |
+| Model providers & transports（模型提供方与传输） | `agent/transports/`, `plugins/model-providers/`, `hermes_cli/models.py` | [Adding Providers](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-providers)（添加提供方）, [Model Provider Plugins](https://hermes-agent.nousresearch.com/docs/developer-guide/model-provider-plugin)（模型提供方插件）, [Provider Runtime](https://hermes-agent.nousresearch.com/docs/developer-guide/provider-runtime)（提供方运行时） |
+| Built-in tools（内置工具） | `tools/` | [Adding Tools](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-tools)（添加工具）, [Tools Runtime](https://hermes-agent.nousresearch.com/docs/developer-guide/tools-runtime)（工具运行时） |
+| Messaging gateway（消息网关） | `gateway/`, `plugins/platforms/` | [Gateway Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/gateway-internals)（网关内部）, [Adding Platform Adapters](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-platform-adapters)（添加平台适配器） |
+| CLI（命令行） | `hermes_cli/` | [Extending the CLI](https://hermes-agent.nousresearch.com/docs/developer-guide/extending-the-cli)（扩展 CLI） |
+| Plugins system（插件系统） | `plugins/` | [Build a Hermes Plugin](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)（构建一个 Hermes 插件） |
+| Skills（bundled & optional，随包内置与可选） | `skills/`, `optional-skills/` | [Creating Skills](https://hermes-agent.nousresearch.com/docs/developer-guide/creating-skills)（创建技能） |
+| Cron / scheduled jobs（定时任务） | `cron/` | [Cron Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/cron-internals)（Cron 内部） |
+| Session storage（会话存储） | `hermes_state.py`, `hermes_state_*.py` | [Session Storage](https://hermes-agent.nousresearch.com/docs/developer-guide/session-storage)（会话存储） |
+| Browser stack（浏览器栈） | `tools/browser_tool.py`, `tools/browser_supervisor.py`, `tools/browser_cdp_tool.py` | [Browser Supervisor](https://hermes-agent.nousresearch.com/docs/developer-guide/browser-supervisor)（浏览器监督器） |
+| Egress firewall（出向防火墙） | `agent/proxy_sources/iron_proxy.py` | [Egress Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/egress-internals)（出向内部） |
+| ACP (IDE integration)（IDE 集成） | `acp_adapter/` | [ACP Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/acp-internals)（ACP 内部） |
+| Desktop app（桌面应用） | `apps/desktop/` | [Desktop Plugin SDK](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk)（桌面插件 SDK）, [Worktree UI Development](https://hermes-agent.nousresearch.com/docs/developer-guide/worktree-ui-dev)（Worktree UI 开发） |
+| TUI（终端界面） | `ui-tui/`, `tui_gateway/` | [Worktree UI Development](https://hermes-agent.nousresearch.com/docs/developer-guide/worktree-ui-dev)（Worktree UI 开发） |
+| Docs site（文档站） | `website/` | [Contributing](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing)（贡献指南） |
+| Tests（测试） | `tests/`, `tests-js/` | [Contributing → Before Submitting](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing#before-submitting)（贡献指南 → 提交之前） |
 
 由这张图自然落出的几条约定：
 
@@ -69,7 +69,7 @@ Hermes 是一个大仓库，而绝大多数贡献**恰好只碰一个子系统**
 
 ### Local validation and its limits —— 本地验证及其边界
 
-`evals/completion_backlog_probe.py REPO OUTPUT.json` 会在**临时目录**里**真启动**本地 shell 子进程，读它们**真实的**完成事件，并驱动**生产**的 CLI、TUI 轮询器与回合后通知路由。一个 **loopback HTTP 回合汇点（turn sink）**替换掉 `chat` / `_run_prompt_submit`；它会记录**真实的投递**，但**不**演练模型推理、原生渲染器交互、或任何托管的平台。合成的 watch 与委派**信封**是**带标签的固定装置（fixture）**；委派的认领用的是**真实的临时 SQLite 账本**。backlog 这个用例里**包含一个非零退出码**。
+`evals/completion_backlog_probe.py REPO OUTPUT.json` 会在**临时目录**里**真启动**本地 shell 子进程，读它们**真实的**完成事件，并驱动**生产**的 CLI、TUI 轮询器与回合后通知路由。一个 **loopback HTTP 回合汇点（turn sink）**替换掉 `chat` / `_run_prompt_submit`；它会记录**真实的投递**，但**不**演练模型推理、原生渲染器交互、或任何托管的平台。合成的 watch 与委派**信封**是**带标签的测试样本（fixture）**；委派的认领用的是**真实的临时 SQLite 账本**。backlog 这个用例里**包含一个非零退出码**。
 
 探针会检查：一个**就绪的积压**、**单个精确负载**、被**显式消费**的结果、**外部归属**、以及**与完成事件交错的** watch/委派。它度量的是**通知边界上的回合准入**，而不是模型层面省下的 token。
 
@@ -186,14 +186,14 @@ Hermes 是一个大仓库，而绝大多数贡献**恰好只碰一个子系统**
 - "委派走**持久认领/完成账本**、每委派一次" → `tools/async_delegation.py:80` 逐字 `# ── Durable ledger (state.db / async_delegations) ───`；`claim_event_delivery`（`:344`）与 `complete_event_delivery`（`:409`）均以 `delegation_id` 为键。
 - "`evals/completion_backlog_probe.py REPO OUTPUT.json`" → `evals/completion_backlog_probe.py:3` 逐字：*"Run with the repo's Python: evals/completion_backlog_probe.py REPO OUTPUT.json."*
 - "loopback HTTP 回合汇点替换 `chat` / `_run_prompt_submit`，记录投递但不演练模型推理/原生渲染器/托管平台" → 探针文件头 `:5-6` 逐字：*"The sink replaces chat/_run_prompt_submit, NOT ownership, consumption, queue draining, batching, or formatting."*；`:1` 逐字：*"Local I/O probe for completion batching, not a hosted-model or native UI test."*；实现见 `:46`（`ThreadingHTTPServer`）与 `:83`（`patch.object(server, '_run_prompt_submit', tui_submit)`）。
-- "合成的 watch/委派信封是**带标签的固定装置**" → `evals/completion_backlog_probe.py:106` 委派信封逐字带 `'goal': 'Fixture delegation'`。
+- "合成的 watch/委派信封是**带标签的测试样本**" → `evals/completion_backlog_probe.py:106` 委派信封逐字带 `'goal': 'Fixture delegation'`。
 - "委派认领用**真实的临时 SQLite 账本**" → 同一个探针在 `tempfile.TemporaryDirectory()` 里设 `HERMES_HOME`，再走 `ad._persist_dispatch` / `ad._persist_completion` 与 `ad._transaction()` 读 `async_delegations`。
 - "backlog 用例**含一个非零退出码**" → `evals/completion_backlog_probe.py:90` 逐字：`f'print("BACKLOG_{index}"); sys.exit({7 if index == count - 1 else 0})'`（backlog = 12 个子进程，最后一个退出码 7）。
 - "探针检查**就绪积压 / 单个精确负载 / 显式消费 / 外部归属 / 交错**" → `evals/completion_backlog_probe.py:188` 逐字：`for surface in ('cli', 'poller', 'post-turn')`，`:189` 逐字：`for scenario in ('backlog', 'single', 'consumed', 'foreign', 'mixed')`。
 
 **上篇（codebase-ownership.md）：**
 
-- 表内 **22 个文档链接的目标文件**全部实测在场（`website/docs/developer-guide/` 下 48 个文件），含 `plugins/index.md`（链接写作 `[Build a Hermes Plugin](plugins/index.md)`）与 `contributing.md#before-submitting`（锚 = `contributing.md:223 ### Before Submitting`）。
+- 表内 **22 个文档链接的目标文件**在上游锚点全部实测在场（`website/docs/developer-guide/` 下 48 个文件）；本仓发布链接已改为官网绝对地址，含 `plugins/index.md`（上游链接原写作 `plugins/index.md`）与 `contributing.md#before-submitting`（锚 = `contributing.md:223 ### Before Submitting`）。
 - 表内**源码目录/文件**全部实测在场（见附录 B-3），含 `hermes_state_*.py`（26 个同级文件）与 `tests-js/`。
 - "插件需要改核心文件是设计坏味道（见 `AGENTS.md` 的贡献评审准则）" → `AGENTS.md:31` 逐字 `## Contribution Rubric — What We Want / What We Don't`。
 - "测试镜像源码" → `AGENTS.md:346` 逐字：*"**Placement mirrors the source tree.** A test lives in `tests/<top-level source dir>/`"*；`tests/tools/`（665 个文件）与 `tests/plugins/<type>/`（如 `tests/plugins/platforms/`，28 个文件）均在。

@@ -1,11 +1,19 @@
 # 源码讲解 · 第 7 章 · 扩展 7.1（旧称第 8 章）：网关会话生命周期（Gateway Session Lifecycle）
 
-> **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
+> **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文真实侧的 `文件:行号` 对这个 commit。
 > **真实源码**：`~/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
 > **对照实现**：`mini-hermes/`（全项目 **11,908 行**代码 / **5,956 行**测试）
 > **本章新增**：`session_state.py` / `run_startup.py` / `run_busy.py` / `agent_cache.py` / `run_watchers.py`（5 个新文件）
 
 [TOC]
+
+## 发布前维护 · 缓存与生命周期
+
+每条入站消息都经过 `_open_session()` 的生命周期路由，即使已有缓存 agent，也重新检查 suspended、ended 与 resume_pending。`busy` 在 `finally` 中清除，前置异常和中断不会永久占住忙状态；`pending_flush` 只有正常完成时才解除，失败、中断和超预算仍受淘汰保护。SIGTERM 现在执行关停恢复标记与资源清理；等待超时不写干净退出标记。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
 
 ---
 

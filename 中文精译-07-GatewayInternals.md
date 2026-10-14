@@ -8,6 +8,8 @@
 > 📌 行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`）；上游每合并一个 PR 行号就会漂。
 > 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 1 处，见附录 C）。
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -368,7 +370,7 @@ connector 侧公布一个 `CapabilityDescriptor`；Hermes 可以往回发普通�
 |---|---|
 | **直接回复** | 把响应发回**发起它的那个聊天** |
 | **主频道投递** | 把 cron 任务输出与后台结果送到配置好的**主频道** |
-| **指定目标投递** | 发送引擎显式指定 `telegram:-1001234567890`；通过 [`hermes send` CLI](/guides/pipe-script-output) 暴露给 shell 脚本，也可由 cron 的 `deliver:` 目标使用 |
+| **指定目标投递** | 发送引擎显式指定 `telegram:-1001234567890`；通过 [`hermes send` CLI](https://hermes-agent.nousresearch.com/docs/guides/pipe-script-output) 暴露给 shell 脚本，也可由 cron 的 `deliver:` 目标使用 |
 | **跨平台投递** | 投到**与来源不同**的平台 |
 
 ⚠️ **cron 任务的投递不会镜像进网关会话历史** —— 它们只活在**自己的 cron 会话**里。

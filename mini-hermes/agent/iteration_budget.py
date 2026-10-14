@@ -4,7 +4,7 @@
 
 为什么需要它：agent loop 是 `while True` 形状的——
 模型可以永远"再调一个工具"。没有预算，一个跑偏的 agent 会烧掉你的钱，
-而且没人叫得停。Hermes 默认 500 次迭代，子 agent 50 次。
+因此 mini 默认设 500 次；上游锚 f5d1926110 主 agent 默认 sys.maxsize，子 agent 250 次。
 """
 from __future__ import annotations
 

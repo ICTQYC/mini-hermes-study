@@ -3,7 +3,7 @@
 > 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
 
 > 上游：`官方文档-Developer-Guide/creating-skills.md`（438 行）· 中文精译见 `中文精译-13-CreatingSkills.md`（680 行）。
-> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号锚 `02c61d5`（mini 源码最后一次改动）。
+> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧引用按当前维护后的实现核对；章节交付快照为 `02c61d5`。
 > ★ **引用归属约定**：mini 侧引用一律写成 `mini-hermes/<路径>:<行号>`；**未带 `mini-hermes/` 前缀的裸 `文件:行号` 一律指真实侧**（本章 mini 与真实侧有 12 个同名同路径文件，不加前缀无法判归属）。
 
 [TOC]
@@ -12,7 +12,7 @@
 
 ## 导言 · 机制总览：Hermes 具体怎么做的（先读这一节）
 
-第 11 / 12 章的 mini 侧几乎没有可实现项（一个是地图，一个连生产者都不存在）。本章相反：**mini 的提示词装配层自己就写着这个接缝** —— `agent/system_prompt.py` 的模块 docstring 逐字：「Hermes 的 volatile 层**以"技能索引"打头**（理由：变化点放本层最前面 = 爆炸半径最小）。**第 13 章把它补上了**」（`:32-33`），而 `:303` 那行 `volatile_parts` 列表头就是那个位置（`:306` 的 `*_skill_index_parts(agent)` 接在首位）。commit `02c61d5` 就是"把它补上"：**发现 + 渐进披露 + 一个 `skill_view`**，三件，不碰 `run_agent.py` / `model_tools.py`。
+第 9 章的外部集成协议在 mini 中未实现；第 12 章以地图和没有生产者的后台回执为主。第 11 章则已实现状态库恢复，不能归为“几乎无实现项”。本章相反：**mini 的提示词装配层自己就写着这个接缝** —— `agent/system_prompt.py` 的模块 docstring 逐字：「Hermes 的 volatile 层**以"技能索引"打头**（理由：索引未变时可保留在记忆块之前的公共前缀中）。**第 13 章把它补上了**」（`:32-33`），而 `:303` 那行 `volatile_parts` 列表头就是那个位置（`:306` 的 `*_skill_index_parts(agent)` 接在首位）。commit `02c61d5` 就是"把它补上"：**发现 + 渐进披露 + 一个 `skill_view`**，三件，不碰 `run_agent.py` / `model_tools.py`。
 
 真实 Hermes 的技能系统是一条长链：发现 → 解析 frontmatter → 渲染索引进系统提示词 → 模型按需 `skill_view` 读正文；外围还挂着安装 / 安全扫描 / 发布 / 蓝图 / 策展器。下面七小节先把**主干那条链**（发现 + 渐进披露 + `skill_view`）按「谁在管 / 什么时候 / 做什么 / 什么不能破 / 出错怎么办 / 跨了哪几层 / 一次加载的时间线」拆开；每条落到真实源码的 `文件:行号` 与**逐字引文**（锚 `f5d1926110`，v0.21.3）。外围那一圈只进 §〇 总表，不进本节的链。
 
@@ -55,7 +55,7 @@
 # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
 ```
 
-**要害**："Skills are **runtime-mutable**"是**为什么技能索引一定落在 volatile 层**的唯一判据 —— 技能是运行期可变的（用户随时往技能库丢一个 `SKILL.md`），放 stable / context 就一变废掉它后面所有块；而它又是 volatile 层里最不易变的（记忆随时写、时间戳跨天变、cwd `cd` 就变），所以排**首块**、爆炸半径最小。这正是 mini `_skill_index_parts()` 的落点。
+**要害**：源码把运行期可变的技能索引放在 volatile 层，并让它先于记忆块。索引不变、后面的记忆块变化时，索引仍能留在公共前缀中；索引变化时，从索引起重新预填充。不能由此断言它是“本层最不易变的块”，也不能把“变化点放最前”解释成缓存损失最小；源码没有提供变化频率的实测。mini `_skill_index_parts()` 采用同样的排序。
 
 ### 0.3 做什么（索引渲染 + 正文读取的完整动作）
 
@@ -148,7 +148,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 ### 验收四问
 
 1. **索引里会不会顺手把正文也带进提示词？** 不会。只放 name + desc；`Skill` dataclass **没有正文字段**（`agent/skill_utils.py:90-101`），`build_skill_index` 连正文都不加载。（§0.3 · §0.4）
-2. **技能索引为什么在 volatile 层、又为什么排最前？** 运行期可变 ⇒ 必须 volatile；本层里最不易变 ⇒ 排首块、爆炸半径最小（`agent/system_prompt.py:705-707`）。（§0.2）
+2. **技能索引为什么在 volatile 层、又为什么排最前？** 当前排序把索引放在 volatile 层的记忆块之前；索引未变时可随公共前缀复用，变化时从这里重算（`agent/system_prompt.py:705-707`）。（§0.2）
 3. **`skill_view` 拿一个名字怎么定位文件？会不会被拼路径越界？** 关键判据是"名字是**寻址键**，不是路径片段"——真实侧对名字走路径校验，mini 的形状更强：名字只做**相等比较**，路径永远来自扫描结果（见 §〇 表 · §0.5）。
 4. **技能库为空时会怎样？** 索引是**空串**（`build_skill_index` 无技能返回 `""`），`_join_tier` 把空项整个丢掉 ⇒ 提示词里既没有标题也没有多余空行（字节确定）；`skill_view` 的 `check_fn` **同时**收起工具。（§0.7）
 
@@ -952,7 +952,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 > 本附录把 §十 的「② 读 Hermes 的代码」单块塞不下的 `文件:行号` 集中归档，**按文件分组**（正文 ② 已引的 `INSTALL_POLICY` `:26-33` 不在此重复）。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
 > - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path>`
-> - **mini 侧**锚 `02c61d5`（第 13 章 A1~A4 实现落地的那次），工作区无未提交改动：`sed -n 'Np' mini-hermes/<path>`
+> - **mini 侧**行号按当前维护后的文件核对；历史实现落在 `02c61d5`：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条真身打印核对过**；括号里的说明是「它在说什么」，不当逐字引文用。
 
 ### 真实侧（锚 `f5d1926110`）

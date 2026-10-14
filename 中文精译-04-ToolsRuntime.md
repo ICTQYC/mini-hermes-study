@@ -9,6 +9,8 @@
 > —— 也就是第 4 章末的状态。行号会随章节漂移，标签不会：
 > `git show ch04-tools-runtime:mini-hermes/tools/registry.py`。
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -798,7 +800,7 @@ $ DANGEROUS_PATTERNS 的条数（tools/approval_detection.py:203）
 ### C.2 两层 agent 级工具集合（本章最重要的一张表）
 
 ```text
-_AGENT_LOOP_TOOLS      (_model_tools.py:607)   4 个
+_AGENT_LOOP_TOOLS      (model_tools.py:607)   4 个
   delegate_task, memory, session_search, todo_list
 
 INLINE_TOOL_EXECUTORS  (agent/inline_tool_executors.py)   14 个

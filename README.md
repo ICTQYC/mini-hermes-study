@@ -96,11 +96,11 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 
 | 板块 | 篇数 / 规模 |
 |---|---|
-| 中文精译（每章一篇，翻译为主，目标看懂原理） | **17 篇** · 11,614 行 |
-| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,888 行 |
+| 中文精译（每章一篇，翻译为主，目标看懂原理） | **17 篇** · 11,587 行 |
+| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,964 行 |
 | 跟读文档（消息旅程 / 代码解读 / 测试怎么写） | 3 份 · 2,073 行 |
 | 收尾总览（46 篇图谱 / 差距总账 / 冻结清单 —— 全库的账） | 1 篇 · 470 行 |
-| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 70 行 |
+| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 89 行 |
 | `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 18,535 行 · 78 个文件 |
 | `mini-hermes/tests/`（15 个测试文件） | 12,215 行 |
 | `mini-hermes/demos/`（故障复现 + 真跑脚本） | 1,761 行 · 10 个 |
@@ -110,22 +110,22 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 章 | 主题 | 精译 | 源码讲解 |
 |---|---|---|---|
 | 01 | Architecture（架构总览：地图章，无源码讲解） | 473 | — |
-| 02 | Agent Loop（回合循环） | 1209 | 550 |
-| 03 | Prompt Assembly（提示词装配） | 2256 | 964 |
-| 04 | Tools Runtime（工具运行时） | 932 | 2851 |
+| 02 | Agent Loop（回合循环） | 1214 | 559 |
+| 03 | Prompt Assembly（提示词装配） | 2202 | 965 |
+| 04 | Tools Runtime（工具运行时） | 934 | 2853 |
 | 05 | Context Compression & Caching（压缩与缓存） | 940 | 1767 |
-| 06 | Session Storage（会话存储） | 808 | 1046 |
-| 07 | Gateway Internals（网关内部） | 636 | 930 |
-| 07b · 扩展 7.1 | Gateway Session Lifecycle（网关会话生命周期） | 894 | 1367 |
-| 07c · 扩展 7.2 | Multiplexing Gateway（多路复用网关） | 470 | 1285 |
-| 08 | Provider Runtime（服务商运行时） | 360 | 970 |
+| 06 | Session Storage（会话存储） | 810 | 1054 |
+| 07 | Gateway Internals（网关内部） | 638 | 938 |
+| 07b · 扩展 7.1 | Gateway Session Lifecycle（网关会话生命周期） | 896 | 1375 |
+| 07c · 扩展 7.2 | Multiplexing Gateway（多路复用网关） | 472 | 1293 |
+| 08 | Provider Runtime（服务商运行时） | 362 | 978 |
 | 09 | Programmatic Integration（程序化集成） | 284 | 788 |
-| 10 | Micro Compaction（微压缩） | 356 | 843 |
-| 11 | State DB Recovery（state.db 抢修） | 170 | 963 |
+| 10 | Micro Compaction（微压缩） | 358 | 843 |
+| 11 | State DB Recovery（state.db 抢修） | 172 | 971 |
 | 12 | Codebase Ownership & Completion Backlog（归属与投递债） | 204 | 837 |
-| 13 | Creating Skills（技能系统） | 680 | 1180 |
-| 14 | Context Engine Plugin（上下文引擎插槽） | 416 | 1343 |
-| 15 | Observer Hooks（观察者钩子） | 526 | 1204 |
+| 13 | Creating Skills（技能系统） | 682 | 1180 |
+| 14 | Context Engine Plugin（上下文引擎插槽） | 418 | 1351 |
+| 15 | Observer Hooks（观察者钩子） | 528 | 1212 |
 
 **三份跟读文档**（仓库根）：《Hermes消息完整旅程.md》（580 行，横切：一条消息穿过所有模块）·《代码解读-mini-hermes.md》（1,078 行，逐文件走读迷你版，锚 `ch02-agent-loop` 标签）·《测试怎么写.md》（415 行，测试的写法与反例）。第 1 章《中文精译-01-Architecture.md》（473 行）是纵切地图，排在上面章清单里，建议先读它。
 

@@ -2,6 +2,8 @@
 
 > 上游：`官方文档-Developer-Guide/context-engine-plugin.md`（原文 **272 行** · 1 个 H1 + 11 个 H2 + 5 个 H3）· 锚点 commit `f5d1926110`（v0.21.3）
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -26,7 +28,7 @@ agent 的上下文管理建立在一个 `ContextEngine` 抽象基类（ABC）之
 # config.yaml
 context:
   engine: "compressor"    # default built-in
-  engine: "lcm"           # activates a plugin engine named "lcm"
+  # engine: "lcm"           # activates a plugin engine named "lcm"
 ```
 
 插件引擎**从不自动激活** —— 用户必须显式地把 `context.engine` 设成该插件的名字。
@@ -148,7 +150,7 @@ def on_turn_complete(self, messages, usage=None, **kwargs):
 ### 何时用这些钩子、何时不要用（When to use these hooks — and when NOT to）
 
 - **只有当你的引擎必须*替换*每请求上下文时才实现 `select_context()`** —— 检索增强的选择、主题/分支路由、角色切换。它是唯一能换掉"哪些消息进入一次请求"的动词：`pre_llm_call` 插件钩子按**成文设计**是**只注入（inject-only）**的（它追加到用户消息上，绝不重写列表，以保住提示词缓存前缀）。如果你不需要替换，就不要实现它。
-- **如果你的插件只需要回合后观测 / 摄取**（索引、内存同步、分析），就实现一个**内存提供者（memory provider）**（`sync_turn()` —— 见[内存提供者插件](./memory-provider-plugin.md)），而不是上下文引擎。上下文引擎取得会话压缩策略的**所有权**；内存提供者观测回合却什么都不拥有。`on_turn_complete()` 作为观测侧镜像存在，是为了那些*已经*需要 `select_context()` 的引擎 —— 让同一个组件能从它刚刚路由过的那一回合中学习 —— 而不是一个通用的回合回调。
+- **如果你的插件只需要回合后观测 / 摄取**（索引、内存同步、分析），就实现一个**内存提供者（memory provider）**（`sync_turn()` —— 见[内存提供者插件](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin)），而不是上下文引擎。上下文引擎取得会话压缩策略的**所有权**；内存提供者观测回合却什么都不拥有。`on_turn_complete()` 作为观测侧镜像存在，是为了那些*已经*需要 `select_context()` 的引擎 —— 让同一个组件能从它刚刚路由过的那一回合中学习 —— 而不是一个通用的回合回调。
 - **一次真实的 `select_context()` 对提示词缓存的影响。** 一个非空操作的选择，在它改变选择的那几个回合里，自然会改变提示词缓存前缀 —— 那次请求的前缀不再匹配 provider 已缓存的前缀，于是那几个回合会**重写**缓存而非**读取**缓存。引擎应当在**什么都没变时返回稳定的选择**（同一对象或一个等值列表），只在路由决策确实不同时才重塑上下文；一个每回合都重洗的选择会静默地放弃每一次缓存复用。
 
 ---
@@ -223,7 +225,7 @@ def register(ctx):
 
 ```yaml
 context:
-  engine: "lcm"   # must match your engine's name property
+  # engine: "lcm"   # must match your engine's name property
 ```
 
 `compression` 配置块（`compression.threshold`、`compression.protect_last_n` 等）是内置 `ContextCompressor` 专属的，有一个明确的例外：`compression.model_thresholds`（逐模型阈值覆盖）属于上下文引擎契约的一部分。宿主在首次 `update_model()` 调用**之前**把解析出来的映射赋给 `engine.model_thresholds`，基类的 `update_model()` 会应用它（最长子串匹配，回退到引擎配置的阈值）。覆盖了 `update_model()` 的引擎拥有自己的压缩策略，可以采纳或忽略这个映射 —— 用 `from agent.context_compressor import resolve_model_threshold` 复用同一套解析逻辑。除这以外，你的引擎如有需要应定义自己的配置格式，在初始化时从 `config.yaml` 里读取。
@@ -264,9 +266,9 @@ def test_compress_returns_valid_messages():
 
 ## 11. See also —— 另见
 
-- [上下文压缩与缓存（Context Compression and Caching）](/developer-guide/context-compression-and-caching) —— 内置压缩器是怎么工作的
-- [内存提供者插件（Memory Provider Plugins）](/developer-guide/memory-provider-plugin) —— 与之类似的、单选（single-select）的内存插件系统
-- [插件（Plugins）](/user-guide/features/plugins) —— 通用插件系统总览
+- [上下文压缩与缓存（Context Compression and Caching）](https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching) —— 内置压缩器是怎么工作的
+- [内存提供者插件（Memory Provider Plugins）](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin) —— 与之类似的、单选（single-select）的内存插件系统
+- [插件（Plugins）](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins) —— 通用插件系统总览
 
 ---
 
@@ -388,7 +390,7 @@ def test_compress_returns_valid_messages():
 
 **① §1 的 YAML 示例在同一个 `context:` 映射里写了两个 `engine:` 键。**
 
-- 原文第 19–21 行逐字：`  engine: "compressor"    # default built-in` / `  engine: "lcm"           # activates a plugin engine named "lcm"`。
+- 原文第 19–21 行逐字：`  engine: "compressor"    # default built-in` / `  # engine: "lcm"           # activates a plugin engine named "lcm"`。
 - YAML 语义里同一映射的重复键是**后键覆盖前键**，一个配置文件不可能同时设成 `compressor` 与 `lcm`。
 - 源码 `context` 块只有**一个** `engine` 键：`hermes_cli/config_defaults.py:1208` 逐字 `"engine": "compressor",`；读取处 `agent/agent_init.py:1767` 逐字 `_engine_name = _ctx_cfg.get("engine", "compressor") or "compressor"`。
 - **结论**：示例应读作"两种取值二选一"，逐字照抄会得到一份歧义（无效）的配置。

@@ -9,6 +9,8 @@
 > 读法：**粗体黑字是原文的意思，`【源码】`块是真实 Hermes 里长什么样，`【动手】`块是我们 mini 版怎么做的。**
 > 最后一节是"我砍掉了什么、砍掉会失去什么"——这才是看文档看不出、必须自己写一遍才知道的部分。
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -150,6 +152,7 @@ CLI（终端）   桌面 App    TUI        网关（Telegram/Discord/Slack…）
 壳里该有的是：渲染什么、怎么收输入、这个平台的怪癖怎么绕。
 壳里不该有的是：什么情况下该做什么决定。
 </details>
+</details>
 
 ---
 
@@ -167,10 +170,12 @@ CLI（终端）   桌面 App    TUI        网关（Telegram/Discord/Slack…）
 三种模式在 API 调用**前后**都会收敛到同一套内部消息格式（OpenAI 风格的 `role`/`content`/`tool_calls` dict）。
 
 **模式解析优先级（从高到低）：**
-1. 构造时显式传的 `api_mode`
-2. provider 特定检测（比如 provider 是 `anthropic` → `anthropic_messages`）
-3. base URL 启发式（比如 `api.anthropic.com` → `anthropic_messages`）
+1. host 强制协议（例如 Anthropic 主机要求 `anthropic_messages`，防止错配）
+2. 允许的显式 `api_mode` 覆盖
+3. URL 检测与 provider 画像声明
 4. 默认：`chat_completions`
+
+这是源码核对后的顺序；上游概述不应理解成显式模式可以绕过 host 约束。详见第 8 章。
 
 `【源码】` 关键点在于**收敛**：内部永远只用 OpenAI 格式，**只在一条边界上做翻译**——
 
@@ -349,7 +354,7 @@ if remaining <= max(3, self.max_turns // 20):
 
 1. 历史里多了一条假的用户消息 → 角色交替可能被破坏
 2. 下次请求这段文字会被当成"用户真的说过的话" → 模型行为被污染
-3. **过去的消息变了 → prompt 缓存整段失效 → 账单翻倍**
+3. **过去的消息变了 → 变化点之后的后缀需要重新计算 → 可能增加成本**
 
 第 3 条是 Hermes 工程里最硬的一条规矩（见 `AGENTS.md`）：
 > *Per-conversation prompt caching is sacred.* 任何改动过去上下文、换工具集、重建系统提示词的行为都不允许，唯一的例外是上下文压缩。
@@ -965,23 +970,23 @@ tools/registry.py  ←  tools/*.py  ←  model_tools.py  ←  run_agent.py  ← 
 #### 简单任务（1 次迭代）
 
 ```bash
-cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+cd "$HOME/projects/hermes-study/mini-hermes"
 ./mini -q "这个目录里有哪些文件？然后统计一下所有 python 文件的总行数。" --max-turns 12
 ```
 
 实际输出：
 
 ```text
-# mac @ qimourendeMacBook-Pro in ~ [12:48:32]
-$ cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+# user @ example-host in ~ [12:48:32]
+$ cd "$HOME/projects/hermes-study/mini-hermes"
 ./mini -q "这个目录里有哪些文件？然后统计一下所有 python 文件的总行数。" --max-turns 12
 provider=deepseek model=deepseek-chat api_mode=chat_completions
-→ list_dir $HOME/Desktop/study/hermes学习/mini-hermes
-→ terminal find $HOME/Desktop/study/hermes学习/mini-hermes -name "*.py" -not -path "*/no
+→ list_dir $HOME/projects/hermes-study/mini-hermes
+→ terminal find $HOME/projects/hermes-study/mini-hermes -name "*.py" -not -path "*/no
   ✓ list_dir 完成（0.02s）
   ✓ terminal 完成（0.05s）
 —— 第 1 次迭代结束，回到循环顶部 ——
-→ terminal cd $HOME/Desktop/study/hermes学习/mini-hermes && find . -name "*.py" -not -pa
+→ terminal cd $HOME/projects/hermes-study/mini-hermes && find . -name "*.py" -not -pa
   ✓ terminal 完成（0.04s）
 —— 第 2 次迭代结束，回到循环顶部 ——
 目录内容和统计结果如下。
@@ -1017,7 +1022,7 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 #### 多步任务（4 次迭代，验证 agent 级工具 + 写文件 + 会话持久化）
 
 ```bash
-cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+cd "$HOME/projects/hermes-study/mini-hermes"
 ./mini --max-turns 15 -q "在 /tmp/mini_demo 里：1) 看有哪些文件 2) 读一下 m2.py
                           3) 统计所有 py 文件的总行数 4) 把结论写进 /tmp/mini_demo/REPORT.md"
 ```
@@ -1025,8 +1030,8 @@ cd "$HOME/Desktop/study/hermes学习/mini-hermes"
 实际输出：
 
 ```text
-# mac @ qimourendeMacBook-Pro in ~/Desktop/study/hermes学习/mini-hermes [12:48:43]
-$ cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+# user @ example-host in ~/projects/hermes-study/mini-hermes [12:48:43]
+$ cd "$HOME/projects/hermes-study/mini-hermes"
 ./mini --max-turns 15 -q "在 /tmp/mini_demo 里：1) 看有哪些文件 2) 读一下 m2.py
                           3) 统计所有 py 文件的总行数 4) 把结论写进 /tmp/mini_demo/REPORT.md"
 provider=deepseek model=deepseek-chat api_mode=chat_completions

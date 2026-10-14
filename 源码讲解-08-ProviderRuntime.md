@@ -59,6 +59,14 @@
 
 [TOC]
 
+## 发布前维护 · HTTP 传输与用量口径
+
+`_http_post()` 根据 URL scheme 选择 HTTP 或 HTTPS 连接和默认端口，保留查询参数；连接超时与读取超时分别设置，无效 scheme 提前拒绝。`api_calls` 统计逻辑模型请求，涵盖回退请求和摘要请求；同一逻辑请求内部的传输重试不单独加计，不能用迭代预算消费次数代替它。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
+
 ---
 
 ## 导言 · 机制总览
@@ -916,7 +924,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
   > `agent.model, agent.provider, agent.requested_provider = fb_model, fb_provider, fb_provider`
 - `hermes_cli/fallback_config.py:89-92 get_fallback_chain()` —— 新旧配置键的合并规则（`fallback_providers` 是主源且保序）：
   > `"""Return the effective fallback chain merged across old and new config keys.`
-  > ```fallback_providers`` remains the primary source of truth and keeps its order.`
+  > ``fallback_providers`` remains the primary source of truth and keeps its order.
 - `tools/delegate_tool_config.py:417-426 _resolve_child_fallback_chain()` —— **子代理到底继不继承父链**（附录 C ① 的出处）：
   > `Pinned children (provider, endpoint or model override) never borrow the parent chain;`
   > `unpinned children inherit it when ``fallback_providers`` is absent/null. An explicit ``[]```

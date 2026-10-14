@@ -3,17 +3,25 @@
 > 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
 
 > 上游：`官方文档-Developer-Guide/context-engine-plugin.md`（272 行）· 中文精译见 `中文精译-14-ContextEnginePlugin.md`（416 行）。
-> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号锚当前 HEAD（实现 commit `a6ed019`；本章是**插槽化已有部件**，不是新压缩机制）。
+> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号按当前维护后的实现核对（历史实现 commit `a6ed019`；本章是**插槽化已有部件**，不是新压缩机制）。
 > ★ **引用归属约定**：mini 侧引用一律写成 `mini-hermes/<路径>:<行号>`；**未带 `mini-hermes/` 前缀的裸 `文件:行号` 一律指真实侧**。
 
 [TOC]
+
+## 发布前维护 · 压缩接口兼容
+
+预检不要求插件必须提供内置压缩器的 token 展示属性；缺少时调用引擎的 `describe()`。调用 `compress()` 前依据签名筛选 `call_llm`、`call_llm_meta` 等可选参数，支持带 `**kwargs` 的实现，也支持只接受 ABC 必需参数的实现。压缩仍在当前调用路径同步执行。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
 
 ---
 
 > 配套《中文精译-14-ContextEnginePlugin.md》。那篇讲**原文说了什么**，这篇讲**Hermes 与 mini 差在哪、为什么这么切**。
 > **阅读顺序**：先读「导言 · 机制总览」（只有 Hermes 一侧），再看 §〇 差距总表，最后逐节看四块对照。
 > 📌 **两边的锚，别混**：**真实 Hermes 侧**行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`），
-> 裸写 `文件:行号` 一律指**真实侧**；**mini 侧**行号锚**当前 HEAD**（本章实现提交 `a6ed019`，其后回改文档的 `7b0b18b`），
+> 裸写 `文件:行号` 一律指**真实侧**；**mini 侧**行号按**当前维护后的实现**核对（本章历史实现提交 `a6ed019`，其后回改文档的 `7b0b18b`），
 > mini 侧引用**一律带前缀** `mini-hermes/<路径>:<行号>`。
 
 ---
@@ -1052,7 +1060,7 @@ messages[:] = c.compress(messages, **optional)
 > 正文每节的「② 读 Hermes 的代码」只准引一段（≤15 行），撑不住的行号在这里按文件归档。**正文 ② 已逐字引过的那段不在本表重复**（`agent/conversation_compression.py:1-9` 归 §十 ②；四条硬料所引的 `agent/context_engine.py:47-107`、`agent/conversation_loop.py:1166-1170`、`agent/agent_init.py:1761-1769`、`plugins/context_engine/` 零子目录 归正文）。
 >
 > - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path>`
-> - **mini 侧**锚 HEAD `7b0b18b`（第 14 章 A1~A6 实现落在 `a6ed019`）：`sed -n 'Np' mini-hermes/<path>`
+> - **mini 侧**按当前维护后的文件核对；章节快照 `7b0b18b`（第 14 章 A1~A6 实现落在 `a6ed019`）：`sed -n 'Np' mini-hermes/<path>`
 > - 每条给「该段首 ~20 字」+「它证明什么」；括号里的说明是"它在说什么"，不当逐字引文用。
 
 ### 真实侧（锚 `f5d1926110`）
@@ -1254,7 +1262,7 @@ messages[:] = c.compress(messages, **optional)
 
 ### C-① · 复验：§1 的 YAML 示例在同一个 `context:` 映射里写了两个 `engine:` 键
 
-- **文档怎么说**：上游 §1 逐字 —— `  engine: "compressor"    # default built-in` 紧接着 `  engine: "lcm"           # activates a plugin engine named "lcm"`。
+- **文档怎么说**：上游 §1 逐字 —— `  engine: "compressor"    # default built-in` 紧接着 `  # engine: "lcm"           # activates a plugin engine named "lcm"`。
 - **源码实际怎么**：`context` 块只有**一个** `engine` 键 —— `hermes_cli/config_defaults.py:1207-1208` 逐字 `"context": {` / `"engine": "compressor",`；读取处 `agent/agent_init.py:1767` 逐字 `_engine_name = _ctx_cfg.get("engine", "compressor") or "compressor"`（单键 `get`）。YAML 语义里同一映射的重复键是**后键覆盖前键**，一份配置不可能同时是 `compressor` 与 `lcm`。
 - **影响**：**复验成立**。示例应读作"两种取值二选一"；逐字照抄会得到一份歧义（无效）的配置。
 

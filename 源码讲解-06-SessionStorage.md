@@ -20,13 +20,21 @@
 
 [TOC]
 
+## 发布前维护 · 恢复历史、版本探测与搜索
+
+`AIAgent.run_conversation()` 在追加新输入之前恢复数据库历史；网关热缓存不持有消息列表。`SessionDB.__init__()` 先只读检查 schema 版本，再打开可写连接、启用 WAL 和执行 DDL；拒绝新版本数据库前不修改它，初始化失败关闭连接。LIKE 搜索参数按 SQL 占位符的出现顺序绑定：SELECT 中用于片段定位的词在 WHERE 参数之前。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
+
 ---
 
 ## 两份代码的路径与规模
 
 ```text
 mini 版（本仓库，第 6 章末）                      真实版
-  $HOME/Desktop/study/hermes学习/mini-hermes/    ~/.hermes/hermes-agent/
+  $HOME/projects/hermes-study/mini-hermes/    ~/.hermes/hermes-agent/
     hermes_state.py          223 行  ←  hermes_state.py（门面）           1,600+ 行
     hermes_state_common.py   185 行  ←  hermes_state_common.py             880+ 行
     hermes_state_schema.py   178 行  ←  hermes_state_schema.py           1,200+ 行

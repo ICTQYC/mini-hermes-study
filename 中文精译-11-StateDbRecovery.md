@@ -4,6 +4,8 @@
 > **来源**：`官方文档-Developer-Guide/state-db-recovery.md`（**107 行**，H1 + 3 个 H2；副标题逐字：*How Hermes recovers state.db when the FTS index or the file itself is corrupt*）。
 > **上游**：commit `f5d1926110` · `version = "0.21.3"` · 原文 **107 行**
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -12,7 +14,7 @@
 
 `state.db` 存着**两类不同的数据**：
 
-- `sessions` 与 `messages` 是**权威（canonical）转写本**。
+- `sessions` 与 `messages` 是**权威（canonical）转写本**，这里指会话消息记录，不特指语音转写。
 - `messages_fts*` 这些表以及它们的同步触发器，是**派生索引**。
 
 派生索引**允许被临时摘除**。但它们**绝不能**把一次现场的消息写入或搜索，变成一次**没有上界的整本转写本重建**。
@@ -27,7 +29,7 @@
 
 1. 记下那条**持久**的 `fts_stale` 标记；
 2. 在**同一个事务**里移除 FTS 同步触发器；
-3. 在没有派生索引汇点（derived-index sinks）的情况下**重试权威写入**；并且
+3. 在没有派生索引写入目标（derived-index sinks，即触发器同步写入的索引表）的情况下**重试权威写入**；并且
 4. 通过 `LIKE` 回退，从**权威行**里提供搜索。
 
 那次失败的现场操作**从不**运行 `FTS5('rebuild')`。既有的恢复归属关系**保持不变**：稍后的一次 `SessionDB` 打开，可以在**跨进程准入锁**与**外部持有者守卫**之下做重建。如果那次受守卫的重建跑不了，FTS 保持摘除状态、权威写入**依旧可用**，而 `hermes doctor` 会报出**显式的修复命令**。
@@ -68,7 +70,7 @@ HERMES_HOME="$HOME/.hermes" hermes sessions repair --check-only
 HERMES_HOME="$HOME/.hermes" hermes sessions repair
 ```
 
-`sessions repair` **默认**会建一份 SQLite 备份，并通过仓库里那条**受守卫的快照-提升（snapshot-and-promotion）路径**做结构性的活。**不要**用 `cp` **单独**去拷 `state.db`、`state.db-wal` 和 `state.db-shm`；那三个文件是**同一幅活的 SQLite 镜像**。
+`sessions repair` **默认**会建一份 SQLite 备份，并通过仓库里那条**受守卫的快照-提升（snapshot-and-promotion）路径：先生成并验证独立快照，再以它替换目标库**做结构性的活。**不要**用 `cp` **单独**去拷 `state.db`、`state.db-wal` 和 `state.db-shm`；那三个文件是**同一幅活的 SQLite 镜像**。
 
 修复之后、重启网关之前，验证健康探针、陈旧标记、触发器集合和权威行的行数：
 

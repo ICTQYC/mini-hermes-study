@@ -509,7 +509,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 ```
 要害：注释第一句 *commit only when the reclaim is meaningful* 就是“**等一次更大的胜利**”那句话的原文。而 `agent/micro_compaction.py` 全文里 `reclaim` **零命中** —— 微压缩没有任何对应的收获量判断，它把“能不能提交”交给**频率**而不是**收获量**。把这两段并排读，本节的核心差异一眼可见：一边是“量够才动”，一边是“少动”。
 
-**③ mini 的实现（现状）**：开关与夹取均已抄 —— `hermes_cli/config.py`：`DEFAULT_MICRO_COMPACT = False`（`:80`）、`DEFAULT_MICRO_COMPACT_EVERY_N_TURNS = 1`（`:81`）、`DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = 2000`（`:82`）、`DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = 4096`（`:83`），`parse_config_int` 拒绝 bool / 小数（`:259-265`）。**频率门**在 `agent/micro_compaction.py:467-473`（`every_n > 1` 才计数，no-op 不会把它卡住）。**标记互操作**也成立：`make_micro_marker`（`:152-166`）带 `COMPRESSED_SUMMARY_METADATA_KEY` + `MICRO_COMPACT_MARKER_KEY`，而批量标记走第 5 章的同一把 `COMPRESSED_SUMMARY_METADATA_KEY`。已对齐；微压缩侧**同样没有** min_reclaim 闸门。测试：`tests/test_micro_compaction.py:557 test_config_defaults_and_clamping`、`:290 test_cadence_gate_every_n`。
+**③ mini 的实现（现状）**：开关与夹取均已抄 —— `hermes_cli/config.py`：`DEFAULT_MICRO_COMPACT = False`（`:80`）、`DEFAULT_MICRO_COMPACT_EVERY_N_TURNS = 1`（`:81`）、`DEFAULT_MICRO_COMPACT_DEFRAG_THRESHOLD_TOKENS = 2000`（`:82`）、`DEFAULT_PROACTIVE_PRUNE_MIN_RECLAIM_TOKENS = 4096`（`:83`），`parse_config_int` 拒绝 bool / 小数（`:259-265`）。**频率门**在 `mini-hermes/agent/micro_compaction.py:467-473`（`every_n > 1` 才计数，no-op 不会把它卡住）。**标记互操作**也成立：`make_micro_marker`（`:152-166`）带 `COMPRESSED_SUMMARY_METADATA_KEY` + `MICRO_COMPACT_MARKER_KEY`，而批量标记走第 5 章的同一把 `COMPRESSED_SUMMARY_METADATA_KEY`。已对齐；微压缩侧**同样没有** min_reclaim 闸门。测试：`tests/test_micro_compaction.py:557 test_config_defaults_and_clamping`、`:290 test_cadence_gate_every_n`。
 
 **④ 与真实版的差别**：
 
@@ -567,7 +567,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 
 ★ 这次真跑顺带抓出并**修掉**了一处 mini 状态文案缺陷。原写法（`run_agent._micro_compact_after_turn`）用"消息条数变没变"反推 absorb / defrag，而**吸收只吞 1 条消息时是"删 1 加 1"**（交换区间 `(4,5)`）⇒ 一次**真正的吸收**被误报成"微压缩：defrag 重压了滚动摘要（条数不变）"。本次两次跑的回合 1 都是这种情况（诊断实测：滚动摘要 0 → 135 字符、游标 0 → 5、`needs_defrag=False`，走的是**吸收**分支）。
 
-修法：**分支由当次真的走了哪条决定**，不再由结果形状反推 —— 压缩器在三条出口各记一个 `_micro_last_action`（`agent/micro_compaction.py:463` 复位 / `:490` `defrag` / `:511` `absorb`），钩子照它标文案（`mini-hermes/run_agent.py:1795-1798`）。回归证据：新增 3 条契约测试（第 10 组），其中钩子那条把旧写法还原后会**干净变红**并原样复现旧症状（`statuses=['微压缩：defrag 重压了滚动摘要（条数不变）']`）；反向验证 **3/3 红**（钩子退回按条数 → 1 红 · 压缩器不记 absorb / defrag → 各 1 红）。教训：**状态文案要按"当次走了哪条分支"标，不能按"结果形状"反推**。
+修法：**分支由当次真的走了哪条决定**，不再由结果形状反推 —— 压缩器在三条出口各记一个 `_micro_last_action`（`mini-hermes/agent/micro_compaction.py:463` 复位 / `:490` `defrag` / `:511` `absorb`），钩子照它标文案（`mini-hermes/run_agent.py:1795-1798`）。回归证据：新增 3 条契约测试（第 10 组），其中钩子那条把旧写法还原后会**干净变红**并原样复现旧症状（`statuses=['微压缩：defrag 重压了滚动摘要（条数不变）']`）；反向验证 **3/3 红**（钩子退回按条数 → 1 红 · 压缩器不记 absorb / defrag → 各 1 红）。教训：**状态文案要按"当次走了哪条分支"标，不能按"结果形状"反推**。
 
 ## §十 差距清单
 

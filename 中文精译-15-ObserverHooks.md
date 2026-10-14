@@ -5,6 +5,8 @@
 > 📌 行号锚：上游 commit `f5d1926110`（version = "0.21.3"）
 > 本章出入：附录 C 实测 **7 处**文档↔源码不符（另附 5 处说明，不计入）。
 
+> mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
+
 [TOC]
 
 ---
@@ -311,7 +313,7 @@ def on_post_tool_call(**kwargs):
 
 随包内置的 Langfuse 插件演示了如何用钩子直接观察回合、provider 请求与工具调用。
 
-原生的 NeMo Relay SDK 集成把 Hermes 的会话、回合、LLM 与工具生命周期映射到 Relay。显式的 Relay 插件配置可以添加 [ATOF、ATIF 或 OTEL](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) 导出器与执行中间件；见 [Relay 共享指标](relay-shared-metrics.md)。
+原生的 NeMo Relay SDK 集成把 Hermes 的会话、回合、LLM 与工具生命周期映射到 Relay。显式的 Relay 插件配置可以添加 [ATOF、ATIF 或 OTEL](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) 导出器与执行中间件；见 [Relay 共享指标](https://hermes-agent.nousresearch.com/docs/developer-guide/relay-shared-metrics)。
 
 两个现有消费者代表了两种接法：Langfuse 插件走通用钩子面（因此能演示整条契约），NeMo Relay 走第一方共享指标路径（因此连插件都不用开）。这也正解释了契约为什么强调"与后端无关" —— 同一组生命周期边界，既要能喂第三方 SaaS，也要能喂厂商自家的指标。
 

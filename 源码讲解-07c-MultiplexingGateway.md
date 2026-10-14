@@ -2,7 +2,7 @@
 
 > 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
 
-> **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
+> **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文真实侧的 `文件:行号` 对这个 commit。
 > **真实源码**：`~/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
 > **对照实现**：`mini-hermes/`（全项目 **12,883 行**代码 / **6,355 行**测试）
 > **mini 侧现状**：✅ **已交付两批** —— 地基（A1/A3/A4/A9/A13）提交 `f34fdaa`、
@@ -13,6 +13,14 @@
 > ＋ `/tmp/ch09-checklist.md`（抄 / 不抄清单）。原《精译-09》里的 `【源码】要点` 块已并入本文。
 
 [TOC]
+
+## 发布前维护 · 跨线程的 profile 隔离
+
+profile 名字和解析后的目录必须通过 `resolve_profile_home()` 校验，不得越出 profiles 根目录。API 线程和每个线程池工具任务显式复制上下文，每个任务使用独立副本；ContextVar 不会自动传播到新线程。工具探测的 TTL 与抖动保护均按 home 分键。终端工具创建子进程时仍须先把目标 profile 的环境解析成普通字典，ContextVar 本身不会跨进程。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
 
 ---
 
@@ -27,7 +35,7 @@
 | **服务集合** | `hermes_cli/profiles.py:802 profiles_to_serve(multiplex)` | `hermes_cli/profiles.py:235 profiles_to_serve(multiplex=False)` ✅ 已有，缺墓碑过滤 |
 | **home 覆盖** | `hermes_constants.py`（**1,326 行**）：`set_hermes_home_override` / `get_hermes_home` / `hermes_home_key` / `get_process_hermes_home` | `hermes_constants.py`（**59 行**）：`set_mini_home_override` / `get_mini_home` ✅，缺 `hermes_home_key` 与进程级出口 |
 | **密钥作用域** | `agent/secret_scope.py`（**280 行**）：`get_secret` / `_GLOBAL_ENV_EXACT`（36 项）/ `UnscopedSecretError` / `build_profile_secret_scope` | `agent/secret_scope.py`（**135 行**）：fail-closed ✅ + **白名单 19 项（前缀 0）** + `is_global_env` ✅ |
-| **作用域装配** | `gateway/run.py:1750 _profile_runtime_scope`（**30+ 调用点**） | `gateway/profile_scope.py:35 profile_runtime_scope`（**4 处**：入站 `run_inbound.py:46`、回合 `run_turn.py:84`、适配器建/连 `run_adapters.py:150/162`）✅ |
+| **作用域装配** | `gateway/run.py:1750 _profile_runtime_scope`（**30+ 调用点**） | `mini-hermes/gateway/profile_scope.py:36 profile_runtime_scope`（**4 处**：入站 `run_inbound.py:46`、回合 `run_turn.py:84`、适配器建/连 `run_adapters.py:150/162`）✅ |
 | **每 profile 适配器** | `gateway/run_adapters.py:832 / :1004`（建、连、跳过、重连） | `gateway/run_adapters.py`（**213 行**）：`servable_homes` / 逐 profile 建连 / fail-soft / console 的 `@<profile>` ✅ |
 | **会话库句柄** | `gateway/session_persistence.py:43 _open_session_db_for_active_scope` + `:89 _db` property | `gateway/run.py:137/146 _db()/_db_for(home)` ✅ 已按 home 缓存 |
 | **配对存储** | `gateway/run_adapters.py:895 PairingStore(profile=name)` | `gateway/authz.py`（单一 store，无 profile 维度） |
@@ -440,7 +448,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 **③ mini 的实现（现状）**
 
-`gateway/profile_scope.py:35` 的 `profile_runtime_scope()` 只做**两件**（home + 密钥），`finally` **反序**复位；docstring 已引真实版那句话解释「为什么不改 `os.environ`」。产品级调用点**4 处**：入站 `run_inbound.py:46`（**一律**套，含活动 profile）、回合 `run_turn.py:84`（按**这条消息的家**）、次级适配器的**建**与**连** `run_adapters.py:150/162`（`hydrate_secrets=False`）。
+`mini-hermes/gateway/profile_scope.py:36` 的 `profile_runtime_scope()` 只做**两件**（home + 密钥），`finally` **反序**复位；docstring 已引真实版那句话解释「为什么不改 `os.environ`」。产品级调用点**4 处**：入站 `run_inbound.py:46`（**一律**套，含活动 profile）、回合 `run_turn.py:84`（按**这条消息的家**）、次级适配器的**建**与**连** `run_adapters.py:150/162`（`hydrate_secrets=False`）。
 
 **④ 与真实版的差别**
 
@@ -599,7 +607,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 - `hermes_home_key()` 不是「辅助函数」，而是**按 home 分桶的注册表的唯一稳定键**。发布前复核确认了旧缓存会跨 profile 复用；现已在 `tools/registry.py` 使用 `(fn, str(get_mini_home().resolve()))` 分键，TTL 与成功宽限也使用同一个键。函数名未照抄，隔离语义已实现。
 - `get_process_hermes_home()`：mini 的 PID/锁/状态文件现在用 `get_mini_home()` 解析 —— 一旦作用域铺开（A5），**身份文件会跟着「当前作用域」跑**（把 A 的 PID 写进 B 的家）。这正是真实版那句注释防的事。
-- 一次性告警低优先：mini 目前没有「子进程 spawner 传 home」这条路径。
+- 一次性告警尚未实现；mini 已有终端工具的子进程环境构建路径，不能用“没有 spawner”解释缺失。告警属于漏套作用域时的诊断保护。
 
 ---
 

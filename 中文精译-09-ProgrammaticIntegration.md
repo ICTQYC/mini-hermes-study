@@ -41,7 +41,7 @@
 
 暴露的能力：会话创建、提示词提交、流式的智能体消息分片、工具调用事件、权限请求、会话分叉（fork）、取消，以及认证。工具输出会被渲染成 IDE 认识的 ACP `Diff` / `ToolCall` 内容块。
 
-完整生命周期、事件桥与审批流见：[ACP Internals](./acp-internals)。
+完整生命周期、事件桥与审批流见：[ACP Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/acp-internals)。
 
 ```bash
 hermes acp                  # 在 stdio 上提供 ACP 服务
@@ -154,9 +154,9 @@ GET  /api/model/options          供应商感知的选择器清单
 GET  /health, /health/detailed
 ```
 
-配置、请求头（`X-Hermes-Session-Id`、`X-Hermes-Session-Key`）与前端接线见：[API Server](../user-guide/features/api-server)。
+配置、请求头（`X-Hermes-Session-Id`、`X-Hermes-Session-Key`）与前端接线见：[API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server)。
 
-浏览器扩展可以选择加入这个**默认关闭**的控制器协议，去驱动**当初打开这条 Hermes 对话的那个浏览器会话**本身。API 与仪表盘两条传输共享同一个**主体绑定的 broker**和一份显式的**能力白名单**；见 [Browser-extension control](../user-guide/features/api-server#browser-extension-control)。
+浏览器扩展可以选择加入这个**默认关闭**的控制器协议，去驱动**当初打开这条 Hermes 对话的那个浏览器会话**本身。API 与仪表盘两条传输共享同一个**主体绑定的 broker**和一份显式的**能力白名单**；见 [Browser-extension control](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#browser-extension-control)。
 
 ### 模型目录的多个出口
 
@@ -201,7 +201,7 @@ OpenAI 兼容 API **刻意**把 `GET /v1/models` 保持得极小：它是前端�
 - **你在写 IDE 插件，且这个 IDE 已经会说 ACP** → ACP。IDE 侧零协议工作量。
 - **你在写自定义的桌面 / Web / TUI 宿主，想要 Hermes 的每一项功能**（斜杠命令、审批、澄清、多智能体、会话分叉） → TUI 网关 JSON-RPC。
 - **你想要任何 OpenAI 兼容前端、语言无关的 HTTP 客户端，或 curl 驱动的自动化** → API 服务器。
-- **你想要不启子进程的 Python 进程内嵌入** → 直接 `import run_agent.AIAgent`。见 [Agent Loop](./agent-loop)。
+- **你想要不启子进程的 Python 进程内嵌入** → 直接 `import run_agent.AIAgent`。见 [Agent Loop](https://hermes-agent.nousresearch.com/docs/developer-guide/agent-loop)。
 
 ---
 

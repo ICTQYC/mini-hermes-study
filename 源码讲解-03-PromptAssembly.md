@@ -11,6 +11,8 @@
 > 这份文档的重点是**架构层面**的差异。哪些算架构、哪些只是细节，
 > 见最后一节「怎么划线」——那里有一条可操作的标准。
 
+> 当前维护：第 5 章已接入压缩后重建，第 13 章已接入技能索引，第 14 章已完成上下文引擎插槽。下文缺失项与代码引用锚第 3 章快照；不能把它们全部当成当前欠账。存盘提示词校验仍是当前差距。
+
 [TOC]
 
 ---
@@ -19,7 +21,7 @@
 
 ```bash
 # mini 版
-$HOME/Desktop/study/hermes学习/mini-hermes/
+$HOME/projects/hermes-study/mini-hermes/
 
 # Hermes 源码
 ~/.hermes/hermes-agent/
@@ -28,7 +30,7 @@ $HOME/Desktop/study/hermes学习/mini-hermes/
 **一键打印本文提到的 mini 侧位置**：
 
 ```bash
-cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+cd "$HOME/projects/hermes-study/mini-hermes"
 echo "① 三层装配"    && grep -n "def build_system_prompt_parts\|def _workspace_parts\|def _post_workspace_parts" agent/system_prompt.py
 echo "② 上下文文件"  && grep -n "def load_agents_md_chain\|def build_context_files_prompt\|def project_context_suppressed" agent/prompt_builder.py
 echo "③ 身份"        && grep -n "def _identity_parts" agent/system_prompt.py && grep -n "def load_soul_md" agent/prompt_builder.py
@@ -40,7 +42,7 @@ echo "⑦ cwd 解析"    && grep -n "def resolve_context_cwd_source" agent/promp
 
 ---
 
-# 0. 先说结论：差异一览
+## 0. 先说结论：差异一览
 
 先说你的判断对不对。
 
@@ -63,11 +65,11 @@ echo "⑦ cwd 解析"    && grep -n "def resolve_context_cwd_source" agent/promp
 
 ---
 
-# 1. 三层的存在与排序 —— 抄对了的部分
+## 1. 三层的存在与排序 —— 抄对了的部分
 
 **来源**：`agent/system_prompt.py:659`（`build_system_prompt_parts`）
 
-## mini 版怎么做的
+### mini 版怎么做的
 
 ```python
 # agent/system_prompt.py
@@ -81,7 +83,7 @@ def build_system_prompt_parts(agent, system_message=None) -> Dict[str, str]:
 字符串拼装是另一个函数（`build_system_prompt`），**返回分层 dict 而不是一个字符串**——
 因为 stable 那一层要能单独取出来。
 
-## 真实 Hermes 怎么做的
+### 真实 Hermes 怎么做的
 
 同一个签名，同样的三层。额外的：
 
@@ -99,18 +101,18 @@ def build_system_prompt(agent, system_message=None) -> str:
 所以把它单独存起来，"存盘的提示词还对不对"的校验只需要比这一层
 （`_stored_prompt_matches_runtime`）。
 
-## 差在哪
+### 差在哪
 
 **排序和分层：抄对了。** 这是这一章最核心的东西，mini 版和真实版一致。
 
-**mini 版缺的是"重建路径"**（见 §3）——它只有一个 `invalidate_system_prompt()`，
+**第 3 章快照缺的是"重建路径"**（见 §3）——它只有一个 `invalidate_system_prompt()`，
 没有压缩触发的重建，也没有"存盘提示词的校验"。
 
 ---
 
-# 2. ★ 最大的架构差异：上下文文件是链式的
+## 2. ★ 最大的架构差异：上下文文件是链式的
 
-## 文档怎么说的 vs 源码怎么做的
+### 文档怎么说的 vs 源码怎么做的
 
 | 来源 | 说法 |
 |---|---|
@@ -119,7 +121,7 @@ def build_system_prompt(agent, system_message=None) -> str:
 
 **我第一版照文档实现 → 错了。**
 
-## 准确的说法是两个层次
+### 准确的说法是两个层次
 
 ```text
 ┌─ ① 跨类型：首个匹配者胜出，只加载一种 ─────────────────────┐
@@ -141,7 +143,7 @@ def build_system_prompt(agent, system_message=None) -> str:
 **"跨类型只取一个"和"同类型链式合并"是两条不同层次的规则**——文档把它们混成了一句
 "CWD only"，于是两件事都描述错了。
 
-## 为什么链式才是对的
+### 为什么链式才是对的
 
 看 Hermes 自己的仓库结构就明白了：
 
@@ -158,7 +160,7 @@ def build_system_prompt(agent, system_message=None) -> str:
 依赖版本策略、提交纪律…）在你进入任何子目录时就**静默丢失**了。
 除非每个子目录都把全局规则重复一遍——那就是维护灾难。
 
-## mini 版现在的实现
+### mini 版现在的实现
 
 ```python
 # agent/prompt_builder.py  load_agents_md_chain()
@@ -206,12 +208,12 @@ def load_agents_md_chain(cwd: Path, max_chars: int) -> List[str]:
 
 ---
 
-# 3. 缓存策略：真正的架构在"什么时候允许重建"
+## 3. 缓存策略：真正的架构在"什么时候允许重建"
 
 **让缓存命中的手段不只是分层**，
 另一半是"**严格限制什么时候能重建**"。
 
-## mini 版怎么做的
+### mini 版怎么做的
 
 ```python
 # agent/system_prompt.py  build_system_prompt()
@@ -230,7 +232,7 @@ agent._cached_system_prompt = prompt
 | 新会话 | `MiniCLI` 构造 / `/new` |
 | 显式失效 | `invalidate_system_prompt()` |
 
-## 真实 Hermes 的重建时机
+### 真实 Hermes 的重建时机
 
 | 时机 | 位置 |
 |---|---|
@@ -244,7 +246,7 @@ agent._cached_system_prompt = prompt
 > 在上下文压缩事件之后调用。**同时从磁盘重新加载记忆**，好让重建的提示词捕获
 > 本会话里发生的写入；并清掉冻结的插件段快照，让插件在同一个边界上重新渲染。
 
-## 差在哪
+### 差在哪
 
 | | mini | Hermes |
 |---|---|---|
@@ -266,16 +268,16 @@ agent._cached_system_prompt = prompt
 
 ---
 
-# 4. "什么算身份"：按缓存影响定，不按语义
+## 4. "什么算身份"：按缓存影响定，不按语义
 
 **来源**：`agent/surface_switch.py`、`agent/conversation_loop.py`
 
-## 真实 Hermes 的设计
+### 真实 Hermes 的设计
 
 > `Platform:` **故意不算身份字段**：一次界面切换（桌面 ↔ TUI）保留存储的字节，
 > 把当前界面的指导作为**一次性说明**送到**每轮的 user 消息通道**，于是缓存前缀活下来了（#104414）。
 
-## 这条为什么是架构级的
+### 这条为什么是架构级的
 
 因为它的判据**不是"语义上属不属于身份"**，而是"**改了之后值不值得让缓存失效**"：
 
@@ -292,7 +294,7 @@ agent._cached_system_prompt = prompt
 > 📌 **可迁移的判据**：**一个字段能不能进"身份/缓存"区，取决于它变的频率和变的代价，
 > 不取决于它语义上属于什么。** 变了会导致大范围作废的东西，就该被挪到"每轮临时的层"去。
 
-## mini 版的情况
+### mini 版的情况
 
 **mini 还没碰到这个问题**：它只有一个 `platform` 参数，构造时固定，不会中途切换。
 但 `--platform cli|tui` 已经存在了——**将来如果做成"运行中切换界面"，
@@ -303,11 +305,11 @@ agent._cached_system_prompt = prompt
 
 ---
 
-# 5. 条件式分层：一个块放哪层，取决于前缀影响
+## 5. 条件式分层：一个块放哪层，取决于前缀影响
 
 **来源**：`agent/system_prompt.py`（`build_system_prompt_parts` 里的 `if coding_workspace_parts:`）
 
-## mini 版怎么做的
+### mini 版怎么做的
 
 ```python
 workspace_parts = _workspace_parts(agent)
@@ -319,7 +321,7 @@ else:
     stable_parts.extend(post_workspace_parts)
 ```
 
-## 为什么这样
+### 为什么这样
 
 Hermes 的注释写得很清楚：
 
@@ -333,7 +335,7 @@ Hermes 的注释写得很清楚：
 > **一个块放哪一层，取决于「把它放前面/后面，对共享前缀有没有影响」，
 > 不是"它语义上算配置还是算环境"。**
 
-## 实测：同一份代码，两种归属
+### 实测：同一份代码，两种归属
 
 mini 版实现了这个分支，所以能实测出来：
 
@@ -351,11 +353,11 @@ mini 版实现了这个分支，所以能实测出来：
 
 ---
 
-# 6. 信任分级：安全扫描按"来源"而不是按"内容"
+## 6. 信任分级：安全扫描按"来源"而不是按"内容"
 
 **来源**：`agent/prompt_builder.py:81`（`_scan_context_content`）
 
-## mini 版怎么做的
+### mini 版怎么做的
 
 ```python
 def scan_context_content(content, filename, *, user_authored=False) -> str:
@@ -374,7 +376,7 @@ def scan_context_content(content, filename, *, user_authored=False) -> str:
 | 用户自己的 `SOUL.md` | 写入要过文件工具的审批门 | **警告 + 照常加载** |
 | 项目里的 `AGENTS.md` / `.cursorrules` | 跟着仓库克隆进来的 | **阻断，替换成 `[BLOCKED]`** |
 
-## 为什么这是架构而不是细节
+### 为什么这是架构而不是细节
 
 因为它改的是**安全边界**：改这个判据 = 改"谁能影响模型的行为"。
 
@@ -391,7 +393,7 @@ Hermes 的完整理由（#112570），值得整段读：
 **注意最后一句**：同样是 `SOUL.md`，**用户自己写的**和**从 git 装来的**待遇不同。
 **判据是"谁写的、能不能被陌生人替换"，不是"文件里写了什么"。**
 
-## mini 版的差距
+### mini 版的差距
 
 mini 只做了两档（用户 / 项目），**没有第三档"分发来源的 SOUL.md"**
 （因为 mini 没有 `profile install` 这种机制）。有机制的时候要记得补。
@@ -402,11 +404,11 @@ Hermes 明确处理它，理由是一行 BOM 就会让用户的身份文件被�
 
 ---
 
-# 7. 快照与延迟生效：缓存约束下的两个必然选择
+## 7. 快照与延迟生效：缓存约束下的两个必然选择
 
 这两件事看起来无关，其实是**同一个约束的两种表现**。
 
-## ① 工作区快照：钉住（pin），不重探
+### ① 工作区快照：钉住（pin），不重探
 
 **来源**：`agent/coding_context.py`（`_frozen_workspace_snapshot`）
 
@@ -436,7 +438,7 @@ else:
 | `""` 算**真实值** | "这里不是 git 仓库"也是一个结论 |
 | 会话边界才清 pin | 只有新会话才该重新探 git |
 
-## ② 记忆快照：写入立即落盘，但**不进本会话的提示词**
+### ② 记忆快照：写入立即落盘，但**不进本会话的提示词**
 
 **来源**：`agent/system_prompt.py`（`invalidate_system_prompt`）
 
@@ -457,7 +459,7 @@ else:
 而且**这个交换是划算的**：模型写完记忆之后，**这一轮它自己当然还记得自己写了什么**，
 不需要从系统提示词里重新读一遍。
 
-## 两件事的共同点
+### 两件事的共同点
 
 ```text
 ① 工作区快照：别重探（重探就可能得到不同的字节）
@@ -473,7 +475,7 @@ else:
 
 ---
 
-# 8. mini 完全没有的块
+## 8. mini 完全没有的块
 
 这些不是"漏了"，是**依赖还没有的东西**：
 
@@ -487,15 +489,14 @@ else:
 | **bot-mode 协议 / 环境探测行** | 对应功能 | 不在路线内 |
 | **子目录 AGENTS.md 的逐步发现** | 无（可以现在做） | 第 6 章之后 |
 
-## 其中两个特别值得记住
+### 其中两个特别值得记住
 
 **① volatile 层以技能索引打头**（`agent/system_prompt.py`）：
 
 > *Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
 > backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.*
 
-**变化最频繁的东西，放在它那一层的最前面**——这样它一变，只有它自己和它后面的重新预填充。
-**变化点放在层的开头 = 爆炸半径最小。**
+当前排序让未改变的技能索引留在记忆块之前的公共前缀中；索引改变时，从这里重新预填充。**变化越靠前，受影响的后缀越长**，不能把它解释成“最常变化的内容放在开头最省缓存”。源码未提供各块变化频率的实测或全局最优性证明。
 
 **② "先占位、后回填"**（同文件）：
 
@@ -517,11 +518,11 @@ if "skill_view" in (agent.valid_tool_names or set()) and "- hermes-agent:" in sk
 
 ---
 
-# 9. 兜底值 vs 显式值：安装树守卫
+## 9. 兜底值 vs 显式值：安装树守卫
 
 **来源**：`agent/prompt_builder.py:1634`（`_project_context_suppressed`，issue #64590）
 
-## 真实 Hermes 的判据
+### 真实 Hermes 的判据
 
 ```python
 def _project_context_suppressed(cwd, cwd_path, allow_install_tree_fallback) -> bool:
@@ -535,7 +536,7 @@ def _project_context_suppressed(cwd, cwd_path, allow_install_tree_fallback) -> b
 
 **三个条件同时成立才抑制**：① cwd 是**兜底**挑的 ② 这个壳不允许兜底 ③ 目录在安装树里。
 
-## 这条的架构含义：可信度模型
+### 这条的架构含义：可信度模型
 
 ```text
 用户/调用方显式指定       → 照用（即使它就是安装树：用户在开发 mini-hermes 本身）
@@ -550,7 +551,7 @@ os.getcwd()（系统猜的）    → 落在安装树里 → 抑制
 >
 > 这里的后果是：**仓库里的 `AGENTS.md` 被当成"用户的项目规则"注入进提示词。**
 
-## mini 版的实现
+### mini 版的实现
 
 ```python
 # agent/prompt_builder.py  resolve_context_cwd_source()
@@ -576,12 +577,12 @@ block = pb.build_context_files_prompt(
 
 ---
 
-# 10. 代码检查发现的四个真问题
+## 10. 代码检查发现的四个真问题
 
 这四个都是**检查时才发现的**，值得单独记——它们的共同点是"**没有场景覆盖所以没被测出来**"，
 或者"**校验跑在了错误的时机上**"。
 
-## ① `and` / `or` 写反了（真 bug）
+### ① `and` / `or` 写反了（真 bug）
 
 ```python
 # Hermes 原样：
@@ -612,7 +613,7 @@ Hermes 的 docstring 说 *cron keeps the persona while skipping cwd instructions
 > 🎓 教训：**没有场景覆盖的代码就是没被测过的代码。**
 > "正常场景碰巧对"是最危险的——它让你的 bug 一直藏着，直到某个边缘场景上线。
 
-## ② 截断警告"无处可去"
+### ② 截断警告"无处可去"
 
 `build_system_prompt()` 把截断警告取出来送进 `agent._emit_status()`——
 但 mini 的 AIAgent **根本没有这个面**，警告就静默消失了。
@@ -630,7 +631,7 @@ Hermes 的 docstring 说 *cron keeps the persona while skipping cwd instructions
 混在一起的后果：截断警告会变成"助手说的话"被存进历史，
 下一轮模型还以为自己说过这句话 —— **污染历史 + 破坏角色交替**。
 
-## ③ 启动器 `cd` 导致"用户的项目目录"丢失
+### ③ 启动器 `cd` 导致"用户的项目目录"丢失
 
 `mini` 启动脚本必须 `cd` 到项目根（否则 Python 的 `sys.path` 上加不到自己的模块），
 但那一步会把**用户的目录换掉**：
@@ -646,7 +647,7 @@ git 工作区快照   → 探到 mini-hermes 那个仓库
 > 只要你的启动脚本为了 import 而 `cd`，就必须显式把用户目录传下去。
 > （Hermes 管这个叫 launch artifact，见 §9。）
 
-## ④ 预算告警插了一条合成的 user 行（违反 Hermes 的明文约束）
+### ④ 预算告警插了一条合成的 user 行（违反 Hermes 的明文约束）
 
 **这条是用户问"临时层到底是什么"时挖出来的**——为了讲清临时层，我去看 Hermes
 怎么注入它自己的预算告警，结果发现两边做的是**相反的事**。
@@ -752,7 +753,7 @@ if (
 > （"临时层是什么"）去看参照实现**，才发现两边做反了。
 > **"为了讲清楚一个概念去核对源码"本身就是一种代码检查。**
 
-## 附：一个观察（不是 bug）
+### 附：一个观察（不是 bug）
 
 三条"必须包含 X 个字"的人工规则同时喂进去时（SOUL.md 一条 + 根 AGENTS.md 一条 +
 子目录 AGENTS.md 一条），**模型会随机漏掉一条**：
@@ -772,7 +773,7 @@ if (
 
 ---
 
-# 11. 差距清单
+## 11. 差距清单
 
 判断标准：**这条差距在新的需求出现之前值不值得补？**
 
@@ -796,7 +797,7 @@ if (
 
 ---
 
-# 12. 测试覆盖了什么
+## 12. 测试覆盖了什么
 
 `tests/test_prompt_assembly.py` —— **47 个测试函数 / 155 条断言 / 13 组**（第 8 章时点；该章交付时是 154 条）。
 跑一次就按组打印，一眼看得出"失败的是哪一类保证"：
@@ -837,7 +838,7 @@ MINI_HOME = /var/folders/.../mini_test_home_xxx
 
 **★ 标的三组是这一章最核心的承诺**，改代码时最容易破坏。
 
-## 每一组具体在守什么
+### 每一组具体在守什么
 
 | 组 | 代表性的断言（不是全部，挑最能说明意图的） |
 |---|---|
@@ -855,7 +856,7 @@ MINI_HOME = /var/folders/.../mini_test_home_xxx
 | **12. 读文件与环境块** | 「读不存在的文件返回 None」「内部的边界标题被转义成引用行」「远端后端不给主机 cwd」 |
 | **13. 诊断命令与「输出即事实」** | 「预览标出与当前生效的一致」「输入变了但没重建 → 预览报出不一致，并告诉用户 /new」「**没保存路径 / 路径不存在 → 都说「未存盘」，不编造文件名**」「真存了 → 报出的路径去掉 ANSI 后**就是真实路径，且那个文件真的在**」「端到端：起一次 CLI 只喂 `/exit` → 说未存盘、不出现 `.mini-hermes/sessions/`」 |
 
-## 为什么测试这么组织
+### 为什么测试这么组织
 
 **① 测试函数在文件里的位置和"它属于哪一组"是解耦的。**
 
@@ -907,11 +908,11 @@ from agent import prompt_builder as pb
 
 ---
 
-# 附录：怎么划线——"架构"和"细节"的可操作标准
+## 附录：怎么划线——"架构"和"细节"的可操作标准
 
 你问的那个问题（"内部的一些细节就不是架构层面的问题了"）值得给个**能复用的判据**。
 
-## 三个测试，任何一个通过就是架构
+### 三个测试，任何一个通过就是架构
 
 **测试 1：改它会不会改变对外的保证？**
 
@@ -939,7 +940,7 @@ from agent import prompt_builder as pb
 ❌ 细节：BOM 要不要剥       → 只此一处
 ```
 
-## 反过来的特征：细节长什么样
+### 反过来的特征：细节长什么样
 
 ```text
 · 改它只需要动一个地方，且没有别处依赖它的取值
@@ -948,17 +949,17 @@ from agent import prompt_builder as pb
 · 你没法用它去解释别处的设计
 ```
 
-## 用这一章的例子对照
+### 用这一章的例子对照
 
 | | 架构 | 细节 |
 |---|---|---|
 | **是这个** | 三层与排序、重建时机、条件式分层、信任分级、链式合并、兜底 vs 显式、快照 pin | 70/20、20K/500K、5 秒、空文件跳过、frontmatter 剥离、`AGENTS.override.md` 这个名字 |
 | **为什么** | 通过上面三个测试 | 三个测试全不通过 |
 
-> 🎓 **最后一句**：**"细节"不是"不重要"，是"不牵动别处"。**
-> 70/20 这个比例写错了不会让系统出问题（只是信息损失多一点）；
+> 🎓 **最后一句**：**"细节"不是"不重要"，是"在当前契约下不牵动别处"。**
+> 70/20 这类参数若只是调优、且不改变既定保留约束，可以归为局部细节；若会丢失必须保留的信息，就涉及正确性。
 > 而"上下文文件只看 cwd"写错了，会让**仓库根的规则静默消失**——
 > 没有报错、没有异常，只有"规则好像没生效"。
 >
 > **判断架构的一个实用信号：改错了会不会静默出错。**
-> 静默出错的地方，基本都是架构。
+> 静默出错值得优先检查，但它也可能来自局部参数或实现错误；不能单凭“静默”判断是否属于架构。

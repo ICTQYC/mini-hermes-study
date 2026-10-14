@@ -41,7 +41,7 @@ agent/compression_facade.py    —— 搜 _compress_context
 ```yaml
 context:
   engine: "compressor"    # 默认 —— 内置的有损摘要
-  engine: "lcm"           # 示例 —— 提供无损上下文的插件
+  # engine: "lcm"           # 示例 —— 提供无损上下文的插件
 ```
 
 引擎负责四件事：

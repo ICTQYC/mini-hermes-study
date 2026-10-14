@@ -3,7 +3,7 @@
 > **本篇定位**：源码讲解为主。它是**一章两篇的合卷**（收尾路线里的"小篇合卷"）：上篇 `codebase-ownership` 是**导航表**，下篇 `completion-backlog-delivery` 是**投递机制**；逐句翻译见《中文精译-12》。
 > **来源**：`官方文档-Developer-Guide/codebase-ownership.md`（**34 行**）+ `completion-backlog-delivery.md`（**52 行**）。
 > **上游**：commit `f5d1926110` · `version = "0.21.3"` —— 真实侧行号一律锚它。
-> **mini 侧**：行号锚当前 HEAD **`653b627`**。★ **本章 mini 侧没有代码可实现项**（理由见 §〇 与 §七）。
+> **mini 侧**：行号锚本章快照 **`653b627`**。★ **本章 mini 侧没有代码可实现项**（理由见 §〇 与 §七）。
 
 [TOC]
 
@@ -185,7 +185,7 @@
 
 ## §〇 差异表
 
-★ **本章 mini 侧没有代码可实现项。** 原因只有一条：**A 篇是"地图/约定"型篇章，B 篇那套投递机制在 mini 里连生产者都不存在**——mini 的 `terminal` 是**同步阻塞**的（`tools/terminal.py:94-119`，`subprocess.run` 一次性返回），**没有后台进程**、没有进程注册表、没有 `process_manage`、没有委派/账本/watch、没有"通知回合"这个概念。**没有完成事件的**生产者**，就不可能有合并它的**消费者**——所以下表的主口径是 `⏭ 不抄（mini 无生产者）`，而不是"漏做"。唯一落地的是**文档级**的 A 篇归属图（最后一行）。真实侧锚 `f5d1926110`（v0.21.3），mini 侧锚**当前 HEAD `653b627`**。
+★ **本章 mini 侧没有代码可实现项。** 原因只有一条：**A 篇是"地图/约定"型篇章，B 篇那套投递机制在 mini 里连生产者都不存在**——mini 的 `terminal` 是**同步阻塞**的（`tools/terminal.py:94-119`，`subprocess.run` 一次性返回），**没有后台进程**、没有进程注册表、没有 `process_manage`、没有委派/账本/watch、没有"通知回合"这个概念。**没有完成事件的**生产者**，就不可能有合并它的**消费者**——所以下表的主口径是 `⏭ 不抄（mini 无生产者）`，而不是"漏做"。唯一落地的是**文档级**的 A 篇归属图（最后一行）。真实侧锚 `f5d1926110`（v0.21.3），mini 侧锚**本章快照 `653b627`**。
 
 | # | 面 | 真实 Hermes | mini 现状 | 性质 |
 |---|---|---|---|---|
@@ -219,11 +219,11 @@
 
 | 子系统 | 源码目录 | 文档入口 |
 |---|---|---|
-| Agent core（循环、传输、压缩） | `agent/`, `run_agent.py` | [Agent Loop](agent-loop.md), [Context Compression & Caching](context-compression-and-caching.md) |
-| Built-in tools | `tools/` | [Adding Tools](adding-tools.md), [Tools Runtime](tools-runtime.md) |
-| Messaging gateway | `gateway/`, `plugins/platforms/` | [Gateway Internals](gateway-internals.md), [Adding Platform Adapters](adding-platform-adapters.md) |
-| Session storage | `hermes_state.py`, `hermes_state_*.py` | [Session Storage](session-storage.md) |
-| Tests | `tests/`, `tests-js/` | [Contributing → Before Submitting](contributing.md#before-submitting) |
+| Agent core（循环、传输、压缩） | `agent/`, `run_agent.py` | [Agent Loop](https://hermes-agent.nousresearch.com/docs/developer-guide/agent-loop), [Context Compression & Caching](https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching) |
+| Built-in tools | `tools/` | [Adding Tools](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-tools), [Tools Runtime](https://hermes-agent.nousresearch.com/docs/developer-guide/tools-runtime) |
+| Messaging gateway | `gateway/`, `plugins/platforms/` | [Gateway Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/gateway-internals), [Adding Platform Adapters](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-platform-adapters) |
+| Session storage | `hermes_state.py`, `hermes_state_*.py` | [Session Storage](https://hermes-agent.nousresearch.com/docs/developer-guide/session-storage) |
+| Tests | `tests/`, `tests-js/` | [Contributing → Before Submitting](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing#before-submitting) |
 
 表下有**三条约定**，它们的判据各不相同（这正是这一篇真正的"内容"——表是索引，约定才是判据）：
 
@@ -612,7 +612,7 @@ mini 自己的纪律也指向同一个结论：
 
 ## §八 差距清单（A 批 / B 批）
 
-**口径**：本章 mini 侧定位是提交 `653b627`（= 当前 HEAD）。真实侧锚 `f5d1926110`。A 批 = 抄（本章**无代码可实现项**）；B 批 = **不抄**，每条给理由。
+**口径**：本章 mini 侧定位是提交 `653b627`（本章快照）。真实侧锚 `f5d1926110`。A 批 = 抄（本章**无代码可实现项**）；B 批 = **不抄**，每条给理由。
 
 **开头点明：A 批 = 0 条代码实现项 + 1 条文档级（已做）。** 本章 mini 侧没有一行新代码；唯一落地是 `mini-hermes/README.md` 新增的一节（A1 + A2 同属这一节，`653b627`）。B 批 8 条**全部不抄**，理由统一落在"**mini 无生产者**"（`tools/terminal.py:94-119` 同步阻塞、无进程注册表），逐条再补一条各自的具体缺口。
 
@@ -645,7 +645,7 @@ mini 自己的纪律也指向同一个结论：
 > 本附录把 §一~§八 正文放不下、或不必塞进「② 读 Hermes 的代码」单块的 `文件:行号` 集中归档，**按文件分组**。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
 > - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path> | sed -n 'Np'`
-> - **mini 侧**锚当前 HEAD（`653b627`，工作区干净）：`sed -n 'Np' mini-hermes/<path>`
+> - **mini 侧**锚本章快照（`653b627`）：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条打印核对过**；括号里的说明只是「它在说什么」，不当逐字引文用。
 
 ### 真实侧（锚 `f5d1926110`）
@@ -720,7 +720,7 @@ mini 自己的纪律也指向同一个结论：
 | `website/docs/developer-guide/completion-backlog-delivery.md:1-52` | 上游文档（52 行，H1 + 引子 + 2 个 H2） | 本章 B 篇的原文。 |
 | `website/docs/developer-guide/codebase-ownership.md:1-34` | 上游文档（34 行，H1 + 17 行表 + 3 条约定） | 本章 A 篇的原文。 |
 
-### mini 侧（锚当前 HEAD `653b627`）
+### mini 侧（锚本章快照 `653b627`）
 
 **`README.md`（620 行）**
 

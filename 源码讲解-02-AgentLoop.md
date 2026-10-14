@@ -1,5 +1,7 @@
 # 源码讲解 · 第 2 章：Agent 循环内部（Agent Loop Internals）
 
+> 章节快照：正文中的 mini 示例与行号锚 `ch02-agent-loop`；当前实现的变更见下方维护说明。上游锚 `f5d1926110`。
+>
 > 每节的结构都一样：
 > **mini 版怎么做的 → 真实 Hermes 怎么做的 → 差在哪 / 为什么。**
 >
@@ -8,13 +10,21 @@
 
 [TOC]
 
+## 发布前维护 · 循环、恢复与中断
+
+`AIAgent.run_conversation()` 未显式传历史时，从 `SessionDB` 加载当前有效历史；显式 `[]` 仍表示空历史。中断、异常和超预算会给未完成的末轮写事实性结尾，缺失的工具结果标为“状态未知”，不推断没有副作用。API 工作线程以及每个并发工具任务显式复制 `contextvars` 上下文；并发实现已改为 `submit()` 后按提交顺序收集 future，正文的 `pool.map` 是章节快照。`iterations_used` 是本轮预算增量，`iterations_total` 是累计预算消费，`api_calls` 是本轮逻辑模型请求次数；三者不等价。`reset_session()` 同时重置 todo、压缩器、预算、提示词缓存、会话时间和回退运行时。CLI 超预算返回非零退出码。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
+
 ---
 
 ## 两份代码的路径
 
 ```bash
 # mini 版（我们自己写的，3174 行，零依赖）
-$HOME/Desktop/study/hermes学习/mini-hermes/
+$HOME/projects/hermes-study/mini-hermes/
 
 # Hermes 源码（真实实现）
 ~/.hermes/hermes-agent/
@@ -23,7 +33,7 @@ $HOME/Desktop/study/hermes学习/mini-hermes/
 **一键打印本文提到的所有 mini 侧坐标**（省得翻文件）：
 
 ```bash
-cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+cd "$HOME/projects/hermes-study/mini-hermes"
 echo "① 中断"      && grep -n "_interrupt\b\|def interrupt" run_agent.py
 echo "②③ 并发决策" && grep -n "force_sequential\|pool.map\|ThreadPoolExecutor" run_agent.py
 echo "④ 预算"      && grep -n "budget.consume" run_agent.py && grep -n "def consume\|refund" agent/iteration_budget.py
@@ -32,7 +42,7 @@ echo "⑤ lifecycle" && grep -n "def run_conversation\|def _run_conversation_tur
 
 ---
 
-# 0. 先说结论：五处差异一览
+## 0. 先说结论：五处差异一览
 
 | # | 主题 | mini 版 | 真实版 | 性质 |
 |---|---|---|---|---|
@@ -46,14 +56,14 @@ echo "⑤ lifecycle" && grep -n "def run_conversation\|def _run_conversation_tur
 
 ---
 
-# 1. 中断控制
+## 1. 中断控制
 
 **真实版位置**：`agent/interrupt_control.py`（`class InterruptControlMixin`）
 
 **mini 版位置**：`run_agent.py:185`（建 Event）、`:230`（每轮清）、`:437`（主线程轮询）、
 `:446`（收到 Ctrl-C 置位）、`:528`（`interrupt()`）
 
-## 1.1 mini 版是怎么做的
+### 1.1 mini 版是怎么做的
 
 ```python
 self._interrupt = threading.Event()      # 185：建旗子
@@ -71,7 +81,7 @@ def interrupt(self) -> None:
     self._interrupt.set()                # 528：置旗子
 ```
 
-## 1.2 机制的正名：协同式取消
+### 1.2 机制的正名：协同式取消
 
 **前提：Python 没法安全杀死一个线程**（没有 `Thread.kill()`）。所以只能：
 
@@ -87,9 +97,9 @@ def interrupt(self) -> None:
 > 所以上面那段必须用 `get(timeout=0.1)` **轮询**，不能阻塞等——
 > 阻塞在 `get()` 上的那次调用不会自己醒来去看旗子。
 
-## 1.3 真实版的四点不同
+### 1.3 真实版的四点不同
 
-### ① 软 / 硬两档，而硬取消**不是**"终止进程"
+#### ① 软 / 硬两档，而硬取消**不是**"终止进程"
 
 `interrupt()` 的 docstring 原文：
 
@@ -103,7 +113,7 @@ def interrupt(self) -> None:
 **它解决的问题是"用户按了没反应"**——不是死锁。比如 agent 卡在等用户回答的地方
 （approval prompt / clarify）时，普通取消可能够不到它。
 
-### ② 三个通道（mini 版只有一个旗子）
+#### ② 三个通道（第 2 章 mini 快照只有一个旗子）
 
 模块 docstring 第一行：
 
@@ -130,7 +140,7 @@ def clear_interrupt(self, *, preserve_redirect: bool = False) -> bool:
 
 **"取消的归因"和"用户的下一条消息"分开两个字段存**——后者可能装着用户整段新输入。
 
-### ③ `require_generation`：带代号的取消（CAS）
+#### ③ `require_generation`：带代号的取消（CAS）
 
 docstring 原文：
 
@@ -152,13 +162,13 @@ docstring 原文：
 >
 > 这是工程里的高频模式（并发控制、幂等、版本号），值得记住名字。
 
-### ④ 和上下文压缩的交互
+#### ④ 和上下文压缩的交互
 
 `interrupt_control.py` 里有一段极复杂的 `_fence_cancel_before_commit`，
 处理"压缩正在提交时收到硬取消"，注释里带着 issue 号（#99758 P1）。
-mini 版没有压缩，所以没有这个问题——**这是第 5 章（context-compression）会碰到的真实难题**。
+第 2 章快照尚未实现压缩；当前 mini 已有第 5 章的压缩实现，但仍未实现这套硬取消提交栅栏——**这是第 5 章（context-compression）会碰到的真实难题**。
 
-## 1.4 小结
+### 1.4 小结
 
 | | mini 版 | 真实版 |
 |---|---|---|
@@ -169,13 +179,13 @@ mini 版没有压缩，所以没有这个问题——**这是第 5 章（context
 
 ---
 
-# 2. 并发结果怎么保证顺序
+## 2. 并发结果怎么保证顺序
 
 **真实版位置**：`agent/tool_executor.py`（concurrent 那条路径）
 
 **mini 版位置**：`run_agent.py:587-593`
 
-## 2.1 mini 版是怎么做的
+### 2.1 mini 版是怎么做的
 
 ```python
 if force_sequential:
@@ -187,7 +197,7 @@ else:
 
 **`pool.map` 的作用是"保持入参顺序"**：即使第 2 个工具先跑完，返回的列表里它仍然在第 2 位。
 
-## 2.2 真实版：预分配数组 + 按下标写
+### 2.2 真实版：预分配数组 + 按下标写
 
 ```python
 self.results[i] = _ToolOutcome(pc.ref(...), pc.parse_error, 0.0, True, True)  # 参数解析失败
@@ -199,20 +209,20 @@ r = batch.results[i]                                                          # 
 
 **同一个保证（按原序读出），两种实现。**
 
-## 2.3 为什么不用 `pool.map`
+### 2.3 为什么不用 `pool.map`
 
 | 能力 | `pool.map` | 预分配数组 |
 |---|---|---|
 | 乱序完成、按序读出 | ✓ | ✓ |
-| **"不经过执行"的结果也能有位置** | ✗ | ✓ |
-| **"空位"这个概念**（跳过 / 放弃） | ✗ | ✓ |
-| 分段收集（按批读 `batch.results`） | ✗（一次性返回） | ✓ |
+| **为解析失败 / 跳过保留结果位置** | 可以由包装函数返回占位结果 | 可以由调度器直接写入槽位 |
+| **显式检查未填槽位**（跳过 / 放弃） | 需额外维护状态 | 直接检查预分配数组 |
+| 分段收集（按批读 `batch.results`） | 迭代器可逐项读取，但按输入顺序等待 | 可按调度需要检查槽位 |
 
 **核心**：`pool.map` 要求"每个元素都经过同一个函数、产出恰好一个结果"。
 但真实系统里**有的结果不是"执行出来的"**——参数解析失败、被跳过、被中断放弃，
-**都占一个位置**。
+**都占一个位置**。这不意味着 `pool.map` 无法表示失败或跳过：包装函数同样可以返回这些结果。预分配数组的收益是让调度器直接管理槽位、开始顺序与放弃状态。
 
-## 2.4 额外的：它连"开始顺序"都要管
+### 2.4 额外的：它连"开始顺序"都要管
 
 同一个文件里有个 `begin_in_order`：
 
@@ -229,7 +239,7 @@ def begin_in_order(self, order: int, callback=None, *, tool_name: str = "") -> b
 
 `pool.map` 里完全没有这个概念。
 
-## 2.5 结果是富记录，不是字符串
+### 2.5 结果是富记录，不是字符串
 
 ```python
 _ToolOutcome(ref, result, duration, is_error, blocked)
@@ -242,7 +252,7 @@ _ToolOutcome(ref, result, duration, is_error, blocked)
 
 ---
 
-# 3. ★ 工具批次是「分段」，不是「整批并发 / 整批串行」
+## 3. ★ 工具批次是「分段」，不是「整批并发 / 整批串行」
 
 **这条最重要——它推翻了我们第 2 章的一个简化。**
 
@@ -250,7 +260,7 @@ _ToolOutcome(ref, result, duration, is_error, blocked)
 
 **mini 版位置**：`run_agent.py:580-593`（**就这 14 行**）
 
-## 3.1 mini 版是怎么做的
+### 3.1 mini 版是怎么做的
 
 ```python
 force_sequential = len(parsed) <= 1 or any(
@@ -265,7 +275,7 @@ else:
 
 **两个档位：整批并发，或者整批串行。** 只要有一个 interactive 工具，**整批退化成串行**。
 
-## 3.2 docstring 原文（答案整段就在这里面）
+### 3.2 docstring 原文（答案整段就在这里面）
 
 ```text
 Split a tool-call batch into ordered ("parallel"|"sequential", calls) segments.
@@ -282,9 +292,9 @@ demote to sequential (it owns the richer inline dispatch); adjacent sequential m
 > 📌 **习惯**：Hermes 的 docstring 写"为什么"写得很足。
 > **看到 docstring 就把整段抄下来**——这里的答案就整段在里面。
 
-## 3.3 三层判据
+### 3.3 三层判据
 
-### 第 1 层 · 屏障（barrier）
+#### 第 1 层 · 屏障（barrier）
 
 ```text
 _NEVER_PARALLEL_TOOLS      ← 永远不能并行的工具（interactive 类在这）
@@ -296,7 +306,7 @@ _NEVER_PARALLEL_TOOLS      ← 永远不能并行的工具（interactive 类在�
 
 **这一层就是我们 mini 版实现的全部。**
 
-### 第 2 层 · 路径冲突 ★（最想不到的一层）
+#### 第 2 层 · 路径冲突 ★（最想不到的一层）
 
 ```python
 if any(
@@ -321,10 +331,9 @@ if any(
 > **完全不看路径冲突**。所以"读 a.py + 写 a.py"在我们这儿会**并发跑**——
 > 可能读到写了一半的内容。
 >
-> 不算 bug（模型很少这么干），但**是一个真实存在的保证差异**。
-> 想验证的话：让它"读 x.txt，同时往 x.txt 追加一行"，看会不会出问题。
+> 这是实际的竞态风险；调用频率低不能证明它不是 bug。当前 mini 没有上游的路径冲突屏障，依赖同一路径先写后读的调用应安排在不同批次。
 
-### 第 3 层 · 降级与合并
+#### 第 3 层 · 降级与合并
 
 ```text
 一段里 < 2 个调用  → 降级为串行（docstring: "it owns the richer inline dispatch"）
@@ -338,7 +347,7 @@ if any(
 > 这也解释了 mini 版 `len(parsed) <= 1` 为什么不是随手写的：
 > **只有 1 个调用时走串行是必要的**（那个调用可能是 agent 级工具）。
 
-## 3.4 收口：我们的写法是它的特例
+### 3.4 收口：我们的写法是它的特例
 
 Hermes 里还有这个函数：
 
@@ -371,14 +380,14 @@ force_sequential = len(parsed) <= 1 or any(... is_interactive ...)
 
 ---
 
-# 4. 迭代预算的消费点
+## 4. 迭代预算的消费点
 
 **真实版位置**：`agent/turn_iteration_prep.py:361`、`agent/conversation_loop.py:1520`、
 `agent/turn_finalizer.py:128`、`agent/iteration_budget.py`
 
 **mini 版位置**：`run_agent.py:271`、`agent/iteration_budget.py:22`
 
-## 4.1 mini 版是怎么做的
+### 4.1 mini 版是怎么做的
 
 ```python
 while True:
@@ -386,7 +395,7 @@ while True:
         return {"final_response": "...预算耗尽..."}
 ```
 
-## 4.2 真实版：消费点不在 `while` 顶部
+### 4.2 真实版：消费点不在 `while` 顶部
 
 ```python
 # ① 循环条件只"读"（无副作用），而且被多处读：
@@ -408,10 +417,10 @@ agent/turn_finalizer.py:128
 
 所以需要**一个只读接口**（`remaining`）和**一个写入接口**（`consume`）。
 
-> **mini 版把两者合一**：导致别处想读就得产生副作用（读一次少一次）。
+> **mini 也已经分开读写**：`remaining`、`used` 是只读属性，`consume()` 才扣预算。差别在消费点放在循环顶部，不能据此推导出“读一次少一次”。
 > 这条设计原则很通用：**读取状态和修改状态要分开**，否则"看一眼"和"用一次"就分不清了。
 
-## 4.3 `refund()` 的真实理由（两处，都很具体）
+### 4.3 `refund()` 的真实理由（两处，都很具体）
 
 **第一处** `agent/turn_tool_round.py:186`：
 
@@ -437,10 +446,10 @@ with suppress(Exception):
 → Ollama runtime context 太小、**提前失败退出**时退款：**"这一轮不算数"**
 （不是模型的问题，是环境配置问题，不该罚它）。
 
-> **我们 mini 版的 `refund()` 从来没人调**——抄了接口没抄用法。
+> **mini 没有 `refund()` 接口**，章节标签与当前实现均如此；不要把上游的退款接口误写成 mini 已实现但无人调用。
 > 真实版调它的理由是这两类：**"便宜调用"和"环境导致的失败"。**
 
-## 4.4 默认值
+### 4.4 默认值
 
 | | 默认 |
 |---|---|
@@ -456,14 +465,14 @@ with suppress(Exception):
 
 ---
 
-# 5. 9 步 lifecycle 的真实映射
+## 5. 9 步 lifecycle 的真实映射
 
 **真实版位置**：`agent/conversation_loop.py:1579`（`def run_conversation`）+ `agent/turn_*.py`
 
 **mini 版位置**：`run_agent.py:202`（`run_conversation`，步骤 1~3.5）、
 `:268`（`_run_conversation_turn`，步骤 4~9 的循环）
 
-## 5.1 答案：9 步拆成了 30 个文件
+### 5.1 答案：9 步拆成了 30 个文件
 
 ```console
 $ ls ~/.hermes/hermes-agent/agent/turn_*.py | wc -l
@@ -479,7 +488,7 @@ $ ls ~/.hermes/hermes-agent/agent/turn_*.py | wc -l
 `turn_stop_gates` / `turn_summary` / `turn_tool_round` / `turn_tool_validation` /
 `turn_truncation` / `turn_usage`
 
-## 5.2 映射表
+### 5.2 映射表
 
 | 文档的步 | 真实归属 | mini 版 |
 |---|---|---|
@@ -506,7 +515,7 @@ $ ls ~/.hermes/hermes-agent/agent/turn_*.py | wc -l
 | `turn_facade.py` / `turn_facade_lease.py` | 门面 + 租约 |
 | `turn_explainers.py` / `turn_failure_copy.py` | 给用户看的解释文案 |
 
-## 5.3 "为什么拆"——答案写在他们自己的开发规范里
+### 5.3 "为什么拆"——答案写在他们自己的开发规范里
 
 `~/.hermes/hermes-agent/AGENTS.md` 原文：
 
@@ -520,7 +529,7 @@ $ ls ~/.hermes/hermes-agent/agent/turn_*.py | wc -l
 
 **这条纪律反过来解释了为什么 `run_agent.py` 只剩下 1560 行的门面。**
 
-## 5.4 一个容易搞混的点：`run_conversation` 有两个
+### 5.4 一个容易搞混的点：`run_conversation` 有两个
 
 | 位置 | 干什么 |
 |---|---|
@@ -532,7 +541,7 @@ $ ls ~/.hermes/hermes-agent/agent/turn_*.py | wc -l
 
 ---
 
-# 6. 第 2 章差距清单（可选的改进项）
+## 6. 第 2 章差距清单（可选的改进项）
 
 不急着改，列在这里，等第 4 章（`tools-runtime.md`）之后统一处理：
 
@@ -540,9 +549,9 @@ $ ls ~/.hermes/hermes-agent/agent/turn_*.py | wc -l
 |---|---|---|
 | 1 | 并发不看**路径冲突**（读 a.py + 写 a.py 会并发） | 中等——想体验"分段 planner"的话值得 |
 | 2 | `force_sequential` 只有两档，没有分段 | 低——1~2 个工具时收益为负 |
-| 3 | `pool.map` 而非预分配数组（无法表达"跳过/放弃"的结果） | 低——需要"某些结果不经过执行"时才有意义 |
+| 3 | `pool.map` 而非预分配数组（调度器未单独维护槽位与放弃状态） | 低——需要"某些结果不经过执行"时才有意义 |
 | 4 | 结果只回传字符串，没有 `is_error` / `blocked` / `duration` | 中等——`is_error` 会让"没反应"类排查更容易 |
-| 5 | `refund()` 抄了没人调 | 低——要等 `execute_code` 那类工具出现 |
+| 5 | 未实现 `refund()` | 低——要等 `execute_code` 那类工具出现 |
 | 6 | 没有 steer / redirect 通道 | 低——那是多轮对话体验，第 7 章（gateway）才相关 |
 | 7 | 没有 `require_generation`（CAS） | 低——除非出现"多入口改同一状态" |
 

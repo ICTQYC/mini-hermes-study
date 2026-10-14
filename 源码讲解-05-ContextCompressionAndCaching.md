@@ -25,7 +25,7 @@
 
 ```text
 mini 版（本仓库，第 5 章末）
-  $HOME/Desktop/study/hermes学习/mini-hermes/
+  $HOME/projects/hermes-study/mini-hermes/
     agent/context_engine.py        82 行  ←  agent/context_engine.py            242 行
     agent/usage_anchor.py         154 行  ←  agent/usage_anchor.py              165 行
     agent/context_compressor.py   954 行  ←  agent/context_compressor.py      5,061 行

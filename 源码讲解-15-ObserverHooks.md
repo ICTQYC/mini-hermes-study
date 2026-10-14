@@ -8,12 +8,20 @@
 
 [TOC]
 
+## 发布前维护 · 逻辑请求计数
+
+逻辑请求计数在观察者开关之外更新，未注册观察者时 `api_calls` 仍准确。回退和摘要各是新的逻辑请求；传输层重试仍属于原逻辑请求。`iterations_used` 仅为本轮预算消费增量，不能替代请求计数；CLI 与网关持久化使用 `api_calls`，不能把累计预算重复加进会话用量。
+
+这些是当前实现的行为；下文的章节提交、规模表和实测输出保留各自历史时点。新增回归在 `mini-hermes/tests/test_publish_regressions.py`，完整收据见[发布前修复记录](发布前修复记录.md)。
+
+
+
 ---
 
 > 配套《中文精译-15-ObserverHooks.md》。那篇讲**原文说了什么**，这篇讲**Hermes 与 mini 差在哪、为什么这么切**。
 > **阅读顺序**：先读「导言 · 机制总览」（只有 Hermes 一侧），再看 §〇 差异总表，最后逐节看四块对照。
 > 📌 **两边的锚，别混**：**真实 Hermes 侧**行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`），
-> 裸写 `文件:行号` 一律指**真实侧**；**mini 侧**行号锚**当前 HEAD**（本章实现提交 `1ccaa50`），
+> 裸写 `文件:行号` 一律指**真实侧**；**mini 侧**行号按**当前维护后的实现**核对（本章历史实现提交 `1ccaa50`），
 > mini 侧引用**一律带前缀** `mini-hermes/<路径>:<行号>`。
 > **两边规模**（`wc -l`）：真实侧 `hermes_cli/plugins.py` **2147** · `hermes_cli/plugins_dispatch.py` **530** ·
 > `agent/api_request_hooks.py` **196** · `model_tools.py` **987** · `agent/plugin_stream_hooks.py` **165** ·

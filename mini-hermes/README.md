@@ -20,7 +20,7 @@
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |
 | 5 | `context-compression-and-caching.md` | ✅ **已实现并跑通**（四个新模块 · **152 条测试** · 接线 · 真跑验证 · 差距清单 A+B 批 9 条已抄） | 《中文精译-05-ContextCompressionAndCaching.md》《源码讲解-05-ContextCompressionAndCaching.md》 |
 | 6 | `session-storage.md` | ✅ **已实现并跑通**（**JSON → SQLite**：门面 + 5 个兄弟模块 · **107 条测试** · 逐条追加 · FTS5 检索 · 真跑验证 · 差距清单 14 条已抄） | 《中文精译-06-SessionStorage.md》《源码讲解-06-SessionStorage.md》 |
-| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试**（该章交付时点；现为 214 条） · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
+| 7 | `gateway-internals.md` | ✅ **已实现并跑通**（门面 + 3 个兄弟 + 适配器层 / 授权 / 钩子 / 进程身份 · **135 条测试**（该章交付时点；现为 266 条） · 反向验证 9/9 + 侧线 4/4 · 真跑走 `./mini gateway run` · 差距清单 14 条 · **+ 侧线：多 profile 入口层** `mini -p <名字>` / `mini profile create\|list\|show`） | 《中文精译-07-GatewayInternals.md》《源码讲解-07-GatewayInternals.md》 |
 | 7.1 | `gateway-session-lifecycle.md` | ✅ **已实现并跑通**（5 个新模块：**状态机** `session_state.py` / **启动恢复** `run_startup.py` / **两层队列** `run_busy.py` / **agent 缓存** `agent_cache.py` / **后台巡检** `run_watchers.py` · `sessions` 表 +6 个状态列 · **214 条测试 / 17 组** · 反向验证 **14/14 干净变红** + 缓存副作用那条 **1 条干净变红** · 真跑（真 DeepSeek，临时 home）：缓存命中 1/1、覆盖通知、跨重启同一会话 · 差异表 26 条 / 差距清单 14 条 · 修掉第 7 章**两处语义错**） | 《中文精译-07b-GatewaySessionLifecycle.md》《源码讲解-07b-GatewaySessionLifecycle.md》 |
 | 8 | `provider-runtime.md` | ✅ **已实现并跑通**（**providers/ 包**（723 行）+ **两段式解析** + `api_mode` 判定 + `source` + host 门控 + 别名归一（`756b493`）· **回退链** `agent/fallback.py` + **辅助路由** `agent/auxiliary.py` + 配置层 `hermes_cli/config.py`（`a391919`，回退链首次真正接线）· **219 条新契约测试**（106 + 113）· 全套件 **1,063 通过 / 0 失败**（双解释器）· 真跑：`source` 四来源 / host 门控三端点 / 别名归一 · 差异表 18 行 / 差距清单 A 批 10 + B 批 8 · **上游文档 3 处出入**（子代理继承链 / 触发点数 / key 门控）） | 《中文精译-08-ProviderRuntime.md》《源码讲解-08-ProviderRuntime.md》 |
 | 10 | `micro-compaction.md` | ✅ **已实现并跑通**（`agent/micro_compaction.py` **537 行**（`MicroCompactionMixin`）+ 接线三处 · **119 条测试 / 10 组** · 全套件 **1,187 通过 / 0 失败**（双解释器）· 反向验证 **5/5 + 补丁 2/2 干净变红** · 真跑 **5/5 核验通过**（真 DeepSeek，脚本 `demos/ch10_real_run.py`）· 差异表 18 行 / 差距清单 A6 + B9 · ★ 补上「摘要被截断 ⇒ 丢弃半截」判据（`_summary_llm_meta()`，微压缩与批量两条路径）） | 《中文精译-10-MicroCompaction.md》《源码讲解-10-MicroCompaction.md》 |
@@ -305,12 +305,12 @@ python3 doctor.py          # 约 10 秒，判定"这次卡住是谁的锅"
 ```bash
 python3 tests/test_packaging.py         # 18 条：零依赖 / 无硬编码路径 / 密钥发现链 / 符号链接调用 / 写死路径扫描 /
                                         #        命令行旗标契约（宣传的 `mini --旗标` 必须真的存在）
-python3 tests/test_loop_mechanisms.py   # 57 条：agent loop 的机制（含「用量是每轮的」）
+python3 tests/test_loop_mechanisms.py   # 63 条：agent loop 的机制（含「用量是每轮的」）
 python3 tests/test_prompt_assembly.py   # 155 条：提示词装配（47 个函数 / 13 组，含字节稳定性）
 python3 tests/test_tools_runtime.py     # 89 条：工具运行时（AST 发现 / toolset 闸门 / check_fn 抖动保护 / 结果契约）
 python3 tests/test_compression.py       # 157 条：压缩与缓存（token 记账 / 边界 / 四阶段 / 契约 / 缓存标记 / 窗口表）
 python3 tests/test_micro_compaction.py  # 119 条：微压缩（10 组）
-python3 tests/test_fallback_and_aux.py  # 113 条：回落与辅助模型（4 组）
+python3 tests/test_fallback_and_aux.py  # 114 条：回落与辅助模型（4 组）
 python3 tests/test_session_storage.py   # 108 条：会话存储（建库 / 加列 / 世代 / 血缘 / 检索 / 写入礼节 / 隔离）
 python3 tests/test_state_db_recovery.py # 121 条：state.db 抢修（12 组；3.9 少 4 条 —— 它拒 DROP messages_fts_data）
 python3 tests/test_gateway.py           # 266 条：网关（会话键 / 两级守卫 / 授权 / 命令表 / 交付 / 钩子 / 进程身份 /

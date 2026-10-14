@@ -40,8 +40,8 @@
 
   ⚠️ 真实版还用 `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（Python 3.12+ `Connection.setconfig`）
   把 **SQLite 自己那次内部关停 checkpoint** 也关掉（真实版 `:405-408/1267/1275-1281`）；
-  **mini 不实现它（B8）**——mini 的 `close()` 本就不做任何 checkpoint，没有"要关掉的
-  关停检查点"。这正是上游 §2 的第二道防线，理由见 `close()` 的 docstring。
+  **mini 未实现它（B8）**——没有显式 checkpoint 不代表 SQLite 不会在最后连接关闭时
+  自动 checkpoint；关闭内部检查点仍是保护差距，见 `close()` 的 docstring。
 """
 from __future__ import annotations
 
@@ -392,7 +392,7 @@ class SessionDB(SessionSessionsMixin, SessionMessagesMixin, SessionFtsMixin,
 
     # ── 生命周期 ───────────────────────────────────────────────────────
     def close(self) -> None:
-        """关闭连接。★ 这条路径里**绝不**做 WAL checkpoint —— 上游 §2 的**第二道防线**。
+        """关闭连接。★ 这条路径里不发显式 WAL checkpoint —— 上游 §2 的**第二道防线**。
 
         真实版 `close()`（`hermes_state.py:1449-1457`）在隔离中会**跳过**
         `PRAGMA wal_checkpoint(PASSIVE)`。现场记录（见 `StateDbCorruptError` 的 docstring）：
@@ -401,7 +401,7 @@ class SessionDB(SessionSessionsMixin, SessionMessagesMixin, SessionFtsMixin,
         把一个"还能读"的文件写成了 `file is not a database`。
 
         ⇒ 顺序是：**先"停写"（隔离），再"跳检查点"（本方法）**。mini 的 `close()` 从来就
-        只做裸关、**永不 checkpoint** ⇒ 这道防线**天然满足**；本方法把它**显式化**，
+        只做裸关、**不发显式 checkpoint** ⇒ 第二道防线满足；本方法把它**显式化**，
         而不是依赖"碰巧谁都没在关停时写过 checkpoint"。
         （真实版还要关掉 SQLite 自己那次内部关停 checkpoint：
           `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`，Python 3.12+；**mini 不实现 —— B8**，
@@ -410,7 +410,7 @@ class SessionDB(SessionSessionsMixin, SessionMessagesMixin, SessionFtsMixin,
         ★ 另一条不变量（真实版 `_reopen_after_close_locked` `:888/900`）：`close()` 之后，
           被隔离的句柄**拒绝重开**（见 `_reopen_after_close`）。
         """
-        # 显式声明：这条关停路径里没有任何 checkpoint（对齐真实版 `:1449-1457` 的"跳过"分支）。
+        # 显式声明：这里不发显式 checkpoint，SQLite 内部自动 checkpoint 仍可能发生（对齐真实版 `:1449-1457` 的"跳过"分支）。
         self._closed = True
         try:
             self._conn.close()
