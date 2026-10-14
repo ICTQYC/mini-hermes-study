@@ -949,7 +949,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 
 > 本附录把 §十 的「② 读 Hermes 的代码」单块塞不下的 `文件:行号` 集中归档，**按文件分组**（正文 ② 已引的 `INSTALL_POLICY` `:26-33` 不在此重复）。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
-> - **真实侧**锚 `f5d1926110`：`git -C $HOME/.hermes/hermes-agent show f5d1926110:<path>`
+> - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path>`
 > - **mini 侧**锚 `02c61d5`（第 13 章 A1~A4 实现落地的那次），工作区无未提交改动：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条真身打印核对过**；括号里的说明是「它在说什么」，不当逐字引文用。
 
@@ -1079,7 +1079,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 
 ## 附录 B · 本篇提到的文件与实测行数
 
-行数一律实测：**真实侧** `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 `02c61d5`（mini 源码最后一次改动）。
+行数一律实测：**真实侧** `git -C ~/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 `02c61d5`（mini 源码最后一次改动）。
 
 **B-1 · 真实侧（锚 `f5d1926110`）**
 

@@ -3,7 +3,7 @@
 > **原文**：`website/docs/developer-guide/programmatic-integration.md`（**216 行**，官方侧边栏 `developer-guide`，`sidebar_position: 8`；
 > 副标题逐字：*Three protocols for driving hermes-agent from external programs: ACP, the TUI gateway JSON-RPC, and the OpenAI-compatible HTTP API*）。
 > **本篇定位**：精译为主（看懂"要从外部程序驱动 Hermes，官方给的三条协议各是什么、该挑哪条"）。差异与源码深挖留给《源码讲解-09》。
-> **📌 行号锚**：真实源码 `$HOME/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
+> **📌 行号锚**：真实源码 `~/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
 > 本篇只用到文件级引用（行号留给源码讲解）。
 > **本章出入**：轻量核对 3 处（见附录 C）—— 只核**协议性声明**（方法名 / 端点 / 字段 / 错误码在锚点源码里能否指认），
 > 细节不逐条对（学习用，不为细节付成本）。

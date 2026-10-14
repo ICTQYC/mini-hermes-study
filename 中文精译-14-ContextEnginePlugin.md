@@ -340,7 +340,7 @@ def test_compress_returns_valid_messages():
 
 ## 附录 B · 本篇提到的文件与实测行数
 
-行数一律 `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l` 实测，路径先经 `git ls-tree -r f5d1926110 --name-only` 确认存在（目录按下挂文件数计）。**实测锚 `f5d1926110`。**
+行数一律 `git -C ~/.hermes/hermes-agent show f5d1926110:<路径> | wc -l` 实测，路径先经 `git ls-tree -r f5d1926110 --name-only` 确认存在（目录按下挂文件数计）。**实测锚 `f5d1926110`。**
 
 **B-1 · 原文按路径点名的文件与目录：**
 

@@ -1044,7 +1044,7 @@ mini 的压缩是**同步、内联**跑的：`run_agent.py::_preflight_compressi
 
 > 正文每节的「② 读 Hermes 的代码」只准引一段（≤15 行），撑不住的行号在这里按文件归档。**正文 ② 已逐字引过的那段不在本表重复**（`agent/conversation_compression.py:1-9` 归 §十 ②；四条硬料所引的 `agent/context_engine.py:47-107`、`agent/conversation_loop.py:1166-1170`、`agent/agent_init.py:1761-1769`、`plugins/context_engine/` 零子目录 归正文）。
 >
-> - **真实侧**锚 `f5d1926110`：`git -C $HOME/.hermes/hermes-agent show f5d1926110:<path>`
+> - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path>`
 > - **mini 侧**锚 HEAD `7b0b18b`（第 14 章 A1~A6 实现落在 `a6ed019`）：`sed -n 'Np' mini-hermes/<path>`
 > - 每条给「该段首 ~20 字」+「它证明什么」；括号里的说明是"它在说什么"，不当逐字引文用。
 
@@ -1208,7 +1208,7 @@ mini 的压缩是**同步、内联**跑的：`run_agent.py::_preflight_compressi
 
 ## 附录 B · 实测行数
 
-行数一律实测：**真实侧** `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 HEAD `7b0b18b`（mini 源码最后一次改动是第 14 章实现 `a6ed019`）。
+行数一律实测：**真实侧** `git -C ~/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 HEAD `7b0b18b`（mini 源码最后一次改动是第 14 章实现 `a6ed019`）。
 
 **B-1 · 真实侧（锚 `f5d1926110`）**
 

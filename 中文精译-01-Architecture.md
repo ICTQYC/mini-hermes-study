@@ -1,6 +1,7 @@
-# Hermes 架构总览（Architecture）
+# 中文精译 · 第 1 章：架构总览（Architecture）
 
-> 整合官方 **Developer Guide → Architecture** 页 + 本地源码对照。
+> 整合官方 **Developer Guide → Architecture** 页 + 本地源码对照（**本章是精译 + 源码对照合卷**：
+> 第 1 章只画地图，没有独立的《源码讲解》与 mini 实现，其源码对照就在下面 §二/§四/§七 里）。
 >
 > 重点回答三件事：**整个环节用哪个文件、跑哪里的代码、怎么沟通**。
 >

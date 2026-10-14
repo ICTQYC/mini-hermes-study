@@ -9,7 +9,7 @@
 
 | 章 | 官方文档 | mini 版状态 | 配套文档 |
 |---|---|---|---|
-| 1 | `architecture.md` | — （只是地图） | 《Hermes架构总览.md》 |
+| 1 | `architecture.md` | — （只是地图） | 《中文精译-01-Architecture.md》 |
 | 2 | `agent-loop.md` | ✅ **已实现并跑通** | 《中文精译-02-AgentLoop.md》《源码讲解-02-AgentLoop.md》 |
 | 3 | `prompt-assembly.md` | ✅ **已实现并跑通** | 《中文精译-03-PromptAssembly.md》《源码讲解-03-PromptAssembly.md》 |
 | 4 | `tools-runtime.md` | ✅ **已实现并跑通** | 《中文精译-04-ToolsRuntime.md》《源码讲解-04-ToolsRuntime.md》 |

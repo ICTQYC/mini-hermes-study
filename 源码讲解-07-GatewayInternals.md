@@ -1,6 +1,6 @@
 # 源码讲解 · 第 7 章：网关内部（Gateway Internals）
 
-> **真实 Hermes**：`$HOME/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）
+> **真实 Hermes**：`~/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）
 > **mini 版**：`mini-hermes/`，本章末状态见文末「本章提交」
 > **官方文档**：《中文精译-07-GatewayInternals.md》（本篇是它的深挖版）
 >

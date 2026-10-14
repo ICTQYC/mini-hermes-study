@@ -644,7 +644,7 @@ mini 自己的纪律也指向同一个结论：
 
 > 本附录把 §一~§八 正文放不下、或不必塞进「② 读 Hermes 的代码」单块的 `文件:行号` 集中归档，**按文件分组**。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
-> - **真实侧**锚 `f5d1926110`：`git -C $HOME/.hermes/hermes-agent show f5d1926110:<path> | sed -n 'Np'`
+> - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path> | sed -n 'Np'`
 > - **mini 侧**锚当前 HEAD（`653b627`，工作区干净）：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条打印核对过**；括号里的说明只是「它在说什么」，不当逐字引文用。
 
@@ -784,9 +784,9 @@ mini 自己的纪律也指向同一个结论：
 **1. 网关那套"路由键短窗批"是它**自有**的另一套机制，上游文档已**自行界定**，不是出入。**
 
 ```console
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:gateway/run_notifications.py | sed -n '1420p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:gateway/run_notifications.py | sed -n '1420p'
     def _format_coalesced_process_completions(entries: list[tuple[str, dict, asyncio.Future]]) -> str:
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md | sed -n '28,30p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md | sed -n '28,30p'
 - **Messaging gateway:** `gateway/run_notifications.py` already uses its own
   route-keyed short-window batching. This interactive-backlog change does not
   replace that mechanism or alter adapter sends.
@@ -799,10 +799,10 @@ $ git -C $HOME/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide
 **2. "非交互消费者不建循环"只有**反证**（无逐字代码否定）⇒ 如实标为"无法从源码证伪的散文断言"。**
 
 ```console
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md | sed -n '31,32p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md | sed -n '31,32p'
 - **Noninteractive/headless consumers:** this change does not create a new
   autonomous notification loop for an API request, ACP client, or one-shot CLI.
-$ git -C $HOME/.hermes/hermes-agent grep -n -i "autonomous notification loop" f5d1926110
+$ git -C ~/.hermes/hermes-agent grep -n -i "autonomous notification loop" f5d1926110
 f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md:32:  autonomous notification loop for an API request, ACP client, or one-shot CLI.
 ```
 
@@ -813,19 +813,19 @@ f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md:32:  auto
 **3. "批不落系统提示词"只有**不变式层 + 路径层**证据，没有一句原地逐字声明 ⇒ 同样如实标注。**
 
 ```console
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md | sed -n '35p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:website/docs/developer-guide/completion-backlog-delivery.md | sed -n '35p'
 Neither a batch nor its delivery status is persisted into the system prompt.
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:tui_gateway/prompt_turn.py | sed -n '541,542p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:tui_gateway/prompt_turn.py | sed -n '541,542p'
     # Per-turn API-message notes: barge mid-speech, reactions, HUD surface (per-turn state
     # that must not touch the byte-stable system prompt).
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:tui_gateway/session_notifications.py | sed -n '760,763p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:tui_gateway/session_notifications.py | sed -n '760,763p'
 def _prepend_note(run_message: Any, note: str) -> Any:
     """Prefix a per-turn note onto the MODEL INPUT, leaving the prompt alone: everything the model must know that the
     user did not type (interrupted reply, reactions, surface) arrives this way, so no scaffolding reaches the
     transcript and no sent message is rewritten — the cached prefix survives."""
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:agent/prompt_builder.py | sed -n '591p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:agent/prompt_builder.py | sed -n '591p'
     model-bound message, never the byte-stable system prompt. Each sentence is gated on the tool it names (an
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:agent/AGENTS.md | sed -n '125p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:agent/AGENTS.md | sed -n '125p'
 message-shape invariants (alternation, byte-stable system prompt) rather than snapshotting prompt
 ```
 

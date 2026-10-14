@@ -1,7 +1,7 @@
 # 源码讲解 · 第 7 章 · 扩展 7.1（旧称第 8 章）：网关会话生命周期（Gateway Session Lifecycle）
 
 > **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
-> **真实源码**：`$HOME/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
+> **真实源码**：`~/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
 > **对照实现**：`mini-hermes/`（全项目 **11,908 行**代码 / **5,956 行**测试）
 > **本章新增**：`session_state.py` / `run_startup.py` / `run_busy.py` / `agent_cache.py` / `run_watchers.py`（5 个新文件）
 

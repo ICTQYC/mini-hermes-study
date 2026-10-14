@@ -876,7 +876,7 @@ def subscribe_all(registry: ObserverRegistry) -> list:
 
 > 正文每节的「② 读 Hermes 的代码」只准引一段（≤15 行）且优先引注释，撑不住的行号按文件归档到这里。每条给「该段首 ~20 字」+「它证明什么」；括号里是"它在说什么"，不当逐字引文用。
 >
-> - **真实侧**锚 `f5d1926110`（取值 `git -C $HOME/.hermes/hermes-agent show f5d1926110:<path>`），**裸 `文件:行号` 一律指真实侧**
+> - **真实侧**锚 `f5d1926110`（取值 `git -C ~/.hermes/hermes-agent show f5d1926110:<path>`），**裸 `文件:行号` 一律指真实侧**
 > - **mini 侧**锚 HEAD `1ccaa50`（本章实现），**一律写 `mini-hermes/<路径>:<行号>`**
 > - 下列行号**本轮逐条实测取过非空行**；与各节 ② 的逐字引文若有重叠，由装配方按需去重（② 每节只留一段，本表是全量归档）
 
@@ -1072,7 +1072,7 @@ def subscribe_all(registry: ObserverRegistry) -> list:
 
 ## 附录 B · 两边的规模与实测行数
 
-行数一律 `wc -l` 实测：**真实侧** `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 HEAD `1ccaa50`。**本节不写"文件共 N 行"以外的推断**；所有数字本轮逐条重取过一次。
+行数一律 `wc -l` 实测：**真实侧** `git -C ~/.hermes/hermes-agent show f5d1926110:<路径> | wc -l`；**mini 侧** `wc -l mini-hermes/<路径>`。锚：真实侧 `f5d1926110`、mini 侧 HEAD `1ccaa50`。**本节不写"文件共 N 行"以外的推断**；所有数字本轮逐条重取过一次。
 
 **B-1 · 真实侧（锚 `f5d1926110`，10 个文件）**
 

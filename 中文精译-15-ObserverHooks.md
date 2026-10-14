@@ -374,7 +374,7 @@ def on_post_tool_call(**kwargs):
 
 ## 附录 B · 本篇提到的文件与实测行数
 
-行数一律 `git -C $HOME/.hermes/hermes-agent show f5d1926110:<路径> | wc -l` 实测；文档侧行号取自原文（`wc -l` = **331 行**）。**实测锚 `f5d1926110`。**
+行数一律 `git -C ~/.hermes/hermes-agent show f5d1926110:<路径> | wc -l` 实测；文档侧行号取自原文（`wc -l` = **331 行**）。**实测锚 `f5d1926110`。**
 
 **B-1 · 原文结构实测（段 · 行号 · 行数 ↔ 本篇节，行号均为实测）**
 

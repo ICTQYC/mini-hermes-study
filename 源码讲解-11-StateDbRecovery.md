@@ -709,7 +709,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 
 > 本附录把 §一~§九 正文放不下、或不必塞进「② 读 Hermes 的代码」单块的 `文件:行号` 集中归档，**按文件分组**。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
-> - **真实侧**锚 `f5d1926110`：`git -C $HOME/.hermes/hermes-agent show f5d1926110:<path> | sed -n 'Np'`
+> - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path> | sed -n 'Np'`
 > - **mini 侧**锚当前 HEAD（`d269953`，工作区干净）：`sed -n 'Np' mini-hermes/<path>`
 > - 全部行号**逐条打印核对过**；括号里的说明只是「它在说什么」，不当逐字引文用。
 
@@ -920,14 +920,14 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 **1. §3 把 `sessions repair` 的默认备份称为 "a SQLite backup"，源码里它是「原始字节拷贝」（raw-copy）。**
 
 ```console
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n '855p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n '855p'
     transactionally, so canonical rows are never modified by a failed attempt. A raw backup is taken first
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n '478,479p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n '478,479p'
 def _backup_db_file(db_path: Path) -> "Tuple[Optional[Path], Optional[str]]":
     """Raw-copy a (possibly malformed) DB plus sidecars to a timestamped backup.
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_cli/sessions_cmd.py | sed -n '115p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_cli/sessions_cmd.py | sed -n '115p'
     report = repair_state_db_schema(db_path, backup=not getattr(args, "no_backup", False))
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n '684p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n '684p'
         source.backup(destination, pages=256, progress=_check_deadline, sleep=_REPAIR_LOCK_POLL_SECONDS)
 ```
 
@@ -939,7 +939,7 @@ $ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed
 **2. §3 的触发器验证 SQL 只列了 3 个名字，而 schema 定义的是 6 个。**
 
 ```console
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_state_common.py | sed -n '321,322p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_common.py | sed -n '321,322p'
 _FTS_TRIGGERS = ("messages_fts_insert", "messages_fts_delete", "messages_fts_update",
                  "messages_fts_trigram_insert", "messages_fts_trigram_delete", "messages_fts_trigram_update")
 ```
@@ -951,7 +951,7 @@ _FTS_TRIGGERS = ("messages_fts_insert", "messages_fts_delete", "messages_fts_upd
 **3. §1 把重建只归到 "a later `SessionDB` open"，漏了长命网关的进程内重试（不完整，非矛盾）。**
 
 ```console
-$ git -C $HOME/.hermes/hermes-agent show f5d1926110:hermes_state_schema.py | sed -n '562,565p'
+$ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_schema.py | sed -n '562,565p'
     """Retry a deferred stale-FTS rebuild (gateway housekeeping tick). ``_recover_stale_fts``
     fails closed at open, leaving search on LIKE; live write/search paths must never
     start a full rebuild, and a gateway opens state.db once for days, so "next open"

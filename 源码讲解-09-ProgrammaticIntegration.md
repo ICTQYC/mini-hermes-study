@@ -8,7 +8,7 @@
 > —— 官方原文 `programmatic-integration.md:21`
 
 > **原文**：`website/docs/developer-guide/programmatic-integration.md`（官方 216 行）
-> **源码锚**：`$HOME/.hermes/hermes-agent/`，commit `f5d1926110`（`version = "0.21.3"`）。
+> **源码锚**：`~/.hermes/hermes-agent/`，commit `f5d1926110`（`version = "0.21.3"`）。
 > 本文所有 `文件:行号` 都对齐这一个 commit；**没实际读到的行号一律不写**（只写文件路径）。
 
 **口径说明**

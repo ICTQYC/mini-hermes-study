@@ -4,7 +4,7 @@
 > 副标题逐字：*How micro-compaction amortizes context compression cost: triggers, tail sizing, the cached-prefix trade-off*）。
 > **本篇定位**：精译为主（看懂"压缩的成本可以分期付 —— 它的触发、尾部尺寸、以及那份缓存前缀代价"）。
 > 它是第 5 章《上下文压缩与缓存》的**兄弟篇**：同一件事的另一条入口。差异与源码深挖留给《源码讲解-10》。
-> **📌 行号锚**：真实源码 `$HOME/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
+> **📌 行号锚**：真实源码 `~/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
 > **本章出入**：轻量核对 3 处（见附录 C）—— 只核**可指认的数字 / 引文 / 字段**（默认值、引文出处、遥测字段），细节不逐条对。
 
 [TOC]

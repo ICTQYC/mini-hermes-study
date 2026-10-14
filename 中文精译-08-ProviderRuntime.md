@@ -3,7 +3,7 @@
 > **原文**：`website/docs/developer-guide/provider-runtime.md`（**222 行**，官方侧边栏 `developer-guide` 第 15 位；
 > 同时是 `architecture.md`「Recommended Reading Order」的**第 4 篇** —— 两份官方推荐口径**唯一共同点名**、我们此前一直没做的一篇）。
 > **本篇定位**：精译为主（看懂"这一层在干什么、为什么必须有"）。差异与源码深挖留给《源码讲解-08》。
-> **📌 行号锚**：真实源码 `$HOME/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
+> **📌 行号锚**：真实源码 `~/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
 > 本文所有 `文件:行号` 都对这个 commit（本篇只用到文件级引用，行号在源码讲解里给）。
 > **本章出入处数**：轻量核对 3 处（见附录 C）—— 按 2026-10-10 定的新口径，只核**架构性声明**，
 > 细节不逐条对（学习用，不为细节付成本）。

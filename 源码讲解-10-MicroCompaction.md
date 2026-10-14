@@ -4,7 +4,7 @@
 > —— 《中文精译-10-MicroCompaction》§0
 
 > **原文**：`website/docs/developer-guide/micro-compaction.md`（**406 行**）。
-> **真实源码锚**：`$HOME/.hermes/hermes-agent/`，commit **`f5d1926110`**（`version = "0.21.3"`）。
+> **真实源码锚**：`~/.hermes/hermes-agent/`，commit **`f5d1926110`**（`version = "0.21.3"`）。
 > **mini 源码锚**：`mini-hermes/`，commit **`f261aa2`**（本章 mini **已实现**）。
 > 本文所有 `文件:行号` 都对齐这两个 commit；**没实际读到的行号一律不写行号**（只写文件路径）。行数一律 `wc -l` 口径。
 
@@ -600,7 +600,7 @@ no-op 的落点很干净（`agent/micro_compaction.py:216-218`）：先要求 `l
 
 ## 附录 A · 从正文挪过来的引用
 
-> 下列 `文件:行号` 的**行号均已逐条 `sed` 核对**（真实侧 `$HOME/.hermes/hermes-agent/` 锚 `f5d1926110`；mini 侧 `mini-hermes/` 提交 `f261aa2`）。每条一句「它在说什么」+ ≤3 行逐字引文。
+> 下列 `文件:行号` 的**行号均已逐条 `sed` 核对**（真实侧 `~/.hermes/hermes-agent/` 锚 `f5d1926110`；mini 侧 `mini-hermes/` 提交 `f261aa2`）。每条一句「它在说什么」+ ≤3 行逐字引文。
 
 **A-1** `agent/micro_compaction.py:3-5` —— 模块定位：滚动式逐交换摘要、**默认关**。
 ```
