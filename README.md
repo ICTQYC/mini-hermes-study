@@ -19,6 +19,31 @@
 
 零第三方依赖，只用 Python 标准库；需要 Python **3.9+**（3.9.6 与 3.13.14 都实测跑过全套测试）。
 
+### 开箱即用清单
+
+**clone 下来直接就能跑的**：`./mini --list-toolsets`、`./mini --doctor`（**不需要密钥**）；
+测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,588 / 1,584 · 0 失败**。
+
+**要自己准备的三样**（前两样按需）：
+
+| # | 要什么 | 用在哪 | 怎么办 |
+|---|---|---|---|
+| ① | **一个 provider 密钥**（默认 DeepSeek，也可换别家） | 真问答（要调 API） | `mkdir -p ~/.mini-hermes && echo 'DEEPSEEK_API_KEY=你的key' >> ~/.mini-hermes/.env`；没配时报错会列出查过哪几个文件 |
+| ② | 上游**文档镜像**（可选） | 各章「原文：`官方文档-Developer-Guide/…`」的引用 | 下面的同步命令（上游内容是别人的，**不随仓分发**） |
+| ③ | 上游**源码**（可选） | 各章「真实源码 `文件:行号`」的引用（锚上游 commit `f5d1926110`） | `git clone https://github.com/NousResearch/hermes-agent ~/.hermes/hermes-agent`（或忽略行号，只看结论） |
+
+**②的同步命令**（在仓库根跑一次；镜像目录是 gitignore 的）：
+
+```bash
+git clone --depth 1 https://github.com/NousResearch/hermes-agent /tmp/hermes-agent
+mkdir -p 官方文档-Developer-Guide
+cp /tmp/hermes-agent/website/docs/developer-guide/*.md 官方文档-Developer-Guide/
+ls 官方文档-Developer-Guide/*.md | wc -l    # 期望 49
+```
+
+**平台**：`mini` 是 bash 启动脚本 + 纯标准库 ⇒ **macOS / Linux 直接跑**；
+**Windows 需要 WSL 或 Git-Bash**（没在原生 cmd / PowerShell 上验证过）。
+
 **跑 mini**：
 
 ```bash
