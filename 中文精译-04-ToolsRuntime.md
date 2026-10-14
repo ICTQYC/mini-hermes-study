@@ -5,9 +5,9 @@
 > `tools/approval.py`（1336 行）+ 7 个 `approval_*.py` 兄弟、`tools/environments/*`、
 > `agent/inline_tool_executors.py`（241 行）
 >
-> 📌 **本文里 mini 版的数字（行数 / 工具数 / 测试条数）锚的是标签 `ch04-tools-runtime`**
-> —— 也就是第 4 章末的状态。行号会随章节漂移，标签不会：
-> `git show ch04-tools-runtime:mini-hermes/tools/registry.py`。
+> 📌 **本文里 mini 版的数字（行数 / 工具数 / 测试条数）主实现锚 `db47e97`；搜索工具侧线锚 `0d8d3ff`**
+> —— 也就是第 4 章末的状态。已有章节标签后来移到了统一维护提交，不能再据此重现原章规模：
+> `git show db47e97:mini-hermes/tools/registry.py`。
 
 > mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
 
@@ -17,7 +17,7 @@
 
 ## 0. 这一章的一句话
 
-**工具不是被"调用"的，是被"发现"的。**
+**工具先被发现和注册，再经过暴露过滤，最后才被调用。**
 
 前两章里，模型和工具的接口是"名字 → 一个函数"。这一章回答：
 **那个映射表是怎么长出来的？谁往里放东西？放进去的东西为什么会在某些时候消失？**
@@ -181,7 +181,7 @@ every tool file*）——它 import 的东西只有标准库。
 
 **砍掉会怎样**：你会得到一张手工维护的表 + 一个永远在涨的 import 列表。
 在第 3 章我们已经在别的地方见过这个模式的代价（`if/elif` 链条漂移分家）。
-这里多一个具体后果：**工具文件之间开始互相 import**（因为把它们串起来的那个文件得认识所有人）。
+这里的代价是**中央文件依赖所有工具实现**；这不意味着工具文件必须互相 import。
 
 ---
 
@@ -353,11 +353,11 @@ Toolset 是**具名的工具捆**。Hermes 通过以下途径解析：
 |---|---|---|
 | "Telegram 上不要浏览器工具" | 要列 18 个名字，且**新增浏览器工具会漏** | 一句 `browser` |
 | 平台预设 | 每个平台维护一份长名单 | 继承 `_HERMES_CORE_TOOLS` + 加减 |
-| 别名兼容 | 做不到 | `_LEGACY_TOOLSET_MAP` |
+| 别名兼容 | 可以另建别名映射 | `_LEGACY_TOOLSET_MAP` 集中处理 toolset 旧名 |
 
 **关键差别还是"会不会漏"**：按名字列举的名单会**随着工具增加而过期**，
 而过期是静默的（第 2 章第 3 次出现的同一形状）。Toolset 是**间接一层**，
-所以新增工具**默认落在它所属的 toolset 里**，不需要改任何名单。
+toolset 可以减少平台侧重复维护，但新增核心工具仍需在 `toolsets.py` 登记；`register()` 的 toolset 字段不能代替这张暴露白名单。
 
 **砍掉会怎样**：每个平台都要维护自己的完整工具名清单。59 个核心工具 × 多个平台，
 每加一个工具就要改 N 个地方——这是"手工名单"问题的放大版。
@@ -470,7 +470,7 @@ handler 是 async 时，`_run_async()` 把它桥到同步分发路径上：
 **为什么错误包装要"两层甚至三层"？** 原文给了直接理由：
 *This ensures the model always receives a well-formed JSON string.*
 
-但更根本的理由是**工具是这个系统里唯一"用户代码也能写"的部分**（第 5 章会讲插件）：
+但更根本的理由是**工具是用户代码可以扩展的部分之一**；插件还可扩展 provider、上下文引擎等：
 
 - 核心工具的异常，开发时就会发现
 - **插件工具的异常，只在那个人用的时候才发现**
@@ -579,7 +579,7 @@ Smart 审批     → 辅助 LLM → 一次额外 API 调用
 > threads. Receipt redaction is forced independently of live-output opt-out; retention is
 > bounded by age and count.
 
-这一段逐句翻译见 §7.2 ——它值得单拆，因为**每一句都在防一个具体的竞态或越权**。
+这一段逐句翻译见《源码讲解-04》的附录 B、§7 第④项 ——它值得单拆，因为**每一句都在防一个具体的竞态或越权**。
 
 ### 为什么这么设计 / 砍掉会怎样
 
@@ -704,11 +704,11 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 | ① | **手写名单 → AST 自动发现** | 本章核心。手写名单的失效模式是**静默少一个工具** | 中 | ✅ 做了 |
 | ② | **加 `check_fn` + 发 schema 前过滤** | 让"没配好就不发给模型"这件事在 mini 里也能演示 | 小 | ✅ 做了（含抖动保护） |
 | ③ | **加 toolset 解析（含"注册≠暴露"）** | mini 已经有 `toolset` 字段但没人用——把语义补上 | 中 | ✅ 做了 |
-| ④ | **错误返回改 JSON 字符串 + 截断** | 契约问题。纯文本错误模型解析不了 | 小 | ✅ 做了（**成功**结果也一起改了） |
+| ④ | **错误返回改 JSON 字符串 + 截断** | 契约问题。统一 JSON 结构便于程序识别错误并从历史重建状态；模型也能读纯文本 | 小 | ✅ 做了（**成功**结果也一起改了） |
 | ⑤ | **加 `_AGENT_LOOP_TOOLS` 守卫** | 让"这 4 个不该被独立调用"变成结构保证 | 小 | ✅ 做了（mini 只有 1 个） |
 | ⑥ | **加 `_LEGACY_TOOL_ALIASES`** | 演示"对外收窄、对内兼容" | 极小 | ✅ 位置留了，空表 |
 | ⑦ | **危险检测挪到一处** | mini 现在是"工具自己带检测"，没有单一事实来源 | 小 | ✅ 做了 |
-| ⑧ | 只留 local 后端，但**把后端表的位置留出来** | 见 §7 的"动手" | 小 | ✅ 做了 |
+| ⑧ | 只留 local 后端，是否预留后端表 | 见 §7 | 小 | ❌ 未建表；顶部注释记录取舍，见源码讲解 §七 |
 | ⑨ | **（计划外）补上 `search_files`** | 提示词一直在宣传它，但它**不存在**（详见《源码讲解-04》§十） | — | ✅ 做了 |
 | ❌ | async 桥接 | mini 没有 async 工具 —— **记录"为什么可以不做"** | — | 不做 |
 | ❌ | 107 条危险模式 | 把检测挪到一处就够，**抄数量没有教学价值** | — | 只留 10 条 |
@@ -729,12 +729,12 @@ interactive: bool = False,   # interactive=True 的工具会强制整批工具�
 | `model_tools.py` | ✅ 293 行（AST 发现 + toolset 解析 + 分发） | `model_tools.py`（987 行） |
 | `toolsets.py` | ✅ **新建** 144 行（4 个 toolset） | `toolsets.py`（485 行，60 个 toolset / 59 个核心工具） |
 | `tools/approval.py` | ✅ **新建** 84 行（危险检测的唯一事实来源） | `tools/approval.py` + 7 个兄弟 = 8 文件 |
-| `tools/terminal.py` | ✅ 115 行（只有 local；后端表的位置留着） | `tools/terminal_tool.py` + `terminal_tool_backends.py` |
+| `tools/terminal.py` | ✅ 只有 local；未建立后端表，注释说明了取舍 | `tools/terminal_tool.py` + `terminal_tool_backends.py` |
 | `tools/file_tools.py` | ✅ 147 行（结果改 JSON） | `tools/file_tools*.py` |
 | `tools/search_files.py` | ✅ **新建** 130 行（★ 计划外，详见《源码讲解-04》§十） | `search_files`（走 ripgrep） |
 | `tools/web_search.py` | ✅ **新建** 102 行（凭据型 `check_fn` 的活例子） | `web_search`（需 key；未配则**不发**） |
 | `tools/todo.py` | ✅ 267 行（**未动**，含 `AGENT_LEVEL_TOOLS`） | `tools/todo_tool.py` + `agent/inline_tool_executors.py` |
-| `tests/test_tools_runtime.py` | ✅ 89 条 / 10 组 | — |
+| `tests/test_tools_runtime.py` | 主实现历史报告 54 条 / 6 组；搜索侧线完成后 89 条 / 10 组 | — |
 | `tools/web_search.py` | ✅ **新建**（§0.5 之后的验收题：加工具只碰两个文件） | — |
 | `run_agent.py` 的 `INLINE_TOOL_EXECUTORS` | ✅ 第 2 章就有（1 个 key） | `agent/inline_tool_executors.py`（14 个 key） |
 
@@ -750,10 +750,10 @@ tools/terminal.py             78    →      115 行
 tools/file_tools.py           92    →      147 行
 tools/search_files.py       （无）   →      130 行
 tools/todo.py                267    →      267 行（未动）
-测试断言                     221    →      310 条（154 + 54 + 13 + 89）
-测试代码行数                1980    →     2888 行
-源码（不含测试与 demo）     3668    →     4813 行
-含测试与 demo 总行数        5924    →     7636 行
+测试断言                     221    →      275 条（主实现历史报告：154 + 54 + 13 + 54）
+测试代码行数                1980    →     2682 行（左列 338c78f；右列 db47e97）
+源码（不含测试与 demo）     3668    →     4678 行
+含测试与 demo 总行数        5924    →     7636 行（均用 wc -l 复核）
 ```
 
 **对照 Hermes 的规模**：`tools/` 下 258 个 `.py`，其中 43 个是工具模块。
@@ -770,7 +770,7 @@ mini 现在有 **4 个**工具模块（terminal / file_tools / search_files / to
 | `process_registry` 的两半 | 没有后台进程的持久化/接管 | 等有"重启后恢复进程"的需求 |
 | Smart 审批（辅助 LLM 自动批准） | 每条命中都要人答一次 | 第 5 章之后（需要 LLM 调用能力） |
 | 永久允许清单落盘 | 每次新会话都要重新批准 | 等有 `config.json` 的读写层 |
-| MCP / 插件两批发现 | 没有外部工具来源 | 第 5 章（插件）/ 更后面（MCP） |
+| MCP / 插件两批发现 | 没有外部工具来源 | 通用插件或 MCP 真有消费者时（第 5 章实际讲压缩） |
 | 107 条危险模式 | 只拦最常见的几类 | 抄"挪到一处"的结构就够，数量不抄 |
 
 > **核心取舍一句话**：这一章的价值 70% 在**"发现机制 + 注册≠暴露 + 两层 agent 级工具集合"**
@@ -861,7 +861,7 @@ $ ls tools/environments/*.py | wc -l
 | `_BUILTIN_BACKENDS` | 7 个（local/docker/singularity/modal/daytona/vercel_sandbox/ssh） | `tools/terminal_tool_backends.py:54` |
 | `_CONTAINER_BACKENDS` | 5 个 | `tools/terminal_tool_config.py:64` |
 
-### C.6 第 4 章末的 mini：实测输出
+### C.6 第 4 章实现初期的 mini：历史实测输出
 
 **① AST 自动发现（`_BUILTIN_MODULES` 手写名单已删）**
 
@@ -931,4 +931,4 @@ $ /usr/local/bin/python3    # 3.13.14
 $ /usr/bin/python3          # 3.9.6 —— 同上，全过
 ```
 
-**合计 295 条。**
+**这份早期输出合计 275 条**（54 + 154 + 13 + 54），不是 295；第 4 章后续侧线扩展到 310 条。这里保留当时报告的输出，当前隔离复跑历史提交时也可能暴露后来修复的环境依赖。

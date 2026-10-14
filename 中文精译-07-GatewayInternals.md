@@ -19,7 +19,7 @@
 前面六章讲的都是**一个 agent 在自己的进程里**怎么跑。这一章讲的是**外面那层**：
 消息从哪来、谁有资格进来、进来之后归哪个会话、以及它凭什么能一直活着。
 
-一句话概括：**网关是"唯一常驻的那个进程"，也是"在 agent 之前说'不'的那道门"。**
+一句话概括：网关负责常驻的平台接入，并在进入 agent 之前执行准入检查。**
 
 ```
 外部平台（20+ 个：Telegram / Discord / Slack / 飞书 / 企业微信 …）
@@ -110,8 +110,8 @@
 
 1. **适配器是"平"的**：每个平台一个，互不知道对方存在，只对下层的 `_handle_message()` 负责。
 2. **`_handle_message()` 是唯一的咽喉**：所有平台的入站都从这里过 → 所以守卫、授权、命令分发都挂在这。
-3. **会话存储在最底下**：也就是说"网关不持有对话状态，它只是让 status 落到持久化层"，
-   下一轮要用的历史得从 `SessionStore` 读回来（第 6 章那个库）。
+3. **会话存储在最底下**：完整消息历史由持久化层提供；网关仍持有运行中的 agent、忙碌标记、队列等内存状态。
+   下一轮要用的消息列表从 `SessionStore` 读回来（第 6 章那个库）。
 
 ---
 
@@ -135,7 +135,7 @@
 
 ### 会话键格式
 
-会话键编码了**完整的路由上下文**：
+下式是基本形状；真实会话键还可能包含平台作用域、话题或用户等路由字段：
 
 ```
 agent:{命名空间}:{平台}:{聊天类型}:{聊天 id}
@@ -374,7 +374,7 @@ connector 侧公布一个 `CapabilityDescriptor`；Hermes 可以往回发普通�
 | **跨平台投递** | 投到**与来源不同**的平台 |
 
 ⚠️ **cron 任务的投递不会镜像进网关会话历史** —— 它们只活在**自己的 cron 会话**里。
-这是一个**有意的设计选择**：为了避免**消息角色交替违规**（第 2 章那条"两条同角色消息不能相邻"）。）
+这是一个**有意的设计选择**：为了避免**消息角色交替违规**（各 provider 的消息序列约束详见第 2 章）。
 
 ---
 
@@ -564,7 +564,7 @@ AIAgent._invoke_tool()
 第 5 章  上下文压缩与缓存     —— 窗口满了怎么办（含**网关侧**那道兜底）
 第 6 章  会话存储            —— 上面这些**落在哪**（SQLite）
 第 7 章  网关内部 ★本章      —— **外面那层**：谁能进、归哪个会话、怎么活着、怎么发回去
-（第 8 章之后：插件 / 技能 / 工具群 —— 仍是占位，未定）
+后续章节：网关族扩展 7.1/7.2、Provider Runtime、嵌入式集成、微压缩与恢复等
 ```
 
 **本章收的三笔债**（前面章节挂过来的）：
@@ -620,7 +620,7 @@ AIAgent._invoke_tool()
 | `AIAgent._invoke_tool()` → `_memory_manager.handle_tool_call` | ✅ `agent/inline_tool_executors.py:238`、`agent/tool_executor.py:1569` |
 | `gateway.pid` | ✅ `gateway/status.py:158` |
 | `live_gateway_pid_for_home`（PID + 启动时间指纹） | ✅ `gateway/status.py:1121` |
-| §13 那张绑定表里的 6 个函数 | ✅ 逐个核过定义位置（`run.py:1751`、`run_turn.py:2166`、`run_agent_cache.py:698`、`platforms/base.py:3312`、`cron/scheduler_provider.py:95`、`tools/environments/local.py:345`、`agent/memory_provider.py:29`） |
+| §13 那张绑定表里的 7 个函数 | ✅ 逐个核过定义位置（`run.py:1751`、`run_turn.py:2166`、`run_agent_cache.py:698`、`platforms/base.py:3312`、`cron/scheduler_provider.py:95`、`tools/environments/local.py:345`、`agent/memory_provider.py:29`） |
 | `set_multiplex_active` / `UnscopedSecretError` 在 `agent/secret_scope.py` | ✅ `:27` / `:52` |
 | `apply_yaml_bridge` / `platform_gate_env` 在 `gateway/platforms/_shared.py` | ✅ `:189` / `:69` |
 | `profiles_to_serve(multiplex=True)` 在 `hermes_cli/profiles.py` | ✅ `:802` |
@@ -631,7 +631,7 @@ AIAgent._invoke_tool()
 ### 文档没写、但值得知道的两条（实测补上）
 
 1. **`gateway/run.py` 门面拆出的是 21 个兄弟**（原文只列了 8 个 + 省略号）——
-   其中 `run_turn*` 自己就占 5 个（`run_turn`、`run_turn_followup_ack`、`run_turn_runner`、
+   其中 `run_turn*` 自己就占 4 个（`run_turn`、`run_turn_followup_ack`、`run_turn_runner`、
    `run_turn_runner_approval_settle`），说明"一整轮"这件事在真实版里被切得很细。
 2. **平台的插件目录不止 `adapter.py` + `plugin.yaml`**：例如 `plugins/platforms/telegram/`
    还有 `inline_picker.py`、`telegram_context.py`、`telegram_entities.py`、`telegram_ids.py`、

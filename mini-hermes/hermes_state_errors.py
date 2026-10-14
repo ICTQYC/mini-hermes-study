@@ -157,10 +157,10 @@ def is_structural_corruption_error(exc: BaseException) -> bool:
     但**判定式子照抄**：`DatabaseError` 且 不是 `StateDbCorruptError` 且 不是 FTS 归因
     且 `classify_persistence_error == "corrupt"`。
 
-    ★ "裸码"这条规则的落点：`is_fts_scoped_corruption_error` 的**码优先**意味着
-      裸 `SQLITE_CORRUPT`/`SQLITE_NOTADB` 永远拿不到 FTS provenance，
-      于是它们必然落到 `"corrupt"` 桶 → 这里为真 → 上层停写隔离。
-      两个谓词是**互斥**的，不是程度差异：分类顺序错了就整条走错路。
+    ★ 裸 `SQLITE_CORRUPT`/`SQLITE_NOTADB` 不取得 FTS provenance，
+      但是否落到 `"corrupt"` 桶还取决于损坏词表；并非有码就必然隔离。
+      例如 `vtable constructor failed: messages_fts`（码 11）仍归 `unknown`。
+      两个处置谓词互斥；未被分类的异常原样抛给调用方。
     """
     return (
         isinstance(exc, sqlite3.DatabaseError)

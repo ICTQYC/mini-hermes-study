@@ -1,10 +1,12 @@
 # 源码讲解 · 第 14 章：上下文引擎插件（Context Engine Plugins）
 
-> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。维护节说明当前契约；正文与附录仍含各阶段源码片段，按段内提交读取。
 
-> 上游：`官方文档-Developer-Guide/context-engine-plugin.md`（272 行）· 中文精译见 `中文精译-14-ContextEnginePlugin.md`（416 行）。
-> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号按当前维护后的实现核对（历史实现 commit `a6ed019`；本章是**插槽化已有部件**，不是新压缩机制）。
+> 上游：`官方文档-Developer-Guide/context-engine-plugin.md`（272 行）· 中文精译见 `中文精译-14-ContextEnginePlugin.md`（420 行）。
+> 真实侧行号锚 `f5d1926110`（v0.21.3）· 维护节为当前行为，正文与附录的历史片段按各自提交读取（历史实现 commit `a6ed019`；本章是**插槽化已有部件**，不是新压缩机制）。
 > ★ **引用归属约定**：mini 侧引用一律写成 `mini-hermes/<路径>:<行号>`；**未带 `mini-hermes/` 前缀的裸 `文件:行号` 一律指真实侧**。
+
+> 缓存边界：选择改变消息时，只能确定首个变化处之后需要重新计算；更早的公共前缀仍可能命中缓存。默认钩子的身份检查仍有执行成本，“零开销”特指不调用钩子、不克隆其参数。
 
 [TOC]
 
@@ -133,7 +135,7 @@ docstring 逐字：
 实现是 `:1176`：`return getattr(hook, "__func__", None) is not getattr(_CE, name)` ——
 **比较函数对象与 ABC 默认是不是同一个**。子类真覆盖了才调，没覆盖直接跳过（§四 展开）。
 
-**② 选择钩子排在缓存与清洗之后之前的位置是**载重**的。** `select_context` 由
+**② 选择钩子必须排在缓存控制与请求清洗之前。** `select_context` 由
 `agent/turn_request_assembly.py:142` 调用，**先于**同文件的 `_sanitize_api_messages`（`:148`）
 与 `evict_stale_outbound_tool_images`（`:155`）。ABC 的 docstring 把理由写死（`agent/context_engine.py:131-135`）：
 
@@ -230,7 +232,7 @@ docstring 逐字：
 | **引擎工具注入** | `get_tool_schemas` / `handle_tool_call` + `_inject_context_engine_tools` 按 `enabled_toolsets` 门控、去重（`agent/agent_init.py:1948-1990`） | 已对齐**钩子形状**、⬜ 没做（注入路径）：mini ABC 有 `tools()` 占位（`mini-hermes/agent/context_engine.py:95-97`，默认 `[]`），但不建注入（无引擎带工具可测） |
 | **线程安全契约** | 池化 daemon 线程 / 深快照 / 只在 commit 发布 / 每会话一 pass（`agent/conversation_compression.py:1-9`） | ⏭ 不抄（理由）：mini 的压缩**同步、内联**跑在 `_preflight_compression`（`mini-hermes/run_agent.py:1724-1763`），无线程池；写这种契约会变成「没人验证的注释」（与 `mini-hermes/agent/context_compressor.py` 自记的「注释里点名不存在的开关」同一个病） |
 | **仓库是否内置独立引擎** | **否**：`plugins/context_engine/` 只有 `__init__.py`（93 行）、零子目录 | 已对齐（结构同）：`<MINI_HOME>/engines/` 由用户放目录；内置压缩器住 `mini-hermes/agent/context_compressor.py`，**不经**发现路径 |
-| **每模型阈值表** | `update_model` 重算 + 每模型阈值（最长子串匹配）+ 配置 percent 只快照一次（`agent/context_engine.py:225-242`） | ⏭ 不抄（理由）：mini 只有一个模型（`DEFAULT_CONTEXT_LENGTH` + 环境变量口子），逐模型覆盖表没有第二个键可覆盖 |
+| **每模型阈值表** | `update_model` 重算 + 每模型阈值（最长子串匹配）+ 配置 percent 只快照一次（`agent/context_engine.py:225-242`） | ⏭ 不抄（理由）：mini 已支持主模型、回退模型与辅助路由，但尚未实现逐模型阈值配置表 |
 
 > **读法**：这张表里**只有「抽象面 / 默认面 / 选择键 / 零配置不走发现 / 目录发现 / 唯一构造点 / 回落有声」**
 > 是本章真正动过的东西；其余 `⏭` 行是**结构性不抄**（没有消费者），`⬜` 行是**量级**（真实侧有 15 个钩子，
@@ -240,7 +242,7 @@ docstring 逐字：
 
 ## §一 插槽的工作原理（How it works）
 
-**① Hermes 怎么做的**：上下文管理是**有损**的 —— 压缩一定丢东西。而「什么该留」**强依赖场景**：
+**① Hermes 怎么做的**：内置摘要压缩是**有损**的；其他上下文引擎可以采用不同策略。而「什么该留」**强依赖场景**：
 代码仓库要留文件路径和命令，长对话要留用户原话，法律文档要留条款编号。Hermes 没法替所有人决定，
 于是把这**决策**抽成一个可替换接口：agent 只需要「一个能回答*该不该压*、*怎么压*的对象」，
 不需要知道它是谁。**不做这件事会坏在哪**：换策略 = 改宿主代码 —— 每换一种压缩思路，
@@ -303,7 +305,7 @@ def _compressor(self) -> "Any":
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 选择入口 | `agent/agent_init.py:1761 _select_context_engine` | 同形，落在 `mini-hermes/run_agent.py:1590 _compressor()` + `mini-hermes/agent/engine_registry.py::select_engine():291` |
-| 解析链 | `context.engine` → 目录 → 通用插件系统 → 内置（4 段） | 只有 **2 段**：`context.engine` → 目录 → 内置（mini 无插件系统） |
+| 解析链 | `context.engine` → 目录 → 通用插件系统 → 内置（4 个节点） | 只有 **3 个节点**：`context.engine` → 目录 → 内置（mini 无插件系统） |
 | 返回形态 | `None` 表示内置、否则返回实例 | 结构化 `EngineSelection(engine, requested, used, fell_back, warning)`（`mini-hermes/agent/engine_registry.py:124-144`）—— 让「回落」能被调用方**读出来并打印** |
 | 接缝数 | 构造点 + 生命周期 seam + 每回合钩子 | **1 处**（`_compressor()`）；生命周期/每回合钩子 mini 未接 |
 
@@ -593,9 +595,9 @@ mini 不要求所有引擎都有这些展示字段；缺少它们时使用 ABC �
 
 | 面 | 规则 | 不做会坏在哪 |
 |---|---|---|
-| **失败放行（fail-open）** | 两者默认 `return None`；缺钩子 / 抛异常 / 返回值无效 ⇒ 请求保持原样 | 一个出故障的引擎**绝不**比不装引擎更糟 |
+| **失败放行（fail-open）** | 两者默认 `return None`；缺钩子 / 抛异常 / 返回值无效 ⇒ 请求保持原样 | 这保证异常时回到原请求；仍无法约束钩子耗时和自行产生的外部副作用 |
 | **仅限请求（request-only）** | `select_context` 返回的列表只替换**单次** provider 调用的消息；持久化转写本**永不**被写（宿主给的是结构克隆） | 引擎一次误写就污染了会话历史 |
-| **次序 / 缓存稳定** | 选择钩子在提示词缓存控制**之前**、在每个请求清洗器(sanitizer) **之前**运行；默认空操作让请求**逐字节一致** | 换前缀 = 提示词缓存全部失效；放 sanitizer 之后 = 替换绕过校验 |
+| **次序 / 缓存稳定** | 选择钩子在提示词缓存控制**之前**、在每个请求清洗器(sanitizer) **之前**运行；默认空操作让请求**逐字节一致** | 换前缀 = 提示词缓存从首个变化处失配；放 sanitizer 之后 = 替换绕过校验 |
 | **覆盖度尽力而为** | `on_turn_complete` 从标准回合收尾接缝(finalization seam)触发；回环里某些异常提前返回（内容策略拦截、provider 终态失败）会持久化并返回而不经收尾，因此**不**发出该钩子 | 把它当"每次退出的保证回调"就会漏观测 |
 
 ★ **零成本钩子的手法（本节的源码依据）**：宿主规定**非实现引擎每回合必须付零成本**。这个判定**不能靠 `hasattr`** —— ABC 给这些钩子定义了 no-op 默认，`hasattr(engine, "select_context")` 恒为 `True`。正确的判据是**身份比较**：只有当引擎上的属性与其 ABC 默认**是同一个函数对象**时才算"它继承了默认"，此时宿主直接跳过、连参数克隆都不做：
@@ -615,9 +617,9 @@ return getattr(hook, "__func__", None) is not getattr(_CE, name)
 ### 何时用这些钩子、何时不要用（When to use these hooks — and when NOT to）
 
 - **只有当你的引擎必须*替换*每请求上下文时才实现 `select_context()`** —— 检索增强的选择、主题 / 分支路由、角色切换。它是唯一能换掉"哪些消息进入一次请求"的动词；`pre_llm_call` 按成文设计是**只注入**的（追加到 user message，绝不重写列表，以保住提示词缓存前缀）。不需要替换，就不要实现它。
-- **如果只需要回合后的观测 / 摄取**（索引、内存同步、分析），就该实现一个**内存提供者(memory provider)**，而不是上下文引擎：上下文引擎取得会话压缩策略的**所有权**，内存提供者观测回合却什么都不拥有。`on_turn_complete()` 作为观测侧镜像存在，是给那些*已经*需要 `select_context()` 的引擎用的 —— 让同一个组件能从它刚路由过的那一回合里学习 —— 而**不是**一个通用的回合回调。
-- **一次真实的 `select_context()` 会改变提示词缓存前缀**：非空操作的选择，在它改变选择的那几个回合里，那次请求的前缀不再匹配 provider 已缓存的前缀，于是那几个回合**重写**缓存而非**读取**缓存。引擎应当在**什么都没变时返回稳定的选择**（同一对象或一个等值列表），只在路由决策确实不同时才重塑上下文 —— 一个每回合都重洗的选择会静默地放弃每一次缓存复用。
-- **性能上被"奖励"不实现**：主机侧的 `_engine_overrides_hook` 用身份比较跳过从 ABC 继承的默认实现，所以不实现 `select_context` / `on_turn_complete` 的引擎在每请求 / 每回合路径上拿到的是**零额外开销** —— "不需要就别实现"不只是建议，是被代码奖励的。
+- **如果只需要回合后的观测 / 摄取**（索引、内存同步、分析），就该实现一个**记忆提供者(memory provider)**，而不是上下文引擎：上下文引擎取得会话压缩策略的**所有权**，记忆提供者观测回合却什么都不拥有。`on_turn_complete()` 作为观测侧镜像存在，是给那些*已经*需要 `select_context()` 的引擎用的 —— 让同一个组件能从它刚路由过的那一回合里学习 —— 而**不是**一个通用的回合回调。
+- **一次真实的 `select_context()` 会改变提示词缓存前缀**：非空操作的选择，在它改变选择的那几个回合里，那次请求的前缀不再匹配 provider 已缓存的前缀，于是那几个回合从变化处重新计算；更早的公共前缀仍可能命中缓存。引擎应当在**什么都没变时返回稳定的选择**（同一对象或一个等值列表），只在路由决策确实不同时才重塑上下文 —— 一个每回合都重洗的选择会减少变化处之后的缓存复用。
+- **性能上被"奖励"不实现**：主机侧的 `_engine_overrides_hook` 用身份比较跳过从 ABC 继承的默认实现，所以不实现 `select_context` / `on_turn_complete` 的引擎在每请求 / 每回合路径上拿到的是**跳过回调与参数克隆** —— "不需要就别实现"不只是建议，是被代码奖励的。
 
 **② 读 Hermes 的代码**
 
@@ -637,14 +639,14 @@ return getattr(hook, "__func__", None) is not getattr(_CE, name)
 mini **没有这两个钩子的消费者**，所以 **⏭ 不抄**。两条理由：
 
 1. **无消费者**：mini 的 agent loop 里只有两种上下文动作 —— 超阈值**压缩**与每回合**微压缩**（机制见《源码讲解-05》§〇、《源码讲解-10》），**没有**"每请求替换上下文"的需求（无检索、无主题路由、无分支切换），也**没有** memory provider 去接回合后观测。抄进来就是一圈**空接缝** —— 没有第二个消费者会去实现它。
-2. **无该性能约束**：真实侧之所以要发明 identity 跳过，是因为一个 no-op 钩子坐落在**每请求 / 每回合**的热路径上，即使什么都不做也要为参数克隆和调用买单。mini 现在**没有这条热路径**，也就没有"非实现引擎必须零成本"这条约束的落点 —— 抄了只会写成一条**没有任何代码去验证**的注释。
+2. **无该性能约束**：真实侧之所以要发明 identity 跳过，是因为一个 no-op 钩子坐落在**每请求 / 每回合**的热路径上，即使什么都不做也要为参数克隆和调用买单。mini 现在未接这两个引擎钩子（观察者有另一条热路径），也就没有"非实现引擎必须零成本"这条约束的落点 —— 抄了只会写成一条**没有任何代码去验证**的注释。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | `select_context` | ABC 默认 no-op + 宿主 identity 跳过；真实调用点 `agent/turn_request_assembly.py:142`（**先于** sanitizer，缓存不变） | ⏭ 不抄（无每请求替换上下文的消费者） |
-| `on_turn_complete` | ABC 默认 no-op + 宿主 identity 跳过；真实调用点 `agent/turn_finalizer.py:541` | ⏭ 不抄（无 memory provider / 回合观测消费者） |
+| `on_turn_complete` | ABC 默认 no-op + 宿主 identity 跳过；真实调用点 `agent/turn_finalizer.py:541` | ⏭ 不抄（无 memory provider；上下文引擎回合观测未接线） |
 | 零成本语义 | `_engine_overrides_hook`：`hook.__func__ is not ABC.method` 的身份比较（`agent/conversation_loop.py:1166-1178`） | ⏭ 不抄（mini 没有该热路径约束；这条机制已写进①） |
 | fail-open 兜底 | `None` / `[]` / 非 list / 含非 dict ⇒ 一律回未修改的请求 | ⏭ 不抄（随两个钩子一起不引入） |
 
@@ -822,22 +824,18 @@ def _transition_context_engine_session(
 
 **③ mini 的实现（现状）**
 
-⬜ **没做**。mini 的引擎只有"**一个 agent 实例内解析一次**"这一种生命周期：`mini-hermes/run_agent.py:1590-1627` 的 `_compressor()` 第一次被调用时跑一次 `select_engine(...)`，把结果缓存进 `self._compressor_obj`，此后不再重选、不再经过任何 seam。
+mini 未实现完整的引擎生命周期钩子，但已有实际会话重置路径。`AIAgent.reset_session()` 更新 session_id，丢弃 `_compressor_obj`，清任务、预算与提示词缓存，并恢复主 provider；下一次需要压缩时重新选择并创建引擎。因此同一 agent 对象可以进入新会话，不能用“一个 agent 永远等于一个会话”解释省略钩子。
 
-没有会话切换 seam：mini 的 `AIAgent` 没有 `reset_session_state`、没有 `_transition_context_engine_session`；`on_session_end` / `on_session_reset` / `on_session_start` 这三个钩子在 mini 的 ABC（`mini-hermes/agent/context_engine.py`，112 行）里**根本不存在**——它只有 `name` / `should_compress` / `compress` 三个抽象成员加四个默认实现（`update_usage` / `tools` / `describe` / `update_model`）。
-
-为什么可以没有：mini 里"**一个 agent 实例 = 一个会话**"，压缩器的状态全挂在宿主实例上（第 10 章的微压缩游标就是 `ContextCompressor` 的实例字段）。既然不存在"同一个 agent 对象跨会话复用"的路径，也就不存在"把旧会话的账带进新会话"那个窗口——三段过渡要防的坏状态在 mini 里结构上不可能出现。
-
-要抄的量级是**三样一起上**：宿主侧的过渡 seam（约 25 行）、ABC 三个可选钩子（约 20 行）、以及**真正的会话切换调用点**（mini 没有 `/new` 时重绑引擎的路径）。只抄 ABC 那三个空钩子 = 一组没有调用者的死钩子，所以按 mini 的纪律（"不做投机性基础设施"）标记为 ⬜ 没做。
+当前缺口是对插件的通知：宿主没有调用 `on_session_end` / `on_session_reset` / `on_session_start`，插件自己的连接、持久状态或收尾逻辑不会因丢弃 Python 引用而自动得到这些通知。默认压缩器通过重建清掉状态；这与完整生命周期契约不同。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 会话切换 seam | `run_agent.py:362 _transition_context_engine_session`（四段，宿主编排） | ⬜ 没有 |
+| 会话切换 seam | `run_agent.py:362 _transition_context_engine_session`（四段，宿主编排） | 有 `reset_session()`；未接四段插件钩子 |
 | ABC 生命周期钩子 | `on_session_start` / `on_session_end` / `on_session_reset`（默认空体或重置） | ⬜ 无这三个钩子 |
-| 引擎实例生命周期 | 可跨多次会话切换被 `reset` 复用 | 一个 agent 实例内解析一次并缓存（`_compressor_obj`） |
-| 跨调用校准态复位 | `on_session_reset()` 由宿主在换会话时驱动 | 无（无换会话路径，无需复位） |
+| 引擎实例生命周期 | 可跨多次会话切换被 `reset` 复用 | 首次使用时选择并缓存；`reset_session()` 丢弃，后续重建 |
+| 跨调用校准态复位 | `on_session_reset()` 由宿主在换会话时驱动 | 默认压缩器通过丢弃实例重建复位；插件生命周期通知未接 |
 
 > **未能完全确认的一条**：`carry_over_new_session_context` 在 `run_agent.py:388-389` 被 `_call_engine_hook` 调用，但 `agent/context_engine.py`（242 行）里**没有**这个方法的定义——它不在 ABC 契约内。`_call_engine_hook` 自带 `hasattr` 兜底，所以内置压缩器（不定义它）走这里只是空操作。该钩子的语义/契约来源**未在 ABC 内确认**（可能是插件侧的约定，也可能是历史遗留），这里如实标注，不猜。
 
@@ -968,13 +966,13 @@ class TestContextEngineABC:
 - **RV-1 掐多态**：把 `run_agent.py:1114` 的 `select_engine(...)` 改回写死 `ContextCompressor(...)`（恢复本章改造前的构造）⇒ **测试 7 红 / 真跑 7 红**（选了别的引擎却没被用，直接打在 I1 上）。
 - **RV-2 静默降级**：删掉回落时的 `warning`（`select_engine` 不再产警告 / 宿主不再 `_emit_status`）⇒ **测试 2 红 / 真跑 1 红**（行为可能仍是内置压缩器，但**读不出**"名字写错了"——这条专抓"静默"）。
 
-**真跑**：`mini-hermes/demos/ch14_real_run.py`（**233 行 / 12 条**）。隔离三件套（临时 `MINI_HOME` 在 import 前设，`:28-31`；`finally: shutil.rmtree` 保证不留垃圾，`:224-227`）。它真写一个最小引擎到 `<MINI_HOME>/engines/under_lossy/__init__.py`、真写配置 `{"context":{"engine":"under_lossy"}}`、建真 `AIAgent` + **真系统提示词**（`system_prompt.build_system_prompt`）+ 真工具群历史 + 真会话库（`hermes_state.SessionDB`），然后走 `agent._preflight_compression(msgs)` 这条**宿主真路径**。13 条断言里最硬的三条是：**引擎的 `compress()` 真被执行过**（计数 ≥1）、**标记文本真进了最终历史**、**标记也进了会话库 active 行**（压缩作为新世代落库）；另有一条明确选择"引擎**不碰系统提示词**"的断言（首条 `system` 逐字还是真提示词）。第 ⑤ 段是 I2 的真跑版（未知名 ⇒ 回落 + 有声），第 ⑥ 段是 I4 的真跑版（零配置的 `compress()` 输出与**直接构造**逐条相等）。
+**真跑**：`mini-hermes/demos/ch14_real_run.py`（**233 行 / 12 条**）。隔离三件套（临时 `MINI_HOME` 在 import 前设，`:28-31`；`finally: shutil.rmtree` 保证不留垃圾，`:224-227`）。它真写一个最小引擎到 `<MINI_HOME>/engines/under_lossy/__init__.py`、真写配置 `{"context":{"engine":"under_lossy"}}`、建真 `AIAgent` + **真系统提示词**（`system_prompt.build_system_prompt`）+ 真工具群历史 + 真会话库（`hermes_state.SessionDB`），然后走 `agent._preflight_compression(msgs)` 这条**宿主真路径**。12 条断言里最硬的三条是：**引擎的 `compress()` 真被执行过**（计数 ≥1）、**标记文本真进了最终历史**、**标记也进了会话库 active 行**（压缩作为新世代落库）；另有一条明确选择"引擎**不碰系统提示词**"的断言（首条 `system` 逐字还是真提示词）。第 ⑤ 段是 I2 的真跑版（未知名 ⇒ 回落 + 有声），第 ⑥ 段是 I4 的真跑版（零配置的 `compress()` 输出与**直接构造**逐条相等）。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 测试文件 | `tests/agent/test_context_engine.py`（347 行）+ `test_context_engine_host_contract.py`（193 行） | ✅ `mini-hermes/tests/test_context_engine.py`（450 行 / 7 组 / 39 条） |
+| 测试文件 | `tests/agent/test_context_engine.py`（347 行）+ `test_context_engine_host_contract.py`（193 行） | ✅ `mini-hermes/tests/test_context_engine.py`（555 行 / 7 组 / 45 条，章节审计后快照） |
 | 框架 | pytest（`class Test…` + `monkeypatch` 夹具） | 独立脚本 + `check()` + `sys.exit`（与 `mini-hermes/tests/test_compression.py` 同款） |
 | 覆盖面 | ABC 契约 + 默认实现 + 引擎工具 + **插件槽位注册** + deepcopy 单例 + **宿主生命周期** | ABC 契约 + 默认等价 + 发现容错/保留名；**无**插件槽位/deepcopy/生命周期（mini 无这些基座） |
 | 失败粒度 | pytest 报告 | 一条失败 = 一行可诊断的红；用例抛异常被逐条接住（`:436-439`），不吞掉后面的组 |
@@ -1011,7 +1009,7 @@ class TestContextEngineABC:
 9: """
 ```
 
-要害：这份契约**不是写给引擎选的**，而是"宿主已经把压缩搬上池了"这个既成事实的**推论**——注意 `context engines and memory providers included` 与 `state is published ONLY on an admitted … commit` 两处：前者说明这条契约同时约束两类扩展点（引擎与内存提供者），后者说明**"提交"是唯一的状态发布口径**，而不是"调完 `compress()` 就算数"。第 6 行的 `in-place mutation is invisible … unless the pass commits` 是这段里最容易读反的一句：它**允许**就地改（历史遗留契约，见《精译-14》§10），但就地改的可见性被绑在 commit 上，不是绑在"函数返回"上。
+要害：这份契约**不是写给引擎选的**，而是"宿主已经把压缩搬上池了"这个既成事实的**推论**——注意 `context engines and memory providers included` 与 `state is published ONLY on an admitted … commit` 两处：前者说明这条契约同时约束两类扩展点（引擎与记忆提供者），后者说明**"提交"是唯一的状态发布口径**，而不是"调完 `compress()` 就算数"。第 6 行的 `in-place mutation is invisible … unless the pass commits` 是这段里最容易读反的一句：它**允许**就地改（历史遗留契约，见《精译-14》§10），但就地改的可见性被绑在 commit 上，不是绑在"函数返回"上。
 
 **③ mini 的实现（现状）**：⏭ **不抄（无线程池；写了没人验）**。
 
@@ -1027,7 +1025,7 @@ parameters = inspect.signature(c.compress).parameters
 messages[:] = c.compress(messages, **optional)
 ```
 
-没有线程池、没有宿主超时、没有 commit fence：grep 全仓 `context_timeout` / `timeout_seconds` **零命中**（`compression.context_timeout_seconds` 这个键在 mini 里根本不存在）。mini 里确实有线程（`mini-hermes/run_agent.py:898` 的 `threading.Thread(..., name="mini-api-call")`、`:1199` 的 `ThreadPoolExecutor` 跑并发工具调用），但**都不经过引擎**。
+没有线程池、没有宿主超时、没有 commit fence：压缩配置没有 `compression.context_timeout_seconds`（`compression.context_timeout_seconds` 这个键在 mini 里根本不存在）。mini 里确实有线程（`mini-hermes/run_agent.py:898` 的 `threading.Thread(..., name="mini-api-call")`、`:1199` 的 `ThreadPoolExecutor` 跑并发工具调用），压缩不进入专用线程池；不同网关回合仍可能在各自调用线程使用各自引擎。
 
 所以不抄的理由不是"太重"，而是**没有可验证对象**：给 `ContextEngine` 加"调用可能到达任意池化线程 / 你拿到的是一份私有深快照 / 状态只在 commit 上发布"这类契约，等于写下一段**没有任何代码去执行它**的注释——mini 没有池、没有超时丢弃、没有 commit，四条约束在 mini 里既不可能被违反也不可能被验证。这正是 `mini-hermes/agent/engine_registry.py:55-59` 那句"照抄就是没有消费者的死代码"的同一个判据。**如实标注为差异，不引依赖。**
 
@@ -1051,7 +1049,7 @@ messages[:] = c.compress(messages, **optional)
 - 《源码讲解-10-MicroCompaction》——**微压缩**（每回合分期付款）。内置压缩器把微压缩作为 **mixin** 混入自己（`agent/context_compressor.py:1782` 逐字 `class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngine):`），所以"引擎"与"微压缩"是两个正交的可替换面。
 - 《源码讲解-13-CreatingSkills》——**目录发现 + 宽容计数的样板**。mini 的 `mini-hermes/agent/engine_registry.py` 照 `mini-hermes/agent/skill_utils.py` 的 `skills_dir()` / `iter_skill_dirs()` / `discover_skills() -> SkillScan(skills, skipped)` 形状写：单一根 + 排序 + 坏目录跳过并计数。
 - 《源码讲解-04-ToolsRuntime》——**工具 schema 注册与 toolset 闸门**。引擎工具（`get_tool_schemas` / `handle_tool_call`）的注入（`agent/agent_init.py:1948`）与分发（`agent/tool_executor.py:1559`）接在这里。
-- **上游文档三处外链**（《精译-14》§11 同款）：上下文压缩与缓存（`/developer-guide/context-compression-and-caching`）· 内存提供者插件（`/developer-guide/memory-provider-plugin`，与之类似的单选插件系统）· 通用插件系统（`/user-guide/features/plugins`）。
+- **上游文档三处外链**（《精译-14》§11 同款）：上下文压缩与缓存（`/developer-guide/context-compression-and-caching`）· 记忆提供者插件（`/developer-guide/memory-provider-plugin`，与之类似的单选插件系统）· 通用插件系统（`/user-guide/features/plugins`）。
 
 ---
 
@@ -1262,8 +1260,8 @@ messages[:] = c.compress(messages, **optional)
 
 ### C-① · 复验：§1 的 YAML 示例在同一个 `context:` 映射里写了两个 `engine:` 键
 
-- **文档怎么说**：上游 §1 逐字 —— `  engine: "compressor"    # default built-in` 紧接着 `  # engine: "lcm"           # activates a plugin engine named "lcm"`。
-- **源码实际怎么**：`context` 块只有**一个** `engine` 键 —— `hermes_cli/config_defaults.py:1207-1208` 逐字 `"context": {` / `"engine": "compressor",`；读取处 `agent/agent_init.py:1767` 逐字 `_engine_name = _ctx_cfg.get("engine", "compressor") or "compressor"`（单键 `get`）。YAML 语义里同一映射的重复键是**后键覆盖前键**，一份配置不可能同时是 `compressor` 与 `lcm`。
+- **文档怎么说**：上游 §1 逐字 —— `  engine: "compressor"    # default built-in` 紧接着 `  engine: "lcm"           # activates a plugin engine named "lcm"`。
+- **源码实际怎么**：`context` 块只有**一个** `engine` 键 —— `hermes_cli/config_defaults.py:1207-1208` 逐字 `"context": {` / `"engine": "compressor",`；读取处 `agent/agent_init.py:1767` 逐字 `_engine_name = _ctx_cfg.get("engine", "compressor") or "compressor"`（单键 `get`）。重复 YAML 键的处理依赖解析器，可能拒绝，也可能后键覆盖前键，一份配置不可能同时是 `compressor` 与 `lcm`。
 - **影响**：**复验成立**。示例应读作"两种取值二选一"；逐字照抄会得到一份歧义（无效）的配置。
 
 ### C-② · 复验：§3 的抽象方法 `compress()` 只列到 `focus_topic`，源码还多两个参数

@@ -1,9 +1,9 @@
 # 源码讲解 · 第 15 章：观察者钩子（Observer Hooks）
 
-> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。维护节说明当前契约；正文与附录仍含各阶段源码片段，按段内提交读取。
 
-> 上游：`官方文档-Developer-Guide/observer-hooks.md`（331 行）· 中文精译见 `中文精译-15-ObserverHooks.md`（526 行）。
-> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号锚当前 HEAD（实现 commit `1ccaa50`；本章是**新增一个只读遥测面**，不改任何既有行为）。
+> 上游：`官方文档-Developer-Guide/observer-hooks.md`（331 行）· 中文精译见 `中文精译-15-ObserverHooks.md`（528 行）。
+> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧历史规模锚 `1ccaa50`，维护契约以文首说明为准（实现 commit `1ccaa50`；本章是**新增一个只读遥测面**，不改任何既有行为）。
 > ★ **引用归属约定**：mini 侧引用一律写成 `mini-hermes/<路径>:<行号>`；**未带 `mini-hermes/` 前缀的裸 `文件:行号` 一律指真实侧**。
 
 [TOC]
@@ -129,7 +129,7 @@ transform 系取首个非空字符串、`pre_verify` 取首个非空 message。
 （`pre_llm_call` / `pre_tool_call` / `transform_tool_result` / `transform_llm_output`）—— 契约的取舍是：
 **观测与执行必须分开**，否则任何一个观测插件的 bug 都自动变成行为变更。
 
-**② 载荷永远是 JSON-safe 的副本。** 插件拿到的不是原始对象，而是 `_sanitize_hook_payload` 的产物
+**② 规范 API 载荷是 JSON-safe 副本。** 插件拿到的不是原始对象，而是 `_sanitize_hook_payload` 的产物
 （`agent/api_request_hooks.py:117-132`）：provider SDK 对象被转成 JSON 兼容结构、大值被设上限、敏感键被
 redact。于是「观察者改不动 agent 状态」是**结构上**成立的，不是靠自觉；想要原始对象的老插件只能退回去吃
 `request_messages` / `conversation_history` / `assistant_message` 这类历史兼容字段 —— 而那正是新消费者被劝退
@@ -195,7 +195,7 @@ CLI 退出、`/new`、`/reset` 或网关拆会话时发生一次（§一 的会�
 [一次 run_conversation：用户消息进历史]
    task_id 生成                     agent/turn_context.py:473
    turn_id 生成                     agent/turn_context.py:476-478   ← 同一轮所有事件共用它
-   on_session_start（会话级，一轮一次） agent/conversation_loop.py:773
+   on_session_start（新会话首次构建后） agent/conversation_loop.py:773
    ▼
    pre_llm_call                     agent/turn_context.py:677
    ▼
@@ -207,7 +207,7 @@ CLI 退出、`/new`、`/reset` 或网关拆会话时发生一次（§一 的会�
    pre_tool_call                    agent/tool_executor.py:643 → hermes_cli/plugins.py:1810
    tool_call_id 来自 provider        agent/agent_runtime_helpers.py:267
    post_tool_call                   model_tools.py:691（blocked / error 路径也发）
-   ▼ 回到 pre_llm_call（工具循环再来一圈）
+   ▼ 回到 API 请求阶段（工具循环再来一圈；不重发 pre_llm_call）
    ▼（模型给出最终回答）
    post_llm_call                    agent/turn_finalizer.py:433
    on_session_end                   agent/turn_finalizer.py:659-660
@@ -216,8 +216,7 @@ CLI 退出、`/new`、`/reset` 或网关拆会话时发生一次（§一 的会�
 注意这里有一处**顺序陷阱**：若按「事件对的进入 / 退出」读，
 `pre_llm_call → pre_api_request → post_api_request → post_llm_call → pre_tool_call → post_tool_call`
 看起来像一条直线，但实际触发顺序里 `post_tool_call` 在 `post_llm_call` **之前** —— 前者的口径是「每次 provider
-尝试 / 每次工具分发」，后者是「整个回合收尾」。id 也一样分层：`turn_id` 一轮一个、`api_request_id` 每次真发
-HTTP 一个（一次 LLM 调用可能发多次 —— 回退重试就是），`tool_call_id` 由 provider 给。
+尝试 / 每次工具分发」，后者是「整个回合收尾」。id 也一样分层：`turn_id` 一轮一个、`api_request_id` 每个上游请求尝试一个；mini 的底层传输重试不拆分，`tool_call_id` 由 provider 给。
 
 ### 验收四问
 
@@ -232,7 +231,7 @@ HTTP 一个（一次 LLM 调用可能发多次 —— 回退重试就是），`t
    `hermes_cli/plugins_dispatch.py:445-447`），因为真正的成本是构造脱敏载荷，所以每条调用点都要在
    **构造之前**短路（`model_tools.py:687`、`agent/turn_api_request.py:52`、`agent/turn_response_intake.py:63`、
    `agent/api_request_hooks.py:171`）。（§0.4）
-4. **插件拿到的是原始对象吗？能不能靠返回值改行为？** 都不是原始对象：`_sanitize_hook_payload`
+4. **插件拿到的是原始对象吗？能不能靠返回值改行为？** 规范 API 字段不是原始对象：`_sanitize_hook_payload`
    给的是脱敏截断后的 JSON-safe 派生结构（`agent/api_request_hooks.py:117-132`）；返回值默认忽略，只有
    4 个更早的钩子被采纳（`hermes_cli/plugins.py:138-139`、`:195-197`）。（§0.3 · §0.4）
 
@@ -260,9 +259,9 @@ HTTP 一个（一次 LLM 调用可能发多次 —— 回退重试就是），`t
 | **版本字段** | `kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)`（`hermes_cli/plugins_dispatch.py:200-201`），值 `"hermes.observer.v1"`（`hermes_cli/middleware.py:16`）；例外只有 `gateway_platform_event` | ✅ 已抄（1ccaa50）：在**唯一装配出口** `emit()` 注入，值 `"mini.observer.v1"`（`mini-hermes/agent/observer.py:178-179`、`:429`）；调用点一律不手写（`mini-hermes/run_agent.py:1311-1312`） | 已抄(1ccaa50) |
 | **事件名表 · 7 vs 39** | `VALID_HOOKS` **39** 名（`hermes_cli/plugins.py:108-199`），兼作 shell-hook 白名单（`:201-203`） | ✅ 已抄（1ccaa50）：只落**真接线**的 **7** 名（`mini-hermes/agent/observer.py:165-173`）；其余 32 名是 ⬜ 没做（量级）—— 表里没有触发点的名字等于给读者一个「能用」的假承诺 | 已抄(1ccaa50) |
 | **只读语义 · 返回值忽略** | 只有 4 个更早的钩子被采纳（`pre_llm_call` / `pre_tool_call` / `transform_tool_result` / `transform_llm_output`）；其余显式忽略并在注释里写死（`hermes_cli/plugins.py:138-139`、`:195-197`、`:112-114`） | ✅ 已抄（1ccaa50）：`emit()` 直接丢弃返回值、不交给任何人（`mini-hermes/agent/observer.py:418-419`、`:439`）；想阻断走 `approval_callback`（`mini-hermes/run_agent.py:1250-1297`）；**那 4 个改行为钩子**是 ⏭ 不抄（理由）：第二套控制流 | 已抄(1ccaa50) |
-| **超时隔离线程** | 12 个有界钩子跑在超时 worker 上，超时**抛弃不 join**（`hermes_cli/plugins_dispatch.py:41-45`；理由逐字 *abandon without join — joining reintroduced a shutdown hang*，`:25-40`）；默认 30s / 上限 600s（`:138-139`） | ⏭ 不抄（理由）：mini 的观察者是**同步**调用，没有「钩子跑在工作线程里」这个基座；没有线程就永远不会超时（mini 侧自记见 `mini-hermes/agent/observer.py:128-130`） | 不抄(理由) |
+| **超时隔离线程** | 12 个有界钩子跑在超时 worker 上，超时**抛弃不 join**（`hermes_cli/plugins_dispatch.py:41-45`；理由逐字 *abandon without join — joining reintroduced a shutdown hang*，`:25-40`）；默认 30s / 上限 600s（`:138-139`） | ⏭ 不抄（理由）：mini 的观察者是**同步**调用，没有「钩子跑在工作线程里」这个基座；没有宿主超时包装；慢回调仍会阻塞调用线程（mini 侧自记见 `mini-hermes/agent/observer.py:128-130`） | 不抄(理由) |
 | **`pre_tool_call` 超时 fail-closed** | 唯一的 fail-closed 集（`hermes_cli/plugins_dispatch.py:48`）：超时 ⇒ append `{"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE}`（`:211-212`、常量 `:53`） | ⏭ 不抄（理由）：依赖上一行的超时基座；没有超时机制时这条分支永不触发 | 不抄(理由) |
-| **抑制窗口 / gate key** | 60s 抑制窗口（`hermes_cli/plugins_dispatch.py:52`、跳过判据 `:255-268`）；gate key = `(hook, id(cb), 调用身份)`，身份只吃 `tool_call_id` / `turn_id`（`:143-156`），超时后按身份判再标 abandoned（`:306-318`） | ⏭ 不抄（理由）：整族依赖超时基座；mini 单进程同步调用，不存在线程堆积，也没有「并发同名工具调用不能被吞成重复」的场景 | 不抄(理由) |
+| **抑制窗口 / gate key** | 60s 抑制窗口（`hermes_cli/plugins_dispatch.py:52`、跳过判据 `:255-268`）；gate key = `(hook, id(cb), 调用身份)`，身份只吃 `tool_call_id` / `turn_id`（`:143-156`），超时后按身份判再标 abandoned（`:306-318`） | ⏭ 不抄（理由）：整族依赖超时基座；mini 没有超时回调线程堆积；并行工具仍可能并发调用观察者，回调应自行保证线程安全 | 不抄(理由) |
 | **插件宿主** | `register(ctx)` + `PluginContext`（`hermes_cli/plugins.py:225-231`、`:916-918`）+ 通用插件发现 / 加载 / 卸载 + 可撤销句柄 `PluginRegistration` | ⏭ 不抄（理由）：mini 没有通用插件系统与热重载；同样是「订阅」，宿主换成**进程级注册表 + `observer=` 构造参数**（`mini-hermes/agent/observer.py:445-447`；`mini-hermes/run_agent.py:249-252`、`:326`） | 不抄(理由) |
 | **中间件层** | 独立一层：`MIDDLEWARE_SCHEMA_VERSION = "hermes.middleware.v1"`，中间件载荷多注入一个字段（`hermes_cli/middleware.py:17`、`:44-47`）；改行为的请求 / 执行包装器属它、不属观察者契约 | ⏭ 不抄（理由）：mini 没有中间件层（全仓 `middleware` 零命中）；观察者只读，没有「改行为的包装器」要与之分家 | 不抄(理由) |
 | **专用族与事件总线** | 流式观察者走另一条注入路径（`agent/plugin_stream_hooks.py:66`）；事件总线带递归深度 cap 8 与 pending budget 64（`hermes_cli/plugins_dispatch.py:87-93`）；另有系统提示词 section 注册与渲染（`:453-470`） | ⏭ 不抄（理由）：mini 没有 token 热路径 / 流式输出（`mini-hermes/run_agent.py:19-20` 自记未实现），没有总线订阅者，也没有 prompt section 注入需求 | 不抄(理由) |
@@ -352,7 +351,7 @@ def add(self, event: str, callback: Callable[..., Any]) -> None:
 
 ★ **`None → ""` 是线协议，不是可选优化。** 两条理由：① 在只读遥测里，"没有这个 id"与"id 是空串"**是同一件事**，让 N 个消费者各写一遍 `or ""` 只是把归一成本摊给 N 方；② 空串是**可判定的"无身份"** —— 真实侧的超时门逐字写着 *"an empty id is treated as 'no identity' by the hook gate"*（`tools/terminal_tool_result.py:143`）。归一放在**一处**（`hook_kwargs()`），于是"空"这个语义在所有消费者眼里只有一个字形。
 
-★ **为什么必须"每请求一个 id"**：一次 LLM 调用可能发**多次 HTTP** —— 重试、fallback 换 provider、传输层换连接。`turn_id` 描述的是"用户这一问"，`api_request_id` 描述的是"这一发"。只有 `turn_id` 的话，两次请求在观察者眼里塌成一条：计价重复、跨度（span）合并、失败被成功那一发掩盖。真实侧把 `api_request_id` 定义成 `{turn_id}:api:{api_call_count}`，恰好让"同一回合的多发"**既可分辨又可聚合**（同前缀即同回合）。工具级同理：同一回合里并发调用同一个工具必须**按调用**分开，不能塌成同一个门 key（`tools/terminal_tool_result.py:142-143` 逐字交代了这条）。
+★ **为什么必须"每请求一个 id"**：一次模型调用可能包含回退请求或底层传输重试；观察者边界是否拆分要看具体实现，不能用 HTTP 次数推算。`turn_id` 描述的是"用户这一问"，`api_request_id` 描述的是"这一发"。只有 `turn_id` 的话，两次请求在观察者眼里塌成一条：计价重复、跨度（span）合并、失败被成功那一发掩盖。真实侧把 `api_request_id` 定义成 `{turn_id}:api:{api_call_count}`，恰好让"同一回合的多发"**既可分辨又可聚合**（同前缀即同回合）。工具级同理：同一回合里并发调用同一个工具必须**按调用**分开，不能塌成同一个门 key（`tools/terminal_tool_result.py:142-143` 逐字交代了这条）。
 
 **② 读 Hermes 的代码** —— `model_tools.py:642-653`（5 字段 + 线协议，全在这 12 行）：
 
@@ -388,7 +387,7 @@ def _observer_ids(self, *, tool_call_id=None, api_request_id=None):
 
 （`mini-hermes/run_agent.py:1325-1331`，逐字去掉了签名行的换行。）
 
-三个生成点在 mini 的落法：**`turn_id`** 在 `run_conversation` 入口**每轮生成一个**（`mini-hermes/run_agent.py:406-408`），形状照 `agent/turn_context.py:476-478`；同一轮内所有事件（LLM / API / 工具）共用同一个，跨轮必不同 —— 注释解释了为什么**不用自增计数器**：网关会缓存复用 agent 对象（第 8 章），计数器会跨会话撞号，uuid 后缀不会。**`api_request_id`** 在 `_one_api_request` 里**每真发一次 HTTP 生成一个**（`:966`），序号 `_api_call_count` **每轮归零**（`:371`）—— 于是回退重发是**新的一发**，有独立 id、`attempt` 递增（`mini-hermes/run_agent.py:1047-1050` 交代了这一层为什么单抽出来）。**`tool_call_id`** 优先用 provider 给的（`:1223`，`msg["tool_calls"][i]["id"]`），没给才落空串。
+三个生成点在 mini 的落法：**`turn_id`** 在 `run_conversation` 入口**每轮生成一个**（`mini-hermes/run_agent.py:406-408`），形状照 `agent/turn_context.py:476-478`；同一轮内所有事件（LLM / API / 工具）共用同一个，跨轮必不同 —— 注释解释了为什么**不用自增计数器**：网关会缓存复用 agent 对象（第 8 章），计数器会跨会话撞号，uuid 后缀不会。**`api_request_id`** 在 `_one_api_request` 里**每个模型逻辑请求生成一个**（`:966`），序号 `_api_call_count` **每轮归零**（`:371`）—— 于是回退重发是**新的一发**，有独立 id、`attempt` 递增（`mini-hermes/run_agent.py:1047-1050` 交代了这一层为什么单抽出来）。**`tool_call_id`** 优先用 provider 给的（`:1223`，`msg["tool_calls"][i]["id"]`），没给才落空串。
 
 **④ 与真实版的差别**：
 
@@ -397,7 +396,7 @@ def _observer_ids(self, *, tool_call_id=None, api_request_id=None):
 | 5 字段载体 | `_CallIds`（frozen dataclass）+ `hook_kwargs()`（`model_tools.py:643-653`） | ✅ 已抄：同形同名（`mini-hermes/agent/observer.py:324-340`） |
 | `None → ""` | 线协议，`{k: v or "" ...}`（`model_tools.py:652`） | ✅ 已抄：同（`mini-hermes/agent/observer.py:340`） |
 | `turn_id` 生成 | `{session_id}:{task_id}:{uuid4().hex[:8]}`，且优先 relay 挂起的 id（`agent/turn_context.py:476-478`） | 已对齐形状、**略去 relay 分支**（mini 无 Relay）：`mini-hermes/run_agent.py:406-408` |
-| `api_request_id` 生成 | `{turn_id}:api:{api_call_count}`（`agent/conversation_loop.py:1536`） | ✅ 已抄：同形（`mini-hermes/run_agent.py:1063`）——只在**真发 HTTP** 那层生成，回退重发算新一发 |
+| `api_request_id` 生成 | `{turn_id}:api:{api_call_count}`（`agent/conversation_loop.py:1536`） | ✅ 已抄：同形（`mini-hermes/run_agent.py:1063`）——只在模型逻辑请求边界生成，回退重发算新一发 |
 | `tool_call_id` 来源 | provider 的 tool_call（`agent/agent_runtime_helpers.py:267`） | ✅ 已抄：优先 `msg["tool_calls"][i]["id"]`（`mini-hermes/run_agent.py:1223`），没给才落空串 |
 | 子代理链接 id | `parent_session_id` / `child_subagent_id` / `parent_turn_id` / `api_call_count` 等（文档 §2 另列） | ⏭ 不抄（理由）：mini 无子代理实现 ⇒ 这些字段**没有生成点**（见 §三 子代理族） |
 
@@ -411,14 +410,14 @@ def _observer_ids(self, *, tool_call_id=None, api_request_id=None):
 
 | 族 | 真实侧的钩子 | mini 落了哪几个 | 为什么 |
 |---|---|---|---|
-| **会话** | `on_session_start` / `on_session_end` / `on_session_finalize` / `on_session_reset`（4） | **0** | ★ 会话级那族归**网关目录式钩子**（拍板 P4）——mini 的 agent 层没有会话边界，见下 |
+| **会话** | `on_session_start` / `on_session_end` / `on_session_finalize` / `on_session_reset`（4） | **0** | ★ 会话级那族归**网关目录式钩子**（拍板 P4）——mini 的 agent 层未发出会话观察者事件，见下 |
 | **回合级 LLM** | `pre_llm_call` / `post_llm_call`（2） | **2** | ✅ 回合是 agent 层的主边界，两端都接得上（`post_llm_call` 取"每次模型调用"口径，与真实侧"每回合一次"有差异） |
 | **请求级 API** | `pre_api_request` / `post_api_request` / `api_request_error`（3） | **3** | ✅ 与回退链天然对齐：一次 LLM 调用可能多次 HTTP，失败有独立上报路径 |
 | **工具** | `pre_tool_call` / `post_tool_call` / `transform_tool_result`（3） | **2** | `transform_tool_result` 是**改行为**的（替换结果字符串），不属只读观察面 |
 | **审批** | `pre_approval_request` / `post_approval_response`（2） | **0** | ⏭ 不抄：mini 的审批是**控制流**（`approval_callback`），只读审批观察面没有第二个消费者 |
 | **子代理** | `subagent_start` / `subagent_stop`（2） | **0** | ⏭ 不抄：mini **没有**子代理 / 委派实现 ⇒ 事件名没有触发点 |
 
-★ **会话级那一族为什么归网关（P4）**：真实侧的会话钩子发在 agent 侧的会话边界上（`on_session_start` 在 `agent/conversation_loop.py:774`；`on_session_end` 在 `agent/turn_finalizer.py:660`；`on_session_finalize` / `on_session_reset` 在 `hermes_cli/cli_session_mixin.py:427` 与 `gateway/slash_commands_session.py:210`）。而 mini 的**会话边界只存在于网关层**：`session:start` / `session:end` / `session:reset` 由目录式钩子承担（`mini-hermes/gateway/hooks.py:28-37` 的 `HOOK_EVENTS`，用户写 `HOOK.yaml` + `handler.py` 订阅）。这两层的**所有者与语义都不同** —— 网关钩子是"用户可替换的**外部**扩展点"，agent 内观察者是"进程内代码订阅的**只读**遥测"；把会话事件塞进 `OBSERVER_EVENTS`，会立刻出现"两套会话钩子、谁先谁后"的歧义。所以 mini 的观察者只覆盖 **turn / API / 工具**三个 **agent 内**边界，会话级留给目录式钩子。
+★ **会话级那一族为什么归网关（P4）**：真实侧的会话钩子发在 agent 侧的会话边界上（`on_session_start` 在 `agent/conversation_loop.py:774`；`on_session_end` 在 `agent/turn_finalizer.py:660`；`on_session_finalize` / `on_session_reset` 在 `hermes_cli/cli_session_mixin.py:427` 与 `gateway/slash_commands_session.py:210`）。而 mini 的 CLI 与网关都有会话边界，但观察者未订阅会话事件：`session:start` / `session:end` / `session:reset` 由目录式钩子承担（`mini-hermes/gateway/hooks.py:28-37` 的 `HOOK_EVENTS`，用户写 `HOOK.yaml` + `handler.py` 订阅）。这两层的**所有者与语义都不同** —— 网关钩子是"用户可替换的**外部**扩展点"，agent 内观察者是"进程内代码订阅的**只读**遥测"；把会话事件塞进 `OBSERVER_EVENTS`，会立刻出现"两套会话钩子、谁先谁后"的歧义。所以 mini 的观察者只覆盖 **turn / API / 工具**三个 **agent 内**边界，会话级留给目录式钩子。
 
 两条"不落"的纪律也在这里落地：**B10**（`VALID_HOOKS` 全 39 名不抄）= 表里没有触发点的名字等于给读者一个"能用"的假承诺，所以 mini 只落**真接线**的 7 个；**B5**（事件总线 emit/subscribe、递归深度 cap、pending budget）= 那不是 observer hooks 的核心能力，纯规模，mini 不引。
 
@@ -455,7 +454,7 @@ OBSERVER_EVENTS: Tuple[str, ...] = (
 表的**上方注释**写着 mini 版的表为什么要这么短："7 个；★ 每个名字都有真实触发点"（`mini-hermes/agent/observer.py:17`），而紧挨着每个名字的**触发点**在宿主侧各有落点：`pre_llm_call` / `post_llm_call` 在 `_run_conversation_turn` 的模型调用前后（`mini-hermes/run_agent.py:601-628`）、`pre_api_request` / `post_api_request` / `api_request_error` 在 `_one_api_request` 的 HTTP 前后与异常分支（`:1057-1087`）、`pre_tool_call` / `post_tool_call` 在 `_run_one_tool` 的执行前后（`:1227-1229`、`:1245-1248`）。**7 个名字与 7 个触发点一一对应**，不多不少 —— 没有"表里有、代码里没有"的名字。
 
 **三族不落的原因，逐条对着判据说**：
-- **会话族 → 网关目录式钩子（P4）**。mini 的 `HOOK_EVENTS` 已含 `session:start` / `session:end` / `session:reset`（`mini-hermes/gateway/hooks.py:28-37`），由用户放目录订阅；agent 层**没有**这个边界，强行另立只会得到"两套会话钩子"。
+- **会话族 → 网关目录式钩子（P4）**。mini 的 `HOOK_EVENTS` 已含 `session:start` / `session:end` / `session:reset`（`mini-hermes/gateway/hooks.py:28-37`），由用户放目录订阅；agent 有 `reset_session()`，但没有会话事件发出点，强行另立只会得到"两套会话钩子"。
 - **审批族 ⏭ 不抄**：mini 的审批已经是控制流（`approval_callback`），而契约定义审批钩子为**纯观察**（不能投票 / 预先作答 / 否决）—— 把只读面架在已有的控制流旁边，没有第二个消费者，还会引出"谁能拦住工具"的歧义。
 - **子代理族 ⏭ 不抄**：mini 没有子代理 / 委派实现（全仓 `grep` 只命中注释），`subagent_start` / `subagent_stop` **没有触发点**，落进表里就是 B10 点名的"假承诺"。
 - 另有一个**同族但不同类**的名字被排除：`transform_tool_result` / `transform_llm_output` 属"会改变行为"的那一类（中间件地盘），不进只读观察面。
@@ -493,7 +492,7 @@ OBSERVER_EVENTS: Tuple[str, ...] = (
 | 判据 | 规则 | 不做会坏在哪 |
 |---|---|---|
 | 超限的处置是**降级 + 预览**，不是丢弃 | 全量 → `max_string=1000 / max_sequence=50` 再来一次 → 还超就整份换成 `{"_truncated": True, "original_type": …, "preview": 前缀[:limit]}`（`:117-132`） | 丢弃 ⇒ 观察者看到的是「没有数据」，与「压根没观测」分不开；仪表盘上两者长得一样 |
-| **两种容器的溢出语义故意不同** | dict 越界 `break`（第 201 个键**之后的根本不被访问**），标记以**普通键** `_truncated_items` 塞回同一个 dict；list/tuple/set 用 `seq[:200]` **保留前 N 个**，再**追加**一条 `{"_truncated_items": 剩余数}` | 想「统一成一种」的人会改坏两边：dict 没有「末尾」这个概念，标记只能落在键空间里；列表的标记只能是一个元素。改统一 = 观察者侧的键判断与长度判断同时失效 |
+| **两种容器的溢出语义故意不同** | dict 越界 `break`（第 201 项被取出用于判界，之后的项不再访问），标记以**普通键** `_truncated_items` 塞回同一个 dict；list/tuple/set 用 `seq[:200]` **保留前 N 个**，再**追加**一条 `{"_truncated_items": 剩余数}` | 想「统一成一种」的人会改坏两边：dict 用键值形态承载内容与截断标记，标记只能落在键空间里；列表的标记只能是一个元素。改统一 = 观察者侧的键判断与长度判断同时失效 |
 | 上限来自 env 但有**下限** | `max(1000, int(raw))` | 有人把上限写成 `5`，等于每次观测只剩 5 个字符，还查不出原因 |
 
 **边界**：不是每一发钩子都过这一层。`transform_api_error_classification` 的输入被逐字标注为**可能未脱敏**（`hermes_cli/plugins.py:124-125`：*Privacy: error_message/error_body may be unredacted.*），它的输出另外只留 `message.strip()[:500]`；`tools/*_tool_result` 那类**输出替换** seam 也不走这套 sanitizer，各走各的。也就是说「脱敏后的 `request` / `response` / `error` 是给新消费者的**规范**输入」这句话的适用范围，恰好是**观察者**那批钩子。
@@ -664,7 +663,7 @@ self._observers = observer if observer is not None else OBSERVERS   # :287
 reg.add("post_tool_call", on_post_tool_call)          # mini-hermes/agent/observer.py:357
 ```
 
-为什么**不**做插件宿主：mini 只有两个**专用**目录加载器（model-provider 插件目录、context-engine 目录，第 14 章），没有通用 plugin host / 中间件层（全仓 `middleware` 0 命中）。抄一套 `ctx` + manifest + ledger 出来，没有任何东西会去装它 —— 那就是一条**没有消费者的死路径**。进程内代码（CLI / 网关 / 测试）就是 mini 的「宿主」，它们用构造参数把注册表递给 agent。
+为什么**不**做插件宿主：mini 只有技能和上下文引擎等专用目录发现；providers 包提供已知路由解析，并非 model-provider 插件目录，没有通用 plugin host / 中间件层（全仓 `middleware` 0 命中）。抄一套 `ctx` + manifest + ledger 出来，没有任何东西会去装它 —— 那就是一条**没有消费者的死路径**。进程内代码（CLI / 网关 / 测试）就是 mini 的「宿主」，它们用构造参数把注册表递给 agent。
 
 **④ 与真实版的差别**
 
@@ -686,7 +685,7 @@ reg.add("post_tool_call", on_post_tool_call)          # mini-hermes/agent/observ
 | 消费者 | 接法 | 覆盖 | 要不要启用 |
 |---|---|---|---|
 | Langfuse 插件 | 走**通用钩子面**：`register(ctx)` 里登记 **11** 个钩子（`plugins/observability/langfuse/__init__.py:1014-1026`；`plugins/observability/langfuse/plugin.yaml:9-19` 同步列出同一批 11 项） | 2 个回合级 + 3 个请求级 + 2 个工具 + 2 个会话 + 2 个子代理 | 要：`hermes plugins enable observability/langfuse` |
-| NeMo Relay | 走**第一方共享指标路径**：不经插件面，`_HOOK_HANDLERS` 把 **13** 个钩子映射到 Relay 的 session / task / model-call / tool-call / approval 记录 | `hermes_cli/observability/relay_shared_metrics.py:935-950`（另有 `on_skill_lifecycle`、`post_approval_response` 这类插件面之外的族） | **不要**：由 `hermes_cli/lifecycle.py:13-15` 转发（门面 `hermes_cli/observability/__init__.py:11` 的 `observe_lifecycle` + `:21` 的 `handles_hook`，后者在 `hermes_cli/observability/relay_shared_metrics.py:867` 用 `hook_name in HANDLED_HOOKS and enabled()` 判定） |
+| NeMo Relay | 走**第一方共享指标路径**：不经插件面，`_HOOK_HANDLERS` 把 **13** 个钩子映射到 Relay 的 session / task / model-call / tool-call / approval 记录 | `hermes_cli/observability/relay_shared_metrics.py:935-950`（也消费 `on_skill_lifecycle`、`post_approval_response`；这些名字同样属于插件钩子表） | **不要**：由 `hermes_cli/lifecycle.py:13-15` 转发（门面 `hermes_cli/observability/__init__.py:11` 的 `observe_lifecycle` + `:21` 的 `handles_hook`，后者在 `hermes_cli/observability/relay_shared_metrics.py:867` 用 `hook_name in HANDLED_HOOKS and enabled()` 判定） |
 
 Langfuse 是**纯 observer** 的样板：它只登记观察者名（连 `pre_tool_call` 也只做观测、不返回指令），用关联 id 把事件拼成 trace —— `_trace_key`（`plugins/observability/langfuse/__init__.py:291-298`）以 `turn_id` 优先、`task:`/`session:`/`thread:` 兜底，`session_id` 进 trace_context 做 Langfuse 的会话分组（`:559-560` 逐字注释 *"session_id must be in trace_context for Langfuse session grouping."*）；它有状态上限 `_MAX_TRACE_STATE = 256`（`:50-53` 逐字：*"turns that never reach _finish_trace would leak forever, so over the cap the least-recently-updated are evicted. Bounds the leak, not concurrency."*）；可选依赖缺失时整块 fail-open（`:24-28`）。
 
@@ -717,7 +716,7 @@ mini 的消费者**不是插件，而是两个进程内订阅者**：一个真�
 - `mini-hermes/demos/ch15_real_run.py`（368 行 / 28 条，双解释器 28/28，不联网）：把 7 个事件全订上、把载荷流水按真发顺序打出来（`subscribe_all` `:82-87`），然后在**真实载荷**上断言字段（5 个关联 id、`api_request_error` 的 `status_code`/`retryable`、`attempt` 递增、`tool_call_id` 来自 provider），并跑一遍「0 观察者 vs 7 观察者」的成本对照（`:219-248`）。
 - `mini-hermes/tests/test_observers.py`（994 行 / 6 组 / 124 条，双解释器一致）：两个夹具就是「消费方的替身」—— `record_events` 收载荷、`count_payload_builds` 数构造次数（`:136-140`）；第 6 组用假 provider 驱动真 agent，把 7 个事件按序发出来变成断言。
 
-**没有任何生产入口订阅**：`mini-hermes/cli.py` 与 `mini-hermes/gateway/run_turn.py` 都不传 `observer=`，模块级门面 `has_observers` / `emit`（`mini-hermes/agent/observer.py:450-461`）就是给这类「agent 之外」的调用点留的口子 —— 目前只有测试与 demo 用它。所以 mini 的消费者**证明了契约可消费**，但**没有一个是产品**：既没有可装载的第三方导出器（无插件宿主），也没有第一方指标路径（无 Relay 基座、无 exporter）。
+**没有内置生产消费者订阅**：`mini-hermes/cli.py` 与 `mini-hermes/gateway/run_turn.py` 都不传 `observer=`，模块级门面 `has_observers` / `emit`（`mini-hermes/agent/observer.py:450-461`）就是给这类「agent 之外」的调用点留的口子 —— 目前只有测试与 demo 用它。所以 mini 的消费者**证明了契约可消费**，但**没有一个是产品**：既没有可装载的第三方导出器（无插件宿主），也没有第一方指标路径（无 Relay 基座、无 exporter）。
 
 ```python
  # （mini-hermes/demos/ch15_real_run.py:82-87 —— mini 的「消费方」长这样）
@@ -827,7 +826,7 @@ def subscribe_all(registry: ObserverRegistry) -> list:
 **③ 真跑 demo `mini-hermes/demos/ch15_real_run.py`：368 行 / 28 条**
 
 - 双解释器 **28 / 28 通过**（3.13.14 与 3.9.6 各一次，`0 失败`），**不联网** —— 它用**假 provider** 驱动**真 agent**（`_http_post` 换成罐头响应，`:121-131`），所以它不是"测函数"，是"走真宿主路径 + 在真载荷上断言"。
-- 五段覆盖：① 一轮 10 发事件按序 + 字段（`:150-182`）· ② 429 → 回退换 provider → 重发（一次 LLM 调用两个 `api_request_id`、`attempt` 递增、`retryable=True`，`:187-217`）· ③ **零成本快路径**：同一轮对话跑两遍，0 观察者时 7 个载荷构造器总计 **0 次**（`:222-248`）· ④ 载荷安全：真凭证 / 9000 字符串 / 深嵌套 / 260 键大 dict / 总额压到 1000（`:253-309`）· ⑤ 失败放开：三个回调、中间那个抛异常，前后两个照跑、轮次照常收尾、有警告（`:314-352`）。
+- 五段覆盖：① 一轮 10 发事件按序 + 字段（`:150-182`）· ② 429 → 回退换 provider → 重发（一次 LLM 调用两个 `api_request_id`、`attempt` 递增、`retryable=True`，`:187-217`）· ③ **零成本快路径**：同一轮对话跑两遍，0 观察者时 7 个载荷构造器总计 **0 次**（`:222-248`）· ④ 载荷安全：仿真凭据 / 9000 字符串 / 深嵌套 / 260 键大 dict / 总额压到 1000（`:253-309`）· ⑤ 失败放开：三个回调、中间那个抛异常，前后两个照跑、轮次照常收尾、有警告（`:314-352`）。
 - 一条**口径订正**的留痕：demo 第一次跑是 **27 / 1**（证据：早于提交的那次输出里，第 ③ 组那条"按事件各构造若干次"红了，计数是 `_payload_pre_llm_call: 4` —— 因为 `post_llm_call` 的载荷会复用 `pre_llm_call` 的公共那一层）。修的是**断言口径**（把"pre_\* 只构造 2 次"改成"流水条数一一对应"的口径，并把这层复用写进 `:234-235` 的打印说明），不是实现；改完两个解释器都是 28 / 28。
 
 **④ 反向验证：7 条改法**全部**干净变红**（"干净"＝ 进程正常退出、`失败项` 里出现预期断言名，**不是**崩溃）
@@ -994,7 +993,7 @@ def subscribe_all(registry: ObserverRegistry) -> list:
 | `:1-8` | `"""观察者（observer hooks）—— **只读遥测**在这里的落点（第 15 章）。` | 模块定位：只落四件核心（A1 注册表 / A2 零成本 / A3 失败放开 / A4 载荷安全），其余进"为什么不做" |
 | `:10-15` | `\| mini \| 是什么 \| 真实侧锚 \|`（四件核心对照表的表头） | 四件核心各自对应的**真实侧锚点**（一张自查表） |
 | `:17-32` | `## 事件表（7 个；★ 每个名字都有真实触发点）` | 7 个事件 × mini 触发点 × 载荷字段；`:29-32` 写清"字段名照真实侧同名、mini 没有的字段一律不编" |
-| `:38-41` | `· 真实侧 ``post_llm_call`` 只发 **一次/回合**` | **D3 口径差的自述**（真实侧每回合一次 vs mini 每次模型调用——mini 没有 finalize 层） |
+| `:38-41` | `· 真实侧 ``post_llm_call`` 只发 **一次/回合**` | **D3 口径差的自述**（真实侧每回合一次 vs mini 每次模型调用——mini 未统一成每回合一次的观察者收尾） |
 | `:44-54` | `## 分工（拍板 P4）：**不做会话级事件**` | 三层分工表（会话/进程 ⇒ 网关目录式钩子；agent 内三边界 ⇒ 本模块；改行为/阻断 ⇒ `approval_callback`） |
 | `:56-62` | `## 只读语义（A8）` | 返回值一律忽略 + "要阻断走 `approval_callback`"——观察者不是第二套控制流 |
 | `:64-80` | `## 零成本快路径（A2 · 本章★核心）` | 为什么门必须开在**构造之前**；并逐字引 `hermes_cli/kanban_db_dispatch.py:1197-1201`；`★ 这里**不做**身份比较` 一段解释为何照 `has()` 这一处事实源 |
@@ -1073,7 +1072,7 @@ def subscribe_all(registry: ObserverRegistry) -> list:
 | `:141-182` | `echo = "_test_ch15_echo"` … 第 ① 段 8 条断言 | 7 个事件名的真流水（10 发）+ 关联 id 断言（1 个 `turn_id` / 2 个 `api_request_id` / provider 的 `call_prov_1`）+ "观察者没改结果" |
 | `:187-217` | `reg2 = ObserverRegistry()`（第 ② 段） | `api_request_error` 那一路：`error.type` / `status_code=429` / **`retryable=True`** / `attempt` 1→2 / 载荷里能看到换了谁 / 只有成功那发有 `post_api_request` |
 | `:222-248` | `cold = make_agent(ObserverRegistry())`（第 ③ 段） | **0 观察者 ⇒ 总计 0 次**；有观察者 ⇒ 计数跟流水条数走；`:234-235` 印出"pre_\* 的 2 次直发 + 被 post 复用"这层口径 |
-| `:253-289` | `reg4 = ObserverRegistry()`（第 ④ 段：真凭证 / 9000 字符串 / 深嵌套 / 260 键大 dict） | 键级 `<redacted>`、文本级抹掉 `ghp_…`、串截到 8000 并注明丢了多少、`<dict depth limit>`、大 dict **只留 200 个键 + `_truncated_items`** |
+| `:253-289` | `reg4 = ObserverRegistry()`（第 ④ 段：仿真凭据 / 9000 字符串 / 深嵌套 / 260 键大 dict） | 键级 `<redacted>`、文本级抹掉 `ghp_…`、串截到 8000 并注明丢了多少、`<dict depth limit>`、大 dict **只留 200 个键 + `_truncated_items`** |
 | `:291-309` | `os.environ[PAYLOAD_MAX_CHARS_ENV] = "1000"` | 把总额压到下限逼出"降级 → 预览"；并证明 env 覆盖与"跑完还回去（默认 50000）" |
 | `:314-352` | `warnings: list = []`（第 ⑤ 段：三个回调、中间那个抛异常） | 坏回调只丢自己（`hits == ["before", "after"]`）、轮次照常收尾、有警告点名、返回值一律忽略 |
 | `:356-359` | `n_ok = sum(1 for _, c, _ in RESULTS if c)` | 收据行（`N 通过 / M 失败（共 K 条）`，`exit code` 由它决定） |
@@ -1194,7 +1193,7 @@ mini-hermes/tests/test_observers.py | 994 ++++++++++++++
 - 原文第 103–104 行逐字：*"Common fields include `session_id`, `completed`, `interrupted`, `reason`, `old_session_id`, and `new_session_id` where available."*
 - 实测 `on_session_end` 的载荷（`agent/turn_finalizer.py:660-671`）逐字为 `session_id` / `task_id` / `turn_id` / `completed` / `failed` / `interrupted` / `turn_exit_reason` / `model` / `platform` —— **没有 `reason`**，且有文档未列的 `failed` 与 `turn_exit_reason`。
 - `reason` 与 `old_session_id` / `new_session_id` 分别属于另外两个钩子：`hermes_cli/cli_session_mixin.py:434-437` 逐字 `context = {` / `"session_id": self.agent.session_id if self.agent else None,` / `"platform": getattr(self, "platform", None) or "cli",` / `"reason": "new_session" if event_type == "on_session_reset" else "session_boundary"}`；`gateway/slash_commands_session.py:210-213` 逐字 `_invoke_hook("on_session_reset", session_id=_new_sid, reason="new_session",` / `platform=source.platform.value if source.platform else "",` / `old_session_id=_old_sid, new_session_id=_new_sid)`。
-- **结论**：并集口径可读但**易误用** —— `old_session_id` / `new_session_id` 只在 **gateway** 的 `on_session_reset` 上出现（CLI 路径不传），`reason` 不在 `on_session_end` 上。按字面在 `on_session_end` 里读 `kwargs["reason"]` 会拿到 `None`。
+- **结论**：并集口径可读但**易误用** —— `old_session_id` / `new_session_id` 只在 **gateway** 的 `on_session_reset` 上出现（CLI 路径不传），`reason` 不在 `on_session_end` 上。按字面在 `on_session_end` 里读 `kwargs["reason"]` 会抛 `KeyError`；`kwargs.get("reason")` 才会返回 `None`。
 
 **⑦ §3.2 / §3.3 的字段清单均为**子集**（原文用 "Common … include" / "includes"）。**
 

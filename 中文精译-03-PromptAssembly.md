@@ -2142,7 +2142,7 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 
 三个测试文件，**全量 221 条**（154 + 54 + 13）：
 
-> 📌 这是**第 3 章末的快照**（本文锚的标签是 `ch03-prompt-assembly`）。
+> 📌 这是**第 3 章末的快照**（主体代码与规模表锚 `338c78f`；符号链接和退出提示修复在后续 `558550e` / `4382e24`）。
 > 第 4 章加了 `test_tools_runtime.py`（54 条）之后是 **4 个文件 / 275 条** ——
 > 这些都是章节快照；当前工作区的套件总数见 `mini-hermes/README.md` 的发布前维护节。
 

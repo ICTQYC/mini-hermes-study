@@ -7,7 +7,7 @@
 > **对照实现**：`mini-hermes/`（全项目 **12,883 行**代码 / **6,355 行**测试）
 > **mini 侧现状**：✅ **已交付两批** —— 地基（A1/A3/A4/A9/A13）提交 `f34fdaa`、
 > 成型（A6/A8/A5）提交 `9e7c8e4`；收据见 §十七。没做的只剩 §十七 里标 `⬜` 的那些。
-> **本文的写法**：mini 那一栏**一律写现状** —— 做过的写 `已对齐` / `✅ 已抄（<commit>）`，
+> **本文的写法**：mini 那一栏以本扩展交付状态为基础，发布前更新另标；现有章标签已移到统一维护提交。状态标记为：做过的写 `已对齐` / `✅ 已抄（<commit>）`，
 > 没做的写 `⬜ 没做（量级）`。**不写「本章做的 / 本章待实现」这类两态说法**（那要读者自己拼两段时间线）。
 > **材料来源**：5 份取源码笔记（`/tmp/ch09-notes-{routing,secrets,runner,persistence,mini}.md`，共 2,230 行）
 > ＋ `/tmp/ch09-checklist.md`（抄 / 不抄清单）。原《精译-09》里的 `【源码】要点` 块已并入本文。
@@ -38,7 +38,7 @@ profile 名字和解析后的目录必须通过 `resolve_profile_home()` 校验�
 | **作用域装配** | `gateway/run.py:1750 _profile_runtime_scope`（**30+ 调用点**） | `mini-hermes/gateway/profile_scope.py:36 profile_runtime_scope`（**4 处**：入站 `run_inbound.py:46`、回合 `run_turn.py:84`、适配器建/连 `run_adapters.py:150/162`）✅ |
 | **每 profile 适配器** | `gateway/run_adapters.py:832 / :1004`（建、连、跳过、重连） | `gateway/run_adapters.py`（**213 行**）：`servable_homes` / 逐 profile 建连 / fail-soft / console 的 `@<profile>` ✅ |
 | **会话库句柄** | `gateway/session_persistence.py:43 _open_session_db_for_active_scope` + `:89 _db` property | `gateway/run.py:137/146 _db()/_db_for(home)` ✅ 已按 home 缓存 |
-| **配对存储** | `gateway/run_adapters.py:895 PairingStore(profile=name)` | `gateway/authz.py`（单一 store，无 profile 维度） |
+| **配对存储** | `gateway/run_adapters.py:895 PairingStore(profile=name)` | `gateway/authz.py`（未启用配对 store（保留可选接口）） |
 | **状态面** | `gateway/status.py:32 gateway_state.json` / `:819 write` / `:895 read` / `:852 served_profiles` | `gateway/status.py`（PID + 指纹 + 干净退出标记）✅，缺 `served_profiles` |
 | **控制面** | `tui_gateway/methods_profiles.py`（**686 行**，6 个 JSON-RPC 方法） | argparse 子命令（`profile create|list|show`） |
 | **cron 心跳** | `cron/scheduler_provider.py:391`（按 profile tick + 回退）/ `cron/jobs.py:1212` | **无 cron 子系统** |
@@ -253,19 +253,19 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 
 ## §〇 差异表（本章 34 条）
 
-> 列序：`真实 Hermes | mini 版 | 性质 | 值得改`。「mini 版」列一律指**当前代码**；
+> 列序：`真实 Hermes | mini 版 | 性质 | 值得改`。mini 列以 `f34fdaa` / `9e7c8e4` 为基础，当前补齐项另标“发布前修复”；
 > 「值得改」列写**现状**：`已对齐` / `✅ 已抄（<commit>）` / `⬜ 没做（量级）` / `⏭ 不抄（理由）`。
 
 | # | 关注点 | 真实 Hermes | mini 版 | 性质 | 值得改 |
 |---|---|---|---|---|---|
-| 1 | 开关三态 | `None`=待裁决 / `True` / `False`（`config.py:552`） | 三态齐（`--multiplex` / `--no-multiplex` / 不给=待裁决），`gateway/multiplex_mode.py:38-95` | 语义缺失 | ✅ 已抄（`f34fdaa`·A1） |
-| 2 | env 覆盖 | `GATEWAY_MULTIPLEX_PROFILES` + 真值词表 + **空白不算覆盖** | `MINI_MULTIPLEX_PROFILES` + 同一套真值词表 + 空白不算覆盖 | 能力缺失 | ✅ 已抄（`f34fdaa`·A1） |
+| 1 | 开关三态 | `None`=待裁决 / `True` / `False`（`config.py:552`） | 三态齐（`--multiplex` / `--no-multiplex` / 不给=待裁决），`gateway/multiplex_mode.py:38-95` | 已补齐 | ✅ 已抄（`f34fdaa`·A1） |
+| 2 | env 覆盖 | `GATEWAY_MULTIPLEX_PROFILES` + 真值词表 + **空白不算覆盖** | `MINI_MULTIPLEX_PROFILES` + 同一套真值词表 + 空白不算覆盖 | 已补齐 | ✅ 已抄（`f34fdaa`·A1） |
 | 3 | 启动预检 | 六条（`multiplex_mode.py:75`） | 三条 + **异常兜底降级**（`multiplex_mode.py:132 implicit_multiplex_blocker()`） | ★ 机制缺失 | ✅ 已抄（`f34fdaa`·A3） |
-| 4 | 裁决不许致命 | 预检异常 → standalone + warning（`:117`） | 同 ✅（预检抛异常 → standalone + warning） | 防御缺失 | ✅ 已抄（`f34fdaa`·A3） |
+| 4 | 裁决不许致命 | 预检异常 → standalone + warning（`:117`） | 同 ✅（预检抛异常 → standalone + warning） | 已补齐 | ✅ 已抄（`f34fdaa`·A3） |
 | 5 | 裁决理由落盘 | `write_runtime_status(multiplex_standalone_reason=…)` | `multiplex_status_fields()` 单一来源，running/stopped 两次写都带裁决栏 | 可观测性 | ✅ 已抄（`f34fdaa`·A4） |
 | 6 | 服务集合 | `profiles_to_serve(multiplex)` 单闸口 + 墓碑过滤 + 纯目录读 | 同名函数 ✅ 但无墓碑过滤 | 细节差异 | ⬜ 没做（A2，~10 行） |
 | 7 | 服务集合顺序 | 默认永远第一 | 已遵守 ✅ | 已对齐 | — |
-| 8 | 作用域装配 | `_profile_runtime_scope`：home + 密钥 + 终端策略 | `profile_runtime_scope`：home + 密钥 ✅；**终端策略没做** | 少一件 | 已对齐 home+密钥；终端策略 ⏭ 不抄（B11） |
+| 8 | 作用域装配 | `_profile_runtime_scope`：home + 密钥 + 终端策略 | `profile_runtime_scope`：home + 密钥 ✅；**完整沙箱终端策略没做** | 少一件 | 已对齐 home+密钥；终端策略 ⏭ 不抄（B11） |
 | 9 | 作用域覆盖范围 | **30+ 调用点**（适配器/启动/入站/回合/slash/通知/热重载…） | **4 处**：入站（一律）/ 回合（按消息的家）/ 适配器建与连（`run_inbound.py:46`、`run_turn.py:84`、`run_adapters.py:150/162`） | ★ 架构成型问题 | ✅ 已抄（`9e7c8e4`·A5） |
 | 10 | 密钥失败关闭 | mux 开 + 无作用域 → 抛 | 同 ✅ | 已对齐 | — |
 | 11 | 全局白名单 | 36 项 + 3 前缀（`secret_scope.py:98-130`） | **19 项精确名 + 0 前缀**（`secret_scope.py:36-52`）—— `MINI_*` 是凭据，**故意不给前缀** | ★ 缺层（会读到空值/误抛） | ✅ 已抄（`f34fdaa`·A9） |
@@ -285,7 +285,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | 25 | 重复认领拒绝 | `_refuse_duplicate_claim`（同 token/同监听） | 无 | 基座缺失（mini 适配器无 token） | ⬜ 不抄（B8） |
 | 26 | mirror 平台跳过 | api_server/webhook 走默认监听镜像 | 无（mini 无 HTTP 监听） | 基座缺失 | ⬜ 不抄（B2） |
 | 27 | 每 profile 持久化句柄 | 不冻结 + 按 path 缓存 + **只 memoize 命中** | 已按 home 缓存 ✅，无"只缓存命中" | 细节 | ⬜ 没做（A11，~15 行） |
-| 28 | 配对存储 per profile | `PairingStore(profile=name)` | 单一 store | 缺层 | ⬜ 没做（可抄；配对白名单目前仍是全局一份，本章不动） |
+| 28 | 配对存储 per profile | `PairingStore(profile=name)` | 未启用配对 | 缺层 | ⬜ 没做（可抄；配对白名单目前仍是全局一份，本章不动） |
 | 29 | 状态面 | `gateway_state.json` + `served_profiles` + 按 profile 可读 | 有状态文件（含裁决栏）✅，缺 `served_profiles` | 可观测性 | ⬜ 没做（A12，~45 行，第四批） |
 | 30 | 控制面 | 6 个 JSON-RPC 方法（686 行） | argparse 子命令 | 基座缺失 | ⬜ 不抄（B7） |
 | 31 | 资产原子写 | tmp + `Path.replace()` + magic 嗅探 + 2MB | 无资产概念 | 基座缺失 | ⬜ 不抄，但**手法**记注释（B7） |
@@ -293,8 +293,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | 33 | open-policy 启动拒绝 | `_own_policy_open_startup_violation` | 无（授权是默认拒绝） | 概念不存在 | ⬜ 不抄（B9） |
 | 34 | 终端作用域桥 | `install_and_reset_profile_terminal_scope` | 无（无沙箱后端） | 基座缺失 | ⬜ 没做（只留「占位 + 注释」，避免以后误以为做了隔离） |
 
-**统计**：34 行 = ✅ **已抄 11** ＋ ⬜ **没做 12**（A2/A7/A10/A11/A12 ＋ #15/#28/#34 等）
-＋ ⏭ **不抄 8**（含 #8 的"终端策略"那一半）＋ — **已对齐 3**（#7/#10/#12）＝ 34。
+本表有 34 个主题；部分主题同时包含已做与未做部分，按行标签相加不能准确表示能力完成度。剩余项按 §十七逐条判断。
 
 ---
 
@@ -375,7 +374,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 **① Hermes 怎么做的**
 
-「默认开」必须配一个**预检**，否则一次安装里两个进程会抢同一个 bot token —— 那不是报错，是**间歇性错乱**。预检的六条（逐字见 §0.2）按**短路顺序**排：最便宜、最能排除大类的排前面，把昂贵的宿主探测留到后面。裁决结果要记下**来源**（`config` / `default` / `guard` 三种之一），并**落盘 + 分级打日志**：`guard` 且单 profile 记 info，其它 `guard` 记 warning。最后一条纪律：**预检崩了不许拖垮网关** —— 异常被兜住，网关退回 standalone，而不是陪着一起挂。
+「默认开」必须配一个**预检**，否则一次安装里两个进程会抢同一个 bot token —— 可能被锁冲突拒绝、连接失败或出现平台侧竞争。预检的六条（逐字见 §0.2）按**短路顺序**排：最便宜、最能排除大类的排前面，把昂贵的宿主探测留到后面。裁决结果要记下**来源**（`config` / `default` / `guard` 三种之一），并**落盘 + 分级打日志**：`guard` 且单 profile 记 info，其它 `guard` 记 warning。最后一条纪律：**预检崩了不许拖垮网关** —— 异常被兜住，网关退回 standalone，而不是陪着一起挂。
 
 **② 读 Hermes 的代码**
 
@@ -457,7 +456,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 调用点 | 15 个文件、30+ 处 | 4 处 |
-| 终端策略 | `install_and_reset_profile_terminal_scope` | ⬜ 没做（无终端子系统） |
+| 终端策略 | `install_and_reset_profile_terminal_scope` | ⬜ 未实现沙箱后端策略（mini 已有本地 terminal 工具） |
 | 缓存 spec | 按 home 分键 | 按 home 分键（`gateway/run.py:129-133`） |
 
 ★ **「只在次级 profile 才套」是个真陷阱**：那条路会漏掉**回合之前**读凭据的地方（`_open_session` 要 provider spec），fail-closed 会当场抛 `UnscopedSecretError` —— mini 实测踩过，改成入站**一律**套（嵌套同名作用域无害）。★ **缓存不能跨 profile 共享**：`_provider_spec()` 原来只缓存**一份** spec（第 7/8 章的写法），多路复用下等于「把默认 profile 的密钥 / base_url / 模型发给所有人」→ 已改成**按 home 分键**（`gateway/run.py:129-133`）。这条是 A5 的直接推论，第 7/8 章看不出来。
@@ -470,7 +469,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 多路复用的网关让**一个进程服务多个 profile**。这里最诱人也最危险的一步，是把某个 profile 的 `.env` 直接并进 `os.environ` —— 一旦这么做，**A 的密钥会泄漏进 B 的回合**，而且进程启动的**每一个子进程**都会继承它。真实版于是把「作用域」做成**上下文局部**的东西，而不是往进程环境里写：
 
-- **作用域是 contextvar**：`set_secret_scope(mapping)` 装的这份密钥只对**当前任务**可见（contextvar 会经 `copy_context()` 传进 agent 的工作线程），所以子进程**永远不继承**别的 profile 的密钥；
+- **作用域是 contextvar**：`set_secret_scope(mapping)` 装的这份密钥只对**当前任务**可见（contextvar 会经 `copy_context()` 传进 agent 的工作线程），创建子进程时仍需从所属 profile 构造环境字典；ContextVar 不能自动保证子进程环境隔离；
 - **读取走一个四分支解析器** `get_secret(name)`：① 命中**全局白名单** → 读 `os.environ`；② 有作用域、命中 → 返回作用域里的值；③ 有作用域、未命中 → 多路复用下返回 `default`（**绝不回落到另一个 profile 的 `os.environ`**），单 profile 下才回落 `os.environ`；④ **没有作用域** → 多路复用开着就**抛** `UnscopedSecretError`（fail closed），否则读 `os.environ`；
 - **白名单里放的是「真正全局」的键**：`PATH`、`HOME` 这类描述**进程/部署**的值并不是 profile 私密；多路复用下仍要照常读 `os.environ`，否则会把一次正确的读当成违规读、直接崩。判据是**精确名或前缀**任一命中，且刻意保持精简（拿不准就当它是 profile 密钥）；
 - **异常本身分两层信息**：`str(exc)` 是给终端用户的**一句可执行建议**，开发者诊断（哪个密钥、哪份文档）挂 `__notes__`。
@@ -545,7 +544,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 - **(a) 已加闸**：`hermes_cli/runtime_provider.py` 的 `_multiplex_dotenv_boundary_active()` —— **多路复用开 且 有 profile-home 覆盖** → 跳过进程级 `.env` 加载（每个 home 只记一次跳过日志，防刷屏）；判据照抄真实版 `env_loader.py:340` 那一行 `is_multiplex_active() and get_hermes_home_override() is not None`。
 - **(b) 无消费者**：mini 没有 `${VAR}` / `${env:VAR}` 展开能力（全仓 grep 零命中）→ 这一缝在 mini 不存在。
-- **(c) 未取证的半件**：mini 的 `.env` 写入路径（`profile_cmd` / `runtime_provider`）**没核**它是否也写 `os.environ`。
+- **(c) 已核**：创建/克隆 profile 仅写目标 `.env` 文件；runtime_provider 负责读取 `.env`，没有作用域内编辑密钥并同步内存映射的接口。
 
 **④ 与真实版的差别**
 
@@ -553,7 +552,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 |---|---|---|
 | (a) dotenv 加载器边界 | 多路复用 + 有 profile-home 覆盖 → 跳过进程级加载 | ✅ 有（`_multiplex_dotenv_boundary_active()`，A13，~15 行） |
 | (b) 「${VAR}」/「${env:VAR}」展开 | 装了作用域时经 `get_secret` 解析 | ⬜ 没做（mini 无展开能力，全仓 grep 零命中） |
-| (c) 作用域下「.env」写入 | 镜像发布更新已装的作用域映射（`#88441` / `#77490`） | ⬜ 未取证（`profile_cmd` / `runtime_provider` 是否也写 `os.environ` 没核） |
+| (c) 作用域下「.env」写入 | 镜像发布更新已装的作用域映射（`#88441` / `#77490`） | 创建/克隆只写目标文件；尚无作用域内编辑并发布新密钥映射的接口 |
 
 为什么现在这样：(a) 与 §五 的 fail-closed 是**同一根因**（「进程环境不是 profile 存储」）—— fail-closed 只管「读」不管「灌」，所以这道闸只能落在加载器这一层，一起修最省。(b) 没有表达式展开能力 → 没有受害者，无需实现。(c) 属于「实现时先核」，核完再定：若也写 `os.environ`，与 (a) 合并成一条改。
 
@@ -591,7 +590,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 
 **③ mini 的实现（现状）**
 
-`hermes_constants.py:43-48` 的解析顺序 = 覆盖 → `MINI_HOME` → `~/.mini-hermes` ✅（与真实版同序）。**缺**三件：`hermes_home_key()` 的等价物（全仓只有一处**注释**提到它）、`get_process_hermes_home()` 的等价物、那条一次性告警。另有一处细节不同：**只有** env/默认分支会 `mkdir`，override 分支不建目录（`:43-45`）。
+`hermes_constants.py:43-48` 的解析顺序 = 覆盖 → `MINI_HOME` → `~/.mini-hermes` ✅（与真实版同序）。发布前修复已在工具缓存中补上按解析后 home 分键；没有独立的同名函数。进程 home 出口及一次性告警尚未照抄。另有一处细节不同：**只有** env/默认分支会 `mkdir`，override 分支不建目录（`:43-45`）。
 
 **④ 与真实版的差别**
 
@@ -606,7 +605,7 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 差在哪、为什么现在这样：
 
 - `hermes_home_key()` 不是「辅助函数」，而是**按 home 分桶的注册表的唯一稳定键**。发布前复核确认了旧缓存会跨 profile 复用；现已在 `tools/registry.py` 使用 `(fn, str(get_mini_home().resolve()))` 分键，TTL 与成功宽限也使用同一个键。函数名未照抄，隔离语义已实现。
-- `get_process_hermes_home()`：mini 的 PID/锁/状态文件现在用 `get_mini_home()` 解析 —— 一旦作用域铺开（A5），**身份文件会跟着「当前作用域」跑**（把 A 的 PID 写进 B 的家）。这正是真实版那句注释防的事。
+- `get_process_hermes_home()`：mini 的身份文件函数接收显式 `home`，网关启动及关停传 `self.home`，并不随每轮作用域重新解析。虽没有同名出口，不能据此断言身份文件会写到次级 profile。
 - 一次性告警尚未实现；mini 已有终端工具的子进程环境构建路径，不能用“没有 spawner”解释缺失。告警属于漏套作用域时的诊断保护。
 
 ---
@@ -738,15 +737,15 @@ def _db_for(self, home: Path):
     return self._dbs[key]
 ```
 
-docstring 写明它的目的：作用域绑好之后，「替次级 profile 干活」的代码不用自己传 home，于是**没法传错**。`hermes_state.SessionDB` 自己**构造时把路径固化**（`hermes_state.py:83-95`），在 mini 的结构里没问题 —— 因为 `_db_for` 每次**显式**传路径。**缺**两件：`_profile_home_for_key` 的「**只 memoize 命中**」（mini 没有 profile→home 的 miss 语义），以及配对存储的 profile 维度（mini 的配对白名单是全局一份）。
+docstring 写明它的目的：作用域绑好之后，「替次级 profile 干活」的代码不用自己传 home，但调用者仍须绑定正确的 home，漏绑定或绑错仍会串库。`hermes_state.SessionDB` 自己**构造时把路径固化**（`hermes_state.py:83-95`），在 mini 的结构里没问题 —— 因为 `_db_for` 每次**显式**传路径。**缺**两件：`_profile_home_for_key` 的「**只 memoize 命中**」（mini 没有 profile→home 的 miss 语义），以及配对存储的 profile 维度（mini 未启用配对存储；平台白名单由适配器配置提供）。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 句柄按路径解析、不冻结 | `_db` 每次重解（`#88532`） | ✅ 有（`_db_for` 显式传路径） |
-| 「只 memoize 命中」 | 只缓存命中的 profile→home | ⬜ 没做（A11，~15 行） |
-| 配对存储按 profile 分家 | 每个被服务 profile 一个 `PairingStore(profile=name)` | ⬜ 没做（白名单全局一份，#28） |
+| 「只 memoize 命中」 | 只缓存命中的 profile→home | mini 无对应的 miss 回落缓存路径，不能把该策略直接算作句柄缓存缺陷 |
+| 配对存储按 profile 分家 | 每个被服务 profile 一个 `PairingStore(profile=name)` | 未启用配对（`pairing_store` 默认为 None）；不是一份全局配对白名单 |
 
 「只 memoize 命中」防的是**启动之后才被建出来的 profile**（mini 有 `profile create`，完全可能运行中新建）—— 缓存一个 miss 会把那个 profile 的行**钉到 ambient store 一辈子**。配对存储的 profile 维度要等 mini 真有「每个 profile 一套白名单」的需求再拆（拆的关键点真实版已经给出：`PairingStore(profile=name)`）。
 
@@ -801,7 +800,7 @@ mini 把「这条消息归哪个 bot」放在两处解析：`gateway/adapters/ba
 - **次级 profile**：逐 profile、逐平台建连，**每一种失败都有专属日志 ＋ 「跳过」**；
 - **只有两类错会中止启动**：`MultiplexConfigError`（配置错，见 §十四）与「**共享监听被抢**」。
 
-为什么必须 fail-soft：适配器是**进程级共享资源**。某个平台凭据缺失、监听端口被别处占了，这些都**只影响那一个平台**；如果它们能中止整个启动，一个坏平台就会**连带**把其它所有 profile 一起拖死。反过来，`MultiplexConfigError` 是**配置本身错了**（例如两个 profile 抢同一个凭据/监听）—— 继续跑只会造出一个**行为不明**的网关，所以必须**上抛、中止**。
+为什么必须 fail-soft：适配器是**进程级共享资源**。某个平台凭据缺失、监听端口被别处占了，这些都**只影响那一个平台**；如果它们能中止整个启动，一个坏平台就会**连带**把其它所有 profile 一起拖死。反过来，`MultiplexConfigError` 是**配置本身错了**（这里的明确触发是开放策略缺少 allow-all 授权；重复凭据/监听认领另有拒绝或跳过路径）—— 继续跑只会造出一个**行为不明**的网关，所以必须**上抛、中止**。
 
 **② 读 Hermes 的代码**
 
@@ -831,7 +830,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 **① Hermes 怎么做的**
 
-桌面插件**没有别的门** —— 它只能通过 **ws JSON-RPC** 够到网关，于是 profile 的枚举与配置必须落在一层 RPC 方法上，住在 `tui_gateway/methods_profiles.py`。这一层一共**六个方法**（`list` / `create` / `describe` / `configure` / `set_asset` / `get_asset`，外加一个 `remember_onboarding`），每个方法自带方法级错误码（5061…5066 + 5067）。
+桌面插件**没有别的门** —— 它只能通过 **ws JSON-RPC** 够到网关，于是 profile 的枚举与配置必须落在一层 RPC 方法上，住在 `tui_gateway/methods_profiles.py`。这一层六个核心方法（`list` / `create` / `describe` / `configure` / `set_asset` / `get_asset`），另有 `remember_onboarding`，合计七个，每个方法自带方法级错误码（5061…5066 + 5067）。
 
 它管两件事，判据都写得很死：
 
@@ -956,7 +955,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | MCP 发现 | 按 profile home 分桶（#67605） | ⬜ 没做 —— mini 无 MCP |
-| `TERMINAL_*` | 按白名单保持全局 | ⬜ 没做 —— 无沙箱后端 |
+| `TERMINAL_*` | 原文称全局；实际回合有完整 profile 终端策略作用域 | ⬜ 没做 —— 无沙箱后端 |
 | 内置工具注册表 | 进程级；插件工具按 profile 叠 | **进程级**（mini 无插件系统） |
 | `check_fn` 缓存 | 按 `hermes_home_key()` 分键 | 按解析后的当前 home 分键（发布前修复已补） |
 | 监听 / relay / 进程锁 | 一进程一份 | 进程锁**有**（mini 有 PID 指纹） |
@@ -964,7 +963,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 用大白话把这张表念一遍：
 
 - **MCP 发现**：真实版曾经是"谁先建 agent 谁占坑"，现在按 profile home 分桶；mini 根本没有 MCP，这一格是空的。
-- **`TERMINAL_*`**：真实版把这些终端策略变量**保持全局**、只靠白名单管，所以多 profile 时会串味；mini 没有沙箱后端，也就没有这些变量。
+- **`TERMINAL_*`**：原文将终端策略描述为全局，但源码已通过 `_profile_runtime_scope` 安装完整 profile 终端策略（见 §四）；不能继续断言它只靠白名单隔离；mini 没有沙箱后端，也就没有这些变量。
 - **内置工具注册表**：真实版是**进程级**的，只有插件工具那一层按 profile 叠；mini 也**进程级**，而且**没有插件系统**可叠。
 - **`check_fn` 缓存**：真实版按 `hermes_home_key()` 分键；mini 按当前 home 的解析路径分键，已补上同一个隔离边界。
 - **监听 / relay / 进程锁**：真实版一进程一份；mini 的**进程锁已经按 home 分**（用 PID 指纹判活），这一格是齐的。
@@ -991,14 +990,14 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 
 Hermes 把"谁能不能进"这件事**放在了多路复用之外的授权层**：
 
-- **四层 `authz_mixin`**（平台全放行 → 平台白名单 → 私聊配对 → 全局放行 → **默认拒**）住在 `gateway/authz_mixin.py`；
+- **五层授权检查**（平台全放行 → 平台白名单 → 私聊配对 → 全局放行 → **默认拒**）住在 `gateway/authz_mixin.py`；
 - **每 profile 一份 `PairingStore`** 住在 `gateway/pairing.py:318`。
 
 也就是说：多路复用只负责"这条事件归哪个 profile"，"谁是终端用户、能不能进"一律由授权层判。
 
 **③ mini 的实现（现状）**
 
-mini 的授权是**四层默认拒绝**（第 7 章）＋**单一**配对白名单，落在 `gateway/authz.py` —— 形状与真实版的四层 `authz_mixin` 对齐，少的只是"每 profile 一份 `PairingStore`"这一层（mini 只有一份）。
+mini 的授权是**四层默认拒绝**（第 7 章）＋未启用的可选配对接口，落在 `gateway/authz.py` —— 形状与真实版的五层授权（含默认拒绝） 对齐，少的只是"每 profile 一份 `PairingStore`"这一层（mini 的 `pairing_store` 默认 None）。
 
 **④ 与真实版的差别**
 
@@ -1025,14 +1024,14 @@ mini 的授权是**四层默认拒绝**（第 7 章）＋**单一**配对白名�
 | A7 | 共享 bot 路由表（合取/最具体/单跳父链/bot_profile/int 强转/拒绝→丢弃） | `profile_routing.py`(176) + `run.py:4348` + `run_inbound.py:173` | 新 `gateway/profile_routing.py` | ~150 | ⬜ |
 | A8 | per-bot lane（`_owner_profile` + 三段解析） | `base.py:1904/2306`、`run_adapters.py:1115` | `gateway/adapters/base.py` + `session_keys.py` | ~30 | ✅ `9e7c8e4` |
 | A9 | 全局白名单（进程身份 + shell/解释器两族）+ `_is_global_env` | `secret_scope.py:98-135` | `agent/secret_scope.py` | ~25 | ✅ `f34fdaa` |
-| A10 | `hermes_home_key` + 进程级 home 出口（顺带修 `check_fn` 缓存分键） | `hermes_constants.py:119/150` | `hermes_constants.py` + `tools/registry.py` + `gateway/status.py` | ~35 | ⬜ |
+| A10 | `hermes_home_key` + 进程级 home 出口（顺带修 `check_fn` 缓存分键） | `hermes_constants.py:119/150` | `hermes_constants.py` + `tools/registry.py` + `gateway/status.py` | ~35 | 部分已补：工具缓存 home 分键；身份文件使用显式 home |
 | A11 | 句柄缓存"只 memoize 命中" | `session_persistence.py:118-138` | `gateway/run.py` | ~15 | ⬜ |
 | A12 | 状态面写 `served_profiles` + 按 profile 可读 | `status.py:32/852/895` | `gateway/status.py` | ~45 | ⬜ |
 | A13 | dotenv 加载器边界：mux 开 + 有 home 覆盖 → 跳过进程级加载 | `env_loader.py:340-350` | `hermes_cli/runtime_provider.py` | ~15 | ✅ `f34fdaa` |
 
 **A 批合计：~630 行代码 + ~180-250 行测试（新增测试组 18~22）**
 
-### B 批 · 不抄（11 条，理由见 `/tmp/ch09-checklist.md`）
+### B 批 · 不抄（11 条，理由见下表（临时取证笔记不随仓发布））
 
 | # | 条目 | 不抄理由（三类） |
 |---|---|---|
@@ -1052,7 +1051,7 @@ mini 的授权是**四层默认拒绝**（第 7 章）＋**单一**配对白名�
 
 | # | 问题 | 证据 | 状态 |
 |---|---|---|---|
-| M1 | **真 bug**：`self._last_active_key` 无赋值点，只在 `run_turn.py:181/186` 被读 → 网关里一旦审批就 `AttributeError` | `grep -rn _last_active_key` 只有两处读 | ⬜ 本章"真问题"候选 |
+| M1 | **真 bug**：`self._last_active_key` 无赋值点，只在 `run_turn.py:181/186` 被读 → 网关里一旦审批就 `AttributeError` | `grep -rn _last_active_key` 只有两处读 | ✅ 发布前修复：审批按会话登记，并绑定发起用户及本轮事件 |
 | M2 | `--multiplex` 半成品语义（只设标志 + 横幅） | `run.py:242/250-256` | ✅ 已解决（A5/A6 已落地；A7 待做） |
 
 ### 已交付的两批（收据）

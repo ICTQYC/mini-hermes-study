@@ -68,7 +68,7 @@
 | 一次性标记 | `run_turn.py:444-449` | `is_fresh_reset` 在**这一轮跑完时消费掉** |
 | 崩溃恢复 | `run_startup.py` + `session_lifecycle.py:245` | `suspend_recently_active(max_age_seconds=120)` → 只标"刚活跃过的" |
 | 卡死升级 | `run.py:3968-3969` | `_STUCK_LOOP_THRESHOLD = 3` + `.restart_failure_counts` |
-| 两层队列 | `run_busy.py:46-80` | 单槽（覆盖） + 溢出 FIFO（不合并）；晋升：先溢出后单槽 |
+| 两层队列 | `run_busy.py:46-80` | 单槽（覆盖） + 溢出 FIFO（不合并）；已有 pending 先消费，溢出项安排到后续槽位 |
 | 回执 | `run_busy.py:55`、`:314` | `queued_event._gateway_accepted = True` |
 | agent 缓存 | `run.py:46` + `run_agent_cache.py:820-861` | LRU + 内存预算；**三条不许淘汰** |
 | 巡检 | `run_watchers.py:50-71` | 三件事，**一件都不结束对话** |
@@ -137,13 +137,13 @@
 
 ## §〇 差异表（本章 26 条）
 
-**「mini 版」列一律指【当前代码】**（不是交付时）。不是差异的写法也一样：`已对齐` = 抄平了。
+本表以实现提交 `a4799bb` 的交付快照为主；当前修复见“发布前维护”。现有章标签已移到统一维护提交。不是差异的写法也一样：`已对齐` = 抄平了。
 
 | # | 真实 Hermes | mini 版 | 性质 | 值得改 |
 |---|---|---|---|---|
 | 1 | `SessionEntry` 在内存里，另写 `sessions.json` **镜像**（源码叫 mirror，SQLite 才是权威） | 状态存在 `sessions` 表 **6 个新列**里，不写镜像 | 等价物 | 不改：mini 没有第二个读者 |
-| 2 | `get_or_create_session` 是**单飞**的（同 key 并发共享 owner 结果 + 全部阻塞 IO 在锁外） | 单线程 + 每会话一把锁（第 7 章守卫已保证同会话串行） | 规模差距 | 不改 |
-| 3 | 读不到会话行时还有三条检查（压缩 tip / 已结束 / 路由重置原因） | 没有（一库一进程，没有跨进程写者） | 规模差距 | 不改 |
+| 2 | `get_or_create_session` 是**单飞**的（同 key 并发共享 owner 结果 + 全部阻塞 IO 在锁外） | 线程模型 + 每会话一把锁（第 7 章守卫已保证同会话串行） | 规模差距 | 不改 |
+| 3 | 读不到会话行时还有三条检查（压缩 tip / 已结束 / 路由重置原因） | 未实现这些检查；CLI 与网关仍可能跨进程访问同一库 | 规模差距 | 不改 |
 | 4 | 优先级 `suspended`（硬） **>** `resume_pending`（软） **>** 复用 | `route()` 同一顺序，且有测试锁死 | **已对齐** | — |
 | 5 | 软标记**不许覆盖**硬擦除（`mark_resume_pending` 逐字 *"Will NOT override `suspended=True`"*） | `mark_resume_pending` 里先查 `suspended` 再写 | **已对齐** | — |
 | 6 | `is_fresh_reset` 在重置时置位（`session.py:1099`，自动重置也置位） | `_create()` 里 `is_fresh_reset=bool(previous)` | **已对齐** | — |
@@ -155,16 +155,16 @@
 | 12 | 卡死升级：`_STUCK_LOOP_THRESHOLD = 3` + `.restart_failure_counts` + 升级后**清空**计数 | `STUCK_LOOP_THRESHOLD = 3` + 同名计数文件 + 清空；且**权威是持久化计数**（不依赖本次标了谁） | **已对齐** | — |
 | 13 | 会话跑完 → `_clear_restart_failure_count`（计数不只加不减） | 同（`clear_one_stuck_loop_count`，在成功跑完那一支里） | **已对齐** | — |
 | 14 | **stall 看门狗**（`run_watchers.py:77-80`，默认 300s，只看 `get_activity_summary()`） | 没有 | **基座缺失**：mini 的 agent 没有 activity summary | 值得做，成本中等 |
-| 15 | 两层队列：单槽（**单值**，后到覆盖）+ 溢出 FIFO（不合并） | `SessionQueues` 同形；晋升顺序同（先溢出后单槽） | **已对齐** | — |
+| 15 | 两层队列：单槽（**单值**，后到覆盖）+ 溢出 FIFO（不合并） | `SessionQueues` 同形；mini 优先显式 FIFO，再取普通消息单槽；与上游已有 pending 优先的混合顺序不同 | **已对齐** | — |
 | 16 | `_gateway_accepted = True`（`run_busy.py:55`、`:314`） | 入队那一刻 `setattr(event, "_gateway_accepted", True)` | **已对齐**（第 7 章曾判"没有队列→不抄"，本章激活） | — |
 | 17 | 覆盖掉上一条排队消息时给用户回执/提示 | `_notify_overwrite` → 用户可见通知（含正确替代动作 `/queue`） | **已对齐** | — |
-| 18 | agent 缓存：`_AGENT_CACHE_MAX_SIZE = 128` + TTL + 保护最近 N + `memory_high_mb` 预算；三条不许淘汰 | `AgentCache` 128 / 3600 / 8 + 固定 2048MB；三条不许淘汰同 | **已对齐**（但 mini 的 agent 无跨轮内存态 → 收益小，见 §七 ④） | — |
+| 18 | agent 缓存：`_AGENT_CACHE_MAX_SIZE = 128` + TTL + 保护最近 N + `memory_high_mb` 预算；三条不许淘汰 | `AgentCache` 128 / 3600 / 8 + 固定 2048MB；三条不许淘汰同 | 保护机制对齐；mini 不缓存完整消息列表，但保留提示词、todo、压缩器等状态 | — |
 | 19 | `memory_high_mb` 配置默认 **`"auto"`**（`config_defaults.py:75`，自己探测） | 固定 `2048.0` | 简化 | 可改，成本低 |
 | 20 | 内存压力：按"每个条目估算大小"算要到线下多少 | 固定目标（放掉约 1/4），**返回值里明说这是估算** | 规模差距 | 不改 |
 | 21 | 巡检三件事：空闲清扫 / 压力清扫 / 每小时 `prune_old_entries(max_age)`（`max_age > 0` 才做） | 三件都在；第三件 mini **没有删除路径** → 抄开关语义 + 诚实记债 | **基座缺失**（第 6 章没做删除） | 值得做，成本中等 |
-| 22 | `.clean_shutdown` **只在 drain 没超时**时才写（`run_shutdown.py:1892` 反之打日志） | `exit_code == 0` 就写（mini 没有 drain 超时这条路径） | 近似 | 可改，成本低 |
+| 22 | `.clean_shutdown` **只在 drain 没超时**时才写（`run_shutdown.py:1892` 反之打日志） | 发布前修复已要求退出成功且回合排空；等待超时不写 | 已补齐门槛 | — |
 | 23 | PII 脱敏：`user_<12hex>`（Discord 除外） | 没有 | **消费者缺失**：mini 没有"会话上下文注入"段 | 不改 |
-| 24 | `SessionSource` 17 个字段（多平台怪癖） | 6 个字段 | 规模差距（只有一个 console 适配器） | 不改 |
+| 24 | `SessionSource` 22 个字段（多平台怪癖） | 6 个字段 | 规模差距（只有一个 console 适配器） | 不改 |
 | 25 | 进程退出**不结束**对话；只对正在跑的会话打 `shutdown_timeout` / `restart_timeout` | 同（**修了第 7 章的两处语义错**，见 §九） | **已对齐** | — |
 | 26 | 压缩/轮转之后淘汰缓存 agent（`_evict_cached_agent`） | 网关侧**没有**这条调用 | **接缝为空**：mini 的压缩在 agent 侧，且 agent 每轮现读历史 → 那个风险不存在 | 不做（但风险写进 §十 ④，含"什么时候它突然变必需"） |
 
@@ -244,10 +244,10 @@
 
 **④ mini 为什么没做成这样 / 值不值得改**
 
-- **单飞没抄**（差异表 #2）：mini 是线程模型，同一会话的并发已经被第 1 级守卫挡住
-  （一把锁 + 忙时排队），所以"并发创建同一会话"这种情况在 mini 里**构造不出来**。
+- **单飞（同键并发请求共用一次创建结果）没抄**（差异表 #2）：mini 是线程模型，同一会话的并发已经被第 1 级守卫挡住
+  （一把锁 + 忙时排队），所以"并发创建同一会话"这种情况在 mini 里**正常适配器入口会被守卫挡住；绕过入口或跨进程调用仍可能发生**。
   要抄就得把 `route()` 拆成"锁内快照 / 无锁检查 / 锁外 IO"三段 —— 那是 200+ 行的并发改造，
-  换来的收益是"高并发下不去重"这个 mini 场景里不存在的保证。**不值得改。**
+  换来的收益是"同键并发下避免重复创建"这个 mini 场景里不存在的保证。**不值得改。**
 - **内存镜像没抄**（差异表 #1）：真实版写 `sessions.json` 是因为有**第二个读者**
   （别的进程/工具要看路由表）。mini 的读者只有网关自己，库就是索引。**不值得改。**
   代价写在这里：将来若加一个只读消费者（比如桌面 dashboard），得补一个镜像或让它读库。
@@ -560,7 +560,7 @@ or None when the file is missing/unreadable (no exists() pre-check needed)
 ```
 
 ★ 这是"**少一次竞态**"的写法：`if exists(): read()` 之间文件可能被删掉 ——
-直接读、读不到当空，只有一次系统调用窗口。
+直接读、读不到当空，省掉了存在性检查与读取之间的竞态窗口；读取本身仍需处理失败。
 
 **③ mini 的实现**
 
@@ -607,7 +607,7 @@ mini 最初写的是
             suspended = router.suspend_stuck_loop_sessions(counts)
 ```
 
-后果：一个会话**已经被挂起** → 恢复扫描会跳过它（`suspended` 的那条边界）→ `marked` 为空
+后果：一个会话**已经被标为待恢复** → 恢复扫描会跳过它（`resume_pending` 的那条边界）→ `marked` 为空
 → `keys` 为空 → **卡死升级永远不触发**（升级路径被自己的前置条件挡死了）。
 正确写法是"计数文件是权威"：
 
@@ -633,8 +633,9 @@ mini 最初写的是
 | 又发了一条普通消息 | "**我改主意了**" —— 后来那条才是现在想要的 | **单槽**（`_pending_messages[key]`，**单值**） | 后到**覆盖**先到 |
 | `/queue 把这件也做了` | "**这几件都要做**，一件都不能少" | **溢出 FIFO** | 尾部入队、按序处理、永不合并 |
 
-晋升顺序：**先溢出、后单槽**。理由是承诺的先后 —— 溢出里的东西是用户**显式**排的队，
-被接受的那一刻就承诺了"会做"；单槽里只是"最新的那条普通消息"。
+上游先消费已取出的 `pending_event`；它存在时，溢出队列头被暂存到下一次槽位。
+只有没有 pending 时才直接取溢出头。因此不能概括为“先溢出、后单槽”。
+mini 则把显式 `/queue` 全放进独立 FIFO，并优先于普通消息单槽处理；这是混合事件顺序的有意差异。
 
 **② 读 Hermes 的代码**
 
@@ -692,7 +693,7 @@ mini 最初写的是
         return overwritten
 
     def promote(self, key: str) -> Optional[Any]:
-        """取下一个要跑的事件：**先溢出 FIFO，再单槽**（真实版 `_promote_queued_event` 的顺序）。"""
+        """取下一个要跑的事件：**先溢出 FIFO，再单槽**（mini 的混合事件优先级，与上游已有 pending 优先的规则不同）。"""
         overflow = self._overflow.get(key) or []
         if overflow:
             nxt = overflow.pop(0)
@@ -889,8 +890,7 @@ the cache may stay over cap until the next insert       # 没人可放时宁可�
 
 - **抄的是生命周期，不是收益**（诚实项）：真实版缓存的是"历史 + 提示词缓存都还活着"的
   agent（那里有真金白银：prompt cache 命中率）。mini 的 `AIAgent` **每轮按
-  `session_db` + `session_id` 自己读历史**，agent 上没有跨轮内存态 —— 所以 mini 缓存
-  省下的是"构造一个对象"这点开销。**收益小，但结构对齐**：它让"淘汰/保护/压力"这套判据
+  `session_db` + `session_id` 自己读历史**，agent 不持有跨轮消息列表，但仍保留提示词字符串、todo、压缩器和预算等状态；缓存也省去重复装配提示词等工作。**收益小，但结构对齐**：它让"淘汰/保护/压力"这套判据
   第一次有**最小可跑的舞台**（否则本章有一半内容无处落地）。
 - **`memory_high_mb` 默认值没抄**（差异表 #19）：真实版配置默认是 **`"auto"`**
   （`config_defaults.py:75`，自己探测），mini 用固定 `2048.0`。**值得改，成本低**
@@ -1086,7 +1086,7 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 ```
 
 第 6 章的存储层再往前一步：如果压缩产生的是**新会话行**（轮转），
-新行带 `parent_session_id` 指回旧行（血缘），旧行 `active=0`。
+新会话行带 `parent_session_id` 指回旧会话；`active` 是消息行字段，不能把“旧会话结束”写成会话行 `active=0`。
 
 **② 读 Hermes 的代码**
 
@@ -1112,12 +1112,12 @@ _session_housekeeping_watcher(interval=300)          每 300 秒醒一次
 所以 §七 那个缓存与压缩之间真正的耦合点是：
 
 ```text
-agent 是否持有跨轮的内存状态？
+agent 是否持有跨轮的完整消息列表？
   持有 → 压缩/轮转之后**必须**淘汰它（真实版：_evict_cached_agent）
   不持有 → 不需要（mini 当前状态）
 ```
 
-mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, factory)` 只保证
+mini 的缓存 agent 不持有完整消息列表：`get_or_create(key, sid, factory)` 只保证
 "同一个会话用同一个 agent 对象"，而历史每轮现读。**这条接缝 mini 是空的** ——
 不是漏了，是**没有那个风险**。
 
@@ -1130,7 +1130,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
   或者给网关补**真正的 hygiene 压缩段**。**这两件事任一发生**，就必须同时补三处：
   ① 压缩后淘汰 agent ② 轮转后淘汰 agent（本章已有）③ 淘汰原因写进 `evictions` 便于事后查。
 - 为什么现在不做：mini 的 agent **每轮现读历史**，所以"压缩 → 缓存过期"这个 bug
-  在 mini 里**构造不出来** —— 加一句 `evict(reason="compaction")` 只会变成
+  在 mini 里**正常适配器入口会被守卫挡住；绕过入口或跨进程调用仍可能发生** —— 加一句 `evict(reason="compaction")` 只会变成
   **永不触发的死代码**（没有 hygiene 段可挂）。
 - **代价写明**：将来谁把历史搬进 agent 内存，谁就得回来补这一句；
   而漏掉它的症状**不报错**，只在下一轮表现为"历史回退到压缩前"（多花钱 + 上下文超长）。
@@ -1158,7 +1158,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 | # | 症状 | 根因 | 修法 | 谁抓到的 |
 |---|---|---|---|---|
 | 3 | 已结束的会话也会被标成"待恢复" | `recently_active_session_ids()` 只按 `updated_at` 筛，**没排除 `ended_at`**（真实版靠"遍历内存索引"天然排除，mini 是查库所以必须显式写） | SQL 加 `AND ended_at IS NULL` | 测试组 15 |
-| 4 | 卡死升级**永远不触发** | 升级被写成 `if keys:` 才检查 —— 而"会话已被挂起"会让 `marked` 为空 → 升级路径被自己的前置条件挡死 | **计数文件是权威**：不管本次标了谁，都读文件再判 | 测试组 15 |
+| 4 | 卡死升级**永远不触发** | 升级被写成 `if keys:` 才检查 —— 而“会话已是待恢复”会让 `marked` 为空 → 升级路径被自己的前置条件挡死 | **计数文件是权威**：不管本次标了谁，都读文件再判 | 测试组 15 |
 | 5 | `/new` 之后缓存 agent 不淘汰（会往旧会话写新消息） | 淘汰点只加在 `_open_session`（自动重置那条路），漏了 `/new` 这条命令路 | 两个调用点都加（§七） | 测试组 17 |
 | 6 | 轮转淘汰被驳回 → 同上 | `evict()` 无脑过 `_is_protected()`，于是**正确性要求**被**资源规则**拦住 | `forced = reason in ("force", "session_rotated")` | 测试组 17 |
 
@@ -1251,8 +1251,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 
 ★ 真跑里还**意外**看到一条印证 §七 的现象：被打断的那一轮（"从一数到二十"）
 在下一轮里**不在上下文里**（agent 回答"我这边没有前面两句的上下文"）——
-因为那一轮被中断、转写本是半截的。这正是 `pending_flush` 保护存在的原因：
-**没落盘的 agent 不许淘汰**。
+因为那一轮被中断、转写本是半截的。这是当时观察到的异常回答，不能仅凭模型回答证明数据库缺行。mini 不缓存消息列表，保留 agent 的 `pending_flush` 标记也无法恢复未写入数据库的消息；应检查消息行与中断补齐路径，当前修复见发布前维护。
 
 ### 反向验证 14 个改法（名字即断言）
 
@@ -1277,7 +1276,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 
 ## §十三 差距清单（可改 / 不做，带成本）
 
-### 值得做（成本已估）
+### 值得做（历史清单，成本为当时估计）
 
 | # | 差距 | 成本 | 前置 |
 |---|---|---|---|
@@ -1285,7 +1284,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 | 2 | **stall 看门狗**（默认 300s，只看 `get_activity_summary()`） | 中 | 要先给 `AIAgent` 加 activity summary（第 2 章） |
 | 3 | **老记录剪枝**（`prune_old_entries(max_age)`） | 中 | 要在存储层做（第 6 章）：删消息 + FTS + 血缘 + VACUUM 策略 |
 | 4 | `memory_high_mb` 的 **`"auto"`** 语义（按系统内存/容器限额自算） | 低 | 无 |
-| 5 | `.clean_shutdown` 的 **drain 超时门槛**（超时不写标记） | 低 | mini 需要先有"drain 是否按时完成"这个布尔 |
+| 5 | `.clean_shutdown` 的 **drain 超时门槛**（超时不写标记） | 低 | 发布前修复已实现，见顶部维护说明 |
 | 6 | 回执 `_gateway_accepted` 的**消费端**（交付层据此不重复回执） | 低 | mini 的 delivery 目前只按 target 路由，没有"回执去重"这条逻辑 |
 
 ### 不做（写明代价）
@@ -1297,8 +1296,8 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 | 9 | `was_auto_reset` / `auto_reset_reason` / `reset_had_activity` | 没有"重注入话题/技能""附件重发"这些消费者 | 补这些功能时要先补字段与消费点 |
 | 10 | 内存压力按"每个条目估算大小" | 估准了也没有决策价值 | 压力下可能放多/放少一点 |
 | 11 | PII 脱敏（`user_<12hex>`） | mini 没有"会话上下文注入"段 | 接入多人共享会话时必须补 |
-| 12 | `SessionSource` 的 17 个字段 / 平台怪癖 | 只有一个 console 适配器 | 接第二个平台时要扩字段与键规则 |
-| 13 | 跨进程压缩锁 / 多 profile 多库绑定 | 第 5/6/7 章挂着的债，mini 单进程单库 | 多进程部署时再补 |
+| 12 | `SessionSource` 的 22 个字段 / 平台怪癖 | 只有一个 console 适配器 | 接第二个平台时要扩字段与键规则 |
+| 13 | 跨进程压缩锁 / 多 profile 多库绑定 | 多 profile 文件层隔离已在网关族补齐；数据库跨进程压缩租约仍未实现 | 多进程部署时再补 |
 | 14 | **压缩/轮转后淘汰缓存 agent 的联动** | mini 的压缩在 agent 侧、agent 不持历史 → 现在**构造不出**那个 bug（加了就是死代码） | 谁把历史搬进 agent 内存，谁就得回来补（漏了不报错，表现为"历史回退"） |
 
 ---
@@ -1309,7 +1308,7 @@ mini 的缓存 agent 就是"不持有"的那种：`get_or_create(key, sid, facto
 |---|---|
 | **会话键**（session_key） | `agent:{命名空间}:{平台}:{聊天类型}:{聊天 id}`；状态机的**唯一键** |
 | **命名空间** | 键里的 profile 段；默认 `main`，字面叫 `main` 的 profile 用 `main~` |
-| **`SessionSource`** | 入站消息的归一化来源（真实版 17 字段 / mini 6 字段） |
+| **`SessionSource`** | 入站消息的归一化来源（真实版 22 字段 / mini 6 字段） |
 | **`SessionEntry`** | 一个会话键的注册记录（真实版在内存 + 镜像；mini 在 `sessions` 表） |
 | **路由决策**（route） | "这条消息用哪个会话"的唯一决策点；五个出口 |
 | **硬擦除**（`suspended`） | 下次访问**换新会话**；**永远赢**；不能被软标记撤回 |

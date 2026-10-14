@@ -7,7 +7,7 @@
 > 看不懂的地方或想深挖的点，随时问，我再往这里补。
 >
 > 📌 行号锚在上游 commit **`f5d1926110`**（`version = "0.21.3"`）；上游每合并一个 PR 行号就会漂。
-> 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 **2 处**，见附录 C）。
+> 译文里凡是**与源码不符**的地方，用 `⚠️ 上游文档出入` 标出来（本章已发现 **3 处**，见附录 C）。
 
 > mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
 
@@ -63,7 +63,7 @@
 
 ## 1. SessionSource —— 消息来源描述符
 
-`SessionSource` 是一条"**这条消息从哪来**"的冻结记录（frozen record）。它挂在每个入站
+`SessionSource` 是一条"**这条消息从哪来**"的数据记录（可修改的 dataclass，不是 `frozen=True`）。它挂在每个入站
 `MessageEvent` 上，被三件事读取：**路由**（归哪个会话）、**隔离**（谁能看见谁）、
 **上下文注入**（写进系统提示词）。
 
@@ -82,10 +82,13 @@
 | `user_id_alt` | `Optional[str]` | `None` | 平台侧**稳定**的备用 id（Signal UUID、飞书 union_id）。**当 `user_id` 是易变值时用它** |
 | `chat_id_alt` | `Optional[str]` | `None` | Signal 群的内部 id —— 把 Signal 群 V2 标识映射到规范形态 |
 | `is_bot` | `bool` | `False` | 发言人是 bot 或 webhook（Discord bots）时为真 |
-| `guild_id` | `Optional[str]` | `None` | Discord guild / Slack workspace / Matrix server 的作用域标识 |
+| `scope_id` | `Optional[str]` | `None` | 平台中立的作用域标识（Discord guild / Slack workspace / Matrix server） |
+| `guild_id` | `Optional[str]` | `None` | 已弃用的兼容别名；与 `scope_id` 同步，后者优先 |
 | `parent_chat_id` | `Optional[str]` | `None` | 当 `chat_id` 指的是一个线程时，它所属的父频道 |
 | `message_id` | `Optional[str]` | `None` | 触发这条消息的原始 id。用于置顶/回复/加表情，以及 Discord 的 id 注入 |
 | `role_authorized` | `bool` | `False` | 适配器**按平台角色**（而不是按具体用户 id）授权时为真 |
+
+源码还有 `profile`、路由拒绝、自动线程与受信 relay 等内部字段；上表不是完整字段清单（完整类见 `gateway/session.py:63-98`）。
 
 📌 **读这张表的方法**：不必背。要看的是它体现的三条设计取向：
 
@@ -148,7 +151,7 @@
 | `reset_had_activity` | `False` | 被替换掉的那个会话**之前有没有活动** |
 | `is_fresh_reset` | `False` | 由显式 `/new` 或 `/reset` 置位。**第一条消息时要重新注入话题/频道技能**。它和 `was_auto_reset` 分开，是为了不发出误导性的"会话已过期"提示 |
 | `expiry_finalized` | `False` | 历史遗留的"终结栅栏"，只为恢复而保留；**没有任何定时器会写它** |
-| `suspended` | `False` | **硬擦除**信号。由 `/stop` 或卡死循环升级（连续重启失败 ≥3 次）置位。下次 `get_or_create_session()` **无条件换新 `session_id`**，不管 `resume_pending` 是什么 |
+| `suspended` | `False` | 挂起后换新会话的信号（本文原称“硬擦除”，并非物理删除历史）。原文说由 `/stop` 或卡死升级置位；源码实际 `/stop` 只打断并清队列，挂起由卡死升级设置（见源码讲解附录 C ④）。下次 `get_or_create_session()` **无条件换新 `session_id`**，不管 `resume_pending` 是什么 |
 | `resume_pending` | `False` | **软恢复**标记。由 `suspend_recently_active()`（崩溃恢复）或 drain 超时置位。下次访问**保留原 `session_id`** —— 用户接着同一份转写本继续。下一轮成功完成后才清除 |
 | `resume_reason` | `None` | 为什么标记要恢复：`"restart_timeout"`、`"shutdown_timeout"`、`"restart_interrupted"` |
 | `last_resume_marked_at` | `None` | 最近一次标记的时间戳 |
@@ -157,8 +160,8 @@
 
 | | `suspended`（硬） | `resume_pending`（软） |
 |---|---|---|
-| 触发 | `/stop`、卡死循环 | 崩溃恢复、drain 超时 |
-| 下次访问 | **换新会话**（旧对话丢掉） | **接着旧对话**（转写本不动） |
+| 触发 | 卡死循环升级；源码中的 `/stop` 不设置挂起 | 崩溃恢复、drain 超时 |
+| 下次访问 | **换新会话**（旧历史仍保留） | **接着旧对话**（转写本不动） |
 | 语义 | "这个会话坏了/别要了" | "它只是被打断了" |
 
 ### 状态转移逻辑（`get_or_create_session`）
@@ -202,7 +205,7 @@
 3. 没有触发条件 → 返回原记录（刷新 `updated_at`）。
 
 📌 **顺序为什么不能换**：第 1 条必须在第 2 条之前 —— 否则"既被 `/stop` 过、又被标记要恢复"
-的会话会被复活，而用户的意图明明是**把这条对话扔掉**。
+的会话会被复活，而挂起状态已经要求下一次访问换新；一次意外中断的恢复标记不能撤回这个决定。
 
 📌 另外注意转移图里那格 **"策略说要重置吗？（reason=`idle`/`daily`）"** ——
 它是**历史遗留路径**。第 6 节会明确说：现在**不活动和墙钟时间永远不轮转会话**。
@@ -421,7 +424,7 @@ def is_shared_multi_user_session(source, *, group_sessions_per_user, thread_sess
 
 | 推论 | 为什么 |
 |---|---|
-| 用户回来时对话一定还在 | 时间流逝不是结束会话的理由 |
+| 没有其他显式边界或删除时，时间流逝本身不会结束对话 | 时间流逝不是结束会话的理由 |
 | 想重开必须显式 `/new` | 边界只能由用户（或显式挂起）创建 |
 | 内存压力只能"放掉资源"，不能"结束对话" | 二者被**刻意分开**（§10、§11 会反复出现这条） |
 
@@ -598,7 +601,7 @@ _enqueue_fifo(session_key, event, adapter)
 
 ### FIFO 不变量
 
-**每次 `/queue` 调用恰好产生一整轮 agent 回合，按 FIFO 顺序，不合并。**
+**正常运行且未被 `/new`、`/reset` 等显式操作清除时，每次 `/queue` 调用各自调度一轮，按 FIFO 顺序，不合并。内存队列不保证跨进程崩溃后的恰好一次执行。**
 "单槽 `_pending_messages` + 溢出 `_queued_events`"这个设计保证：
 活跃轮次期间的重复发送**不会**导致乱序处理。
 
@@ -663,7 +666,7 @@ def build_session_context(source, config, session_entry=None) -> SessionContext
 ## 11. Agent 缓存
 
 网关维护一个 `AIAgent` 实例的 **LRU 缓存**，按 `session_key` 索引 ——
-目的是**跨轮次保住提示词缓存**。
+目的是跨轮复用 agent 状态，使提示词装配更稳定；服务端缓存是否命中还取决于请求内容、TTL 和 provider。
 
 ### 缓存属性
 
@@ -689,11 +692,11 @@ def build_session_context(source, config, session_entry=None) -> SessionContext
   （**计费口径就是它** —— 所以同 unit 的子进程比如 `execute_code` 的内核也算在内，**#110549**）；
 - 否则用进程自己的匿名 RSS；
 - **超预算**就按 LRU 通过**和条数上限执行时同一条软路径**（`_commit_then_release_soft`）淘汰，
-  然后跑 `malloc_trim`，让释放出来的 arena **真正还给操作系统**。
+  然后在支持的平台尝试 `malloc_trim`，促进释放的堆内存归还操作系统；不能保证 RSS 立即下降。
 
 被淘汰的会话，**下一轮从落盘的会话重建转写本**。
 
-**三类会话永远不会被放掉**：
+**压力淘汰会保护以下三类会话**（显式重置、关闭等生命周期操作另行处理）：
 
 1. **正在轮次中间的**（它们的客户端与沙箱正在被使用）；
 2. `protect_recent` 个**最近使用**的会话（它们的提示词缓存最值钱）；
@@ -724,7 +727,7 @@ get_or_create_session()  →  拿到 session_key
     ├── 命中 → move_to_end()，复用 AIAgent（**保住提示词缓存**）
     │
     └── 未命中 → 新建 AIAgent，放进缓存
-                  （到容量上限就 popitem(last=False) 淘汰 LRU）
+                  （到容量上限时尝试淘汰可释放的 LRU；受保护条目可能使缓存暂时超过容量）
     │
     ▼
 run_conversation()  →  agent 处理消息
@@ -776,7 +779,7 @@ run_conversation()  →  agent 处理消息
 |---|---|---|
 | session key | 会话键 | "哪条对话车道"（长期稳定），`agent:main:...` |
 | session id | 会话 id | "这条车道上的第几趟车"（会被重置换新） |
-| SessionSource | 消息来源描述符 | 一条消息从哪来的冻结记录（平台/聊天/用户/线程…） |
+| SessionSource | 消息来源描述符 | 一条消息从哪来的数据记录（平台/聊天/用户/线程…） |
 | SessionEntry | 活动会话记录 | 每个会话一条的元数据 + 状态标志 |
 | SessionStore | 会话存储层 | 内存字典 + `sessions.json` + SQLite 的入口 |
 | SessionContext | 会话上下文 | 注入系统提示词的那段"当前会话"信息 |
@@ -808,7 +811,7 @@ run_conversation()  →  agent 处理消息
 ## 附录 B · 这一章在整套文档里的位置
 
 ```text
-官方侧边栏（Developer Guide）        我们的进度
+官方侧边栏（Developer Guide）        本扩展开工时的历史进度（当前进度见 README）
  5  agent-loop                       ✅ 第 2 章
  6  prompt-assembly                  ✅ 第 3 章
  7  context-compression-and-caching   ✅ 第 5 章
@@ -840,7 +843,7 @@ run_conversation()  →  agent 处理消息
 
 ---
 
-## 附录 C · 上游文档出入（本次核实 2 处）
+## 附录 C · 上游文档出入（本次核实 3 处）
 
 核对的锚：上游 commit **`f5d1926110`**（v0.21.3）。本次逐条核了原文点名的
 **文件规模、兄弟模块名、常量、默认值、函数名**，结论如下。
@@ -877,6 +880,10 @@ run_conversation()  →  agent 处理消息
   `:1237` 的 `_suspend_stuck_loop_sessions()` 读它。
   **源码里搜不到 `restart_counts.json` 这个字面量**（名字对不上，而且是**点文件**、不是 `.json`）。
 - 影响：小。按 `_STUCK_LOOP_FILE` / `_stuck_loop_counts_path()` 找，不要按文档给的文件名找。
+
+### ④ 来源记录不是冻结的，`/stop` 也不设置挂起
+
+`SessionSource` 使用普通 `@dataclass`，其 `__post_init__` 会同步 `scope_id/guild_id`；不是不可变记录。`/stop` 实际执行打断和清队列，不调用挂起接口，详见源码讲解附录 C ④。
 
 ### 已核实**正确**的声明（别再重查）
 

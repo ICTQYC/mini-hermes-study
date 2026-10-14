@@ -186,7 +186,7 @@ API 钩子描述 agent 循环内部的 provider 尝试：
 
 `post_tool_call` 在 blocked 与 cancelled 路径上**也会**发出，这样遥测插件才能干净地闭合跨度（span）。
 
-`status` 被刻意做成一个**封闭枚举**而不是自由文本：观察者的仪表盘要按状态分组，就必须有一个有限集合。同时，`blocked` 与 `cancelled` 既被纳入枚举、又要在这些路径上补发 `post_tool_call` —— 正是为了让"开始了却没正常结束"的调用也能被闭合，否则跨度会一直悬着。
+`status` 有约定的常见取值，表格并非完整的封闭枚举：观察者的仪表盘要按状态分组，就必须有一个有限集合。同时，`blocked` 与 `cancelled` 既被纳入枚举、又要在这些路径上补发 `post_tool_call` —— 正是为了让"开始了却没正常结束"的调用也能被闭合，否则跨度会一直悬着。
 
 ### Approval Lifecycle —— 审批生命周期
 
@@ -305,7 +305,7 @@ def on_post_tool_call(**kwargs):
 
 用 `session_id`、`turn_id`、`api_request_id` 与 `tool_call_id` 做跨度关联。当导出格式支持嵌套 agent 工作或安全生命周期事件时，用子代理钩子与审批钩子。
 
-这个最小插件的形状说明了契约的分工：注册四个钩子（两个 API、两个工具），用 `api_request_id` / `tool_call_id` 把"开始"和"结束"配成一对跨度。只看回合与计价用 API 钩子就够；需要嵌套 agent 工作或安全生命周期，再补子代理与审批钩子。
+这个最小插件的形状说明了契约的分工：注册四个钩子（两个 API、两个工具），用 `api_request_id` / `tool_call_id` 把"开始"和"结束"配成一对跨度。请求跨度用 API 钩子；完整回合汇总另需回合钩子；需要嵌套 agent 工作或安全生命周期，再补子代理与审批钩子。
 
 ---
 
@@ -439,7 +439,7 @@ def on_post_tool_call(**kwargs):
 - **frontmatter（`1–4`，4 行）**：不进译文正文；其 `title` / `description` 的信息并入引文块的"定位"一句与 §0。
 - **H1 前言四段（`8–24`，17 行）**：并入 §0 导语（**搬走**，不单列标题）。原文前言讲四件事 —— 只读遥测契约的用途与受众（`8–11`）、刻意与后端无关 / 不替代什么（`13–16`）、行为变更型包装器不属于本契约（`18–20`）、第一方 NeMo Relay 路径（`22–24`）。
 - **`## Contract` 第一个代码块（`30–36`，7 行）与 §6 最小插件代码块（`275–316`，42 行）**：两者的 `register(ctx)` 四行**逐字重复**（`31–35` 对 `276–280`）。原文如此，译文**两处都保留**（未合并、未删）。
-- **代码块总计 4 个（共 55 行）**：`30–36`（7 行）、`41–46`（6 行）、`50–52`（3 行）、`275–316`（42 行）→ **4/4 逐字保留**（英文原文与缩进一字未改，仅周围散文为中文）。
+- **代码块总计 4 个（共 58 行）**：`30–36`（7 行）、`41–46`（6 行）、`50–52`（3 行）、`275–316`（42 行）→ **4/4 逐字保留**（英文原文与缩进一字未改，仅周围散文为中文）。
 - **外链（`24`、`329`、`331`）**：`relay-shared-metrics.md`（×2）与 NVIDIA Relay observability 文档页（×1）逐字保留为链接，**未展开**。
 - **未删节**：原文**没有任何一段被砍掉**；原文各节末尾本就没有小标题的段落，译文同样保持无标题（不新增 `### 源码要点` / `### 为什么这么设计` 之类标题）。
 
@@ -510,7 +510,7 @@ def on_post_tool_call(**kwargs):
 - 原文第 103–104 行逐字：*"Common fields include `session_id`, `completed`, `interrupted`, `reason`, `old_session_id`, and `new_session_id` where available."*
 - 实测 `on_session_end` 的载荷（`agent/turn_finalizer.py:660-671`）逐字为 `session_id` / `task_id` / `turn_id` / `completed` / `failed` / `interrupted` / `turn_exit_reason` / `model` / `platform` —— **没有 `reason`**，且有文档未列的 `failed` 与 `turn_exit_reason`。
 - `reason` 与 `old_session_id` / `new_session_id` 分别属于另外两个钩子：`hermes_cli/cli_session_mixin.py:434-437` 逐字 `context = {` / `"session_id": self.agent.session_id if self.agent else None,` / `"platform": getattr(self, "platform", None) or "cli",` / `"reason": "new_session" if event_type == "on_session_reset" else "session_boundary"}`；`gateway/slash_commands_session.py:210-213` 逐字 `_invoke_hook("on_session_reset", session_id=_new_sid, reason="new_session",` / `platform=source.platform.value if source.platform else "",` / `old_session_id=_old_sid, new_session_id=_new_sid)`。
-- **结论**：并集口径可读但**易误用** —— `old_session_id` / `new_session_id` 只在 **gateway** 的 `on_session_reset` 上出现（CLI 路径不传），`reason` 不在 `on_session_end` 上。按字面在 `on_session_end` 里读 `kwargs["reason"]` 会拿到 `None`。
+- **结论**：并集口径可读但**易误用** —— `old_session_id` / `new_session_id` 只在 **gateway** 的 `on_session_reset` 上出现（CLI 路径不传），`reason` 不在 `on_session_end` 上。按字面在 `on_session_end` 里读 `kwargs["reason"]` 会抛 `KeyError`；`kwargs.get("reason")` 才会返回 `None`。
 
 **⑦ §3.2 / §3.3 的字段清单均为**子集**（原文用 "Common … include" / "includes"）。**
 

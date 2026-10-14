@@ -1,6 +1,6 @@
 # 源码讲解 · 第 8 章：Provider 运行时解析（Provider Runtime）
 
-> **一句话**：「用哪个供应商、哪个模型、哪把钥匙、发到哪个地址」这件事，Hermes **只解析一次**，五个入口共用。
+> **一句话**：「用哪个供应商、哪个模型、哪把钥匙、发到哪个地址」这件事，Hermes **共用一份解析逻辑**，多个入口按需调用。
 > —— 《中文精译-08-ProviderRuntime》§0
 
 > **原文**：`website/docs/developer-guide/provider-runtime.md`（官方 222 行）
@@ -77,14 +77,14 @@
 
 ### 0.1 谁在管（门面与唯一入口）
 
-门面是**一个函数**：`hermes_cli/runtime_provider.py:851` 的 `resolve_runtime_provider()`。它不只是"常用函数"，而是这一层对外的**唯一物化点** —— 所有入口拿到的 `(provider, api_mode, base_url, api_key)` 都从它这里出去，没有任何入口自己拼过这份 dict。它内部串两个更小的东西：名字层 `hermes_cli/auth.py:1323` 的 `resolve_provider()`（只回答"是谁"），以及统一产出函数 `hermes_cli/runtime_provider.py:249` 的 `_runtime()`。
+门面是**一个函数**：`hermes_cli/runtime_provider.py:851` 的 `resolve_runtime_provider()`。它不只是"常用函数"，而是这一层对外的**唯一物化点** —— 所有入口拿到的 `(provider, api_mode, base_url, api_key)` 都从它这里出去，没有任何入口自己拼过这份 dict。它内部串两个更小的东西：请求名选择器 `runtime_provider.py:410` 的 `resolve_requested_provider()`，以及会检查凭据和自动探测的 `auth.py:1323 resolve_provider()`，以及统一产出函数 `hermes_cli/runtime_provider.py:249` 的 `_runtime()`。
 
 逐字引（`runtime_provider.py:1-2`，模块 docstring）：
 
 > Shared runtime provider resolution for CLI, gateway, cron, and helpers: the resolution ORDER
 > (:func:`resolve_runtime_provider`), api_mode / base_url helpers and the pool / OAuth / explicit paths.
 
-**要害**：门面被进程模型完全不同的入口共用，所以它必须**无状态、可重入** —— 这正是"只解析一次、只放一处"的收益；谁在管不是"某一个类"，而是"这一个函数"。
+**要害**：门面被进程模型完全不同的入口共用，所以它必须支持按不同请求和 profile 重入；缓存或凭据池若存在，也必须有明确作用域和刷新规则。这是集中解析的收益；谁在管不是"某一个类"，而是"这一个函数"。
 
 ### 0.2 什么时候（解析在什么时机发生）
 
@@ -96,7 +96,7 @@
 
 同样这条时机在 `/model` 侧也有（`hermes_cli/model_switch.py:1087` 逐字：`Fill api_key / base_url / api_mode / validation_headers from "resolve_runtime_provider"`）。
 
-**要害**：解析是**按需、可重复**的，不是一次性初始化 —— 所以它不能留任何跨调用的状态，否则第二次解析就会拿到上一次的残留。
+**要害**：解析是**按需、可重复**的，不是一次性初始化 —— 跨调用缓存必须正确分键并刷新，不能把上一请求的端点或凭据无条件复用于下一请求。
 
 ### 0.3 做什么（一次解析产出什么）
 
@@ -127,7 +127,7 @@
 
 ### 0.5 出错（未知 provider / 无凭据 / 不支持的模式）
 
-三种收场各不相同，但**都是解析期抛出的、带指引的显式错误**，不是静默兜底：
+这三种情况都在发请求前处理：未知供应商或缺凭据可以抛错，无效模式也可能被忽略并记录日志，不能统称为抛异常：
 
 - **未知 provider**：名字层直接抛 `AuthError`，带 code 与"下一步"提示。逐字引（`hermes_cli/auth.py:1353`）：
   > `raise AuthError(f"Unknown provider '{normalized}'." + tail, code="invalid_provider")`
@@ -178,7 +178,7 @@
 1. **五个入口是不是只调同一道门面？** 是。`grep -rn resolve_runtime_provider` 只命中同一个 `resolve_runtime_provider()`，没有入口自建解析。（§0.6）
 2. **名字层与连接层是不是分开的？** 是。`resolve_provider()` 只返回一个**字符串** provider id（`auth.py:1348`），运行时 dict 只在 `_runtime()` 一处构造（`runtime_provider.py:249`）。（§0.1）
 3. **每把 key 是不是只发给自己那条域名？** 是。`_host_gated_env_key_candidates()`（`runtime_provider.py:317`）按 host 精确 / 点后缀匹配，`api.openai.com.attacker.test` 这类伪装一律不命中。（§0.4）
-4. **回退是不是"链耗尽恒 False + 每轮复位"？** 是。`_fallback_index` 一次前进一格、`_fallback_activated` 一次性 latch、新一轮由 `restore_primary_runtime()` 复位。（§0.4 的同族约束）
+4. **回退是不是"链耗尽恒 False + 每轮复位"？** 是。`_fallback_index` 一次前进一格、`_fallback_activated` 回退状态标记、新一轮由 `restore_primary_runtime()` 复位。（§0.4 的同族约束）
 
 ---
 
@@ -200,7 +200,7 @@
 | 10 | 运行中 `/model` 切换 | `switch_model()` 四步纯函数，CLI 与网关共用同一接缝 | 无（选模型 = 启动参数 + config） | 不抄 |
 | 11 | 辅助模型路由 | `agent/auxiliary_client.py` 7,800 行，多消费者（视觉 / 网页摘要 / 记忆刷写…） | `agent/auxiliary.py` 147 行，一个消费者（压缩摘要） | 量级 |
 | 12 | aux 的 `main` 别名 | `"main"` → 主 agent provider；主为空/auto 时 → `"custom"`（`auxiliary_client.py:546`） | `main` → 主 provider；主为空时 → `auto`（mini 无 `custom` 画像） | 架构性 |
-| 13 | 回退链机制 | 链 + `_fallback_index` + `_fallback_activated`；3~5 个触发点；`error_classifier` 分类 | 同状态机（`agent/fallback.py`）；**二元**判据（可回退 / 不可回退）；一处触发 | 架构性 |
+| 13 | 回退链机制 | 链 + `_fallback_index` + `_fallback_activated`；6 个模块 / 11 处调用点；`error_classifier` 分类 | 同状态机（`agent/fallback.py`）；**二元**判据（可回退 / 不可回退）；一处触发 | 架构性 |
 | 14 | 回退凭据隔离 | 每条自解析（`hermes_cli/fallback_config.py` 的 `resolve_entry_api_key`），provider 变则换凭证池 | 每条自解析（`hermes_cli/config.py::resolve_entry_api_key`，经 `get_secret`）；无池可换 | 已对齐 |
 | 15 | 回退复位 | 每轮 `restore_primary_runtime()` 复位 index / latch | 同（轮首复位） | 已对齐 |
 | 16 | 配置层 | `config.yaml` + env + `fallback_config.get_fallback_chain()` | `hermes_cli/config.py`（`config.json`）；键定义即唯一事实源；config 压 env | 量级 |
@@ -221,7 +221,7 @@
 
 **为什么必须分开**：一是职责不同——回答「用哪家」不需要任何密钥在场，而回答「发到哪、拿哪把钥匙」才需要；合并的话，任何只想看一眼「这次会用谁」的诊断/列举代码，都被迫先把凭据解析出来。二是**返回值形状**不同：名字层输出的就是一个字符串（老的调用点 `== "deepseek"`、拿它当 dict 键都照旧可用），连接层输出的是一份 dict；硬捏在一起，就会为了「多带几个字段」而破坏字符串兼容性。
 
-两段之上再压一个**门面** `resolve_runtime_provider()`，它是五个入口（CLI / 网关 / cron / ACP / 辅助模型）**唯一**共用的出口，返回的字段集**固定六栏**：`provider / api_mode / base_url / api_key / source / requested_provider`。固定的意义是契约——入口不同，但「用哪个模型」的答案只有一个来源、一个形状。
+两段之上再压一个**门面** `resolve_runtime_provider()`，它是五个入口（CLI / 网关 / cron / ACP / 辅助模型）**唯一**共用的出口，返回的字段集**基础四栏与按路径附加的元数据（不保证每条路径都有六栏）**：`provider / api_mode / base_url / api_key / source / requested_provider`。固定的意义是契约——入口不同，但「用哪个模型」的答案只有一个来源、一个形状。
 
 最后是 **`source`** 这一栏：它把「这次的结果是怎么来的」（显式 / config / env / auto）**落成数据**，而不是只留在日志里。这和前面几章反复出现的同一取向一致——**把裁决理由落成数据，让「为什么用了这个端点」变成可回答的**。名字层产出的名字自带 `.source`，门面把它原样带进 dict。
 
@@ -273,7 +273,7 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 段划分 | 名字层 `resolve_requested_provider()`（`runtime_provider.py:410`）+ 连接层 `resolve_provider()`（`auth.py:1323`） | 同名两函数（`runtime_provider.py:255` / `:344`） |
-| 门面 | `resolve_runtime_provider()` 固定 6 栏（`:851`） | 同（`:417`，另带 `model` / `context_length`） |
+| 门面 | `resolve_runtime_provider()` 基础字段加路径元数据（`:851`） | 同（`:417`，另带 `model` / `context_length`） |
 | `source` 取值 | 一大串，散落各 builder（pool / oauth / portal / process…） | 只有 4 值：explicit / config / env / auto |
 | config 压 env | 是（docstring 明写） | 是（`:270-275`） |
 
@@ -287,9 +287,9 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 
 一份画像描述这个供应商长什么样：身份（`name` / `api_mode` / `aliases`）、展示（`display_name` / `signup_url`）、认证与端点（`env_vars` / `base_url` / `auth_type`）、视觉与请求形状的 quirk（`supports_vision` / `fixed_temperature` / `default_headers`）……它是**声明式**的：描述「是什么」，**不**建 HTTP 客户端、**不**管凭据轮换、**不**管流式——那些留在 agent 里。解析器读这个对象拿到 `base_url` / `env_vars` / `api_mode` / `fallback_models`，于是**同一个事实不用在多处重复**。
 
-由此得到这一章最重要的一个性质：**加一家供应商 = 加一份画像**。新供应商只要在自己的目录里调一次 `register_provider(profile)`，就被解析链认识——`resolve_provider()` 的具名路径、`auto` 的环境探测、host 门控全都能用同一个键。**不需要改解析器**，这就是「核心是窄腰、能力在边缘」那条产品姿态的落地。
+由此得到这一章最重要的一个性质：**加一家供应商 = 加一份画像**。新供应商只要在自己的目录里调一次 `register_provider(profile)`，就被解析链认识——`resolve_provider()` 的具名路径、`auto` 环境探测可读取同一份画像；特殊 host 门控仍可能需要相应规则。**不需要改解析器**，这就是「核心是窄腰、能力在边缘」那条产品姿态的落地。
 
-画像可以来自三处：随仓库走的内建插件、`$HERMES_HOME/plugins/model-providers/` 下的用户插件、以及 pip 装的第三方包。发现是**懒**的——第一次 `get_provider_profile()` / `list_providers()` 才去 import 各插件，免得 import 期就碰文件系统、触发副作用。冲突时 **last-writer-wins**：后注册者覆盖先注册者，所以用户插件能顶掉同名内建画像，第三方能 monkey-patch 而不动仓库一行代码。
+画像可以来自三处：随仓库走的内建插件、`$HERMES_HOME/plugins/model-providers/` 下的用户插件、以及 第三方提供的插件代码（本章引用的发现机制只明确扫描内建和用户目录）。发现是**懒**的——第一次 `get_provider_profile()` / `list_providers()` 才去 import 各插件，免得 import 期就碰文件系统、触发副作用。冲突时 **last-writer-wins**：后注册者覆盖先注册者，所以用户插件能顶掉同名内建画像，第三方能 monkey-patch 而不动仓库一行代码。
 
 最后一句别记错：**`providers/` 包只是「取用口」，不是「数据库」**——它就是个很薄的小包（注册表接口 + `ProviderProfile`），真正的供应商数据住在各家自己的插件目录里。
 
@@ -340,7 +340,7 @@ for profile in list_providers():
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 画像字段 | `ProviderProfile`（`providers/base.py:38`）几十字段 + 子类钩子 | 同名 dataclass（`providers/base.py:49`），字段收窄、**无钩子** |
-| 注册源 | 内建 `plugins/model-providers/`（39 家）+ 用户插件 + pip 入口点 | `providers/builtin/`（3 家）+ `$MINI_HOME/plugins/model-providers/` |
+| 注册源 | 内建 `plugins/model-providers/`（39 家）+ 用户插件目录（未据此确认 pip 入口点机制） | `providers/builtin/`（3 家）+ `$MINI_HOME/plugins/model-providers/` |
 | 懒发现 | 首次 lookup 扫两处 | 同（`providers/__init__.py:65` / `:128`） |
 | last-writer-wins | 是 | 是（`:44`） |
 | 数据位置 | 数据住各家插件目录，`providers/` 只是取用口 | 同 |
@@ -424,7 +424,7 @@ require_implemented_api_mode(self.api_mode)
 
 规则是「**每把 key 只发给自己那条权威域名**」：`OPENAI_API_KEY` 只在 `openai.com` / `openai.azure.com` 命中时挂载，`OPENROUTER_API_KEY` 只在 `openrouter.ai` 命中时挂载，`OLLAMA_API_KEY` 只在 `ollama.com` 命中时挂载。判据是 **host 精确匹配或点后缀匹配**，**不是子串**——`api.openai.com.attacker.test`（伪装子域）和 `evil.com/api.openai.com/v1`（域名塞路径）都**不算命中**。
 
-自定义端点还有第四把候选，是**从 host 反推**出来的：`api.deepseek.com` → `DEEPSEEK_API_KEY`（取**注册域名标签**，大写，拼 `_API_KEY`）。反推同样防伪装：把 key 的名字也按 host 算，`api.deepseek.com.attacker.test` 的最后两段是 `attacker.test` → 推出的是 `ATTACKER_API_KEY`，于是真 `DEEPSEEK_API_KEY` **原地不动**。反推还显式排除 OPENAI / OPENROUTER / OLLAMA, 因为它们各走自己的 `host_matches` 门控，不给「伪装 host」抢 key 的机会。文档里那句「`OPENAI_API_KEY` 用于自定义端点并作为兜底」其实**比源码松**——源码里三把 key 都只挂自己的域名，自定义端点用的是**按域名推出来的那把**，不是「把 OpenAI 的 key 发给任意端点」。
+自定义端点还有第四把候选，是**从 host 反推**出来的：`api.deepseek.com` → `DEEPSEEK_API_KEY`（按简化规则取**倒数第二个域名标签**；不是公共后缀规则下的通用注册域名解析，大写，拼 `_API_KEY`）。反推同样防伪装：把 key 的名字也按 host 算，`api.deepseek.com.attacker.test` 的最后两段是 `attacker.test` → 推出的是 `ATTACKER_API_KEY`，于是真 `DEEPSEEK_API_KEY` **原地不动**。反推还显式排除 OPENAI / OPENROUTER / OLLAMA, 因为它们各走自己的 `host_matches` 门控，不给「伪装 host」抢 key 的机会。文档里那句「`OPENAI_API_KEY` 用于自定义端点并作为兜底」其实**比源码松**——源码里三把 key 都只挂自己的域名，自定义端点用的是**按域名推出来的那把**，不是「把 OpenAI 的 key 发给任意端点」。
 
 最后一块拼图是**读 key 的通道**：凭据一律走 **scope-aware 的 `get_secret_str`**（来自 `agent.secret_scope`），**不裸读 `os.environ`**。原因与多 profile 有关——`.env` 里的 key **不能**被并进 `os.environ`（否则 profile A 的 key 会漏给 profile B）。作用域解析的语义是：能命中就命中；命中不了返回默认值，**绝不回落去读别人的 environ**；处在多路复用下且没有作用域时，直接**抛错（fail-closed）**。于是「A 的回合拿不到 B 的 key」是被结构保证的，不是靠自觉。
 
@@ -543,11 +543,11 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 **辅助任务**（auxiliary task）指那些"不干主对话、但也要调模型"的活：看图（视觉）、网页抓取后的摘要、**上下文压缩的摘要**、技能中心（skills hub）操作、MCP 辅助操作、记忆刷写。它们是独立的一类调用，不是主对话的一个回合。
 
-主模型的挑选标准是**质量**；辅助任务要的是**便宜 + 快**。所以 Hermes 给它们各自留了一个配置块 `auxiliary.<task>.{provider, model}`，让辅助调用可以走**另一个**供应商/模型。这一步的核心不是省钱，而是两件更要紧的事：**别让一次摘要用掉主模型的预算**，也**别让免费档的窗口把摘要掐掉**。
+主任务与辅助任务可以有不同的质量、延迟和成本需求。所以 Hermes 给它们各自留了一个配置块 `auxiliary.<task>.{provider, model}`，让辅助调用可以走**另一个**供应商/模型。这一步的核心不是省钱，而是两件更要紧的事：**别让一次摘要用掉主模型的预算**，也**别让免费档的窗口把摘要掐掉**。
 
 取值的优先级是三层：**显式入参 > config `auxiliary.<task>.*` > `"auto"`**。这里有两个魔法值必须分清：
 
-- `"auto"` —— **继承主 agent 当前路由**。因为它就是缺省值，"没配置"和"配成 auto"是**同一件事**。
+- `"auto"` —— 优先主 agent 当前路由，随后按任务和能力执行自动探测/回退链；mini 的 auto 则直接复制主运行时。缺省值是 auto，但上游不保证最终始终选中主路由（`auxiliary_client.py:4373-4395`）。
 - `"main"` —— **别名**，解析成"当前主 agent 的那个 provider"。它存在的理由是让**具名自定义供应商**也能被辅助任务复用（注释原话：*"Resolve to the actual main provider so named custom providers work."*）。主 provider 为空/`auto`/`main` 时，真实版退化为 `"custom"` —— 一个**始终存在**的通用插件画像，而不是乱造一个名字。
 
 ★ **辅助任务为什么不消费主 agent 的回退链**：辅助调用是**一次性**的 —— 按需 `resolve_provider_client()` 建一个 client 就用掉，**没有**持久 agent 身上的 `_fallback_chain` / `_fallback_index` / `_fallback_activated` / 重试循环。回退机制（§七）需要一个**活着的 agent 状态**来记"这次换到第几格""这一轮是否已经换过"，辅助调用给不了这个状态，所以它**不可能**走 `_try_activate_fallback`。它改在**解析期**串行试自己的链：先 `auxiliary.<task>.fallback_chain`，再主策略 `get_fallback_chain()`，最后一级是"兜底用主 agent 模型"。这不是"没有回退"，而是**换了一个发生位置**（解析期而非回合期）。
@@ -606,9 +606,13 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 
 **① Hermes 怎么做的**
 
-**回退链**（fallback chain）是一串 `(provider, model)` 条目：主模型出错时**按顺序**尝试。它的状态是**三件套**：`_fallback_chain`（链）、`_fallback_index`（索引）、`_fallback_activated`（一次性 latch）。
+**回退链**（fallback chain）是一串 `(provider, model)` 条目：主模型出错时**按顺序**尝试。它的状态是**三件套**：`_fallback_chain`（链）、`_fallback_index`（索引）、`_fallback_activated`（回退状态标记）。
 
-**索引一次前进一格**。每次激活把 `_fallback_index += 1`，一次失败只消费一格，**绝不重复用同一格**；链耗尽时 `_fallback_chain_exhausted()` **恒返回 False** —— 不再激活、也不再锤主模型。**一次性 latch** 是防抖动的闸门：`_fallback_activated` 一旦置位就表示"这一轮已经换过 provider 了"，没有它，同一次抖动会在重试循环里把整条链抖完。
+索引在评估每个候选前推进，解析失败或不可用的候选也会被消费；一次激活调用可能跳过多项。
+成功切换后，如果新供应商再失败，还能继续尝试下一项。`_fallback_activated` 是状态标记，
+并不作为入口守卫禁止二次切换；防止重复候选靠索引和不可用候选集合。
+链耗尽时 `_fallback_chain_exhausted()` 返回 False，表示本次没有切换成功，后续处置由调用方决定。
+证据见 `chat_completion_helpers.py:1905-1927`。
 
 **激活时是"原地换"运行时**，换的是：`model` / `provider` / `requested_provider` / `base_url` / `api_mode`（外加 client 与 `api_key`）。同时还要做几件配套事：清 `_transport_cache`（连接复用会带着旧 host 的句柄）；把 per-config 的 `context_length` 覆盖清掉（否则按**上家**模型的窗口算压缩阈值）；重解析 reasoning / extra_body；更新压缩器的模型上下文；最后置 latch。
 
@@ -617,9 +621,9 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
 **可回退判据是二元的**（不是一张原因枚举表）：
 
 - **可回退** = 限流 / 上游故障 / 凭据失效（`429` / `5xx` / `401` / `403` 一类）—— 换个 provider **可能**修好；
-- **不可回退** = 确定性错误（`400` / `404` / `422`）—— 请求本身不合法，换谁都一样。
+- mini 将 `400` / `404` / `422` 作为不可回退状态；上游则按错误分类器判断。404 可能是端点或模型不存在，不能断言换任何供应商都一样。
 
-★ **为什么 400 不换 provider**：`400` 是"请求格式/参数不合法"，把**同一个**请求重发到另一家，只会**再收一次 400**，还白搭一次调用；更坏的是，把确定性错误当成可回退，会**把真问题藏进重试里** —— 用户看到的是"一直在切换供应商"，而根因（消息序列违规、参数错）永远浮不出来。判据只有"换个 provider 有没有可能改变结果"这一条线。
+★ **为什么 400 不换 provider**：`400` 是"请求格式/参数不合法"，对请求本身的确定性问题，原样换供应商通常无助于修复；但 400 也可能是某家协议或能力特有的问题，不能仅凭状态码断言另一家必然失败，还白搭一次调用；更坏的是，把确定性错误当成可回退，会**把真问题藏进重试里** —— 用户看到的是"一直在切换供应商"，而根因（消息序列违规、参数错）永远浮不出来。判据只有"换个 provider 有没有可能改变结果"这一条线。
 
 **凭据隔离**（主/回退不会拿错 key）：每条回退条目**自己解析自己的 key**（内联 `api_key`，否则 `key_env` **经 `get_secret`**，绝不裸读 `os.getenv`）；建 client 时把它自己的 `base_url` / `api_key` 显式传下去。**provider 变了就清掉主凭据池**再挂回退池，防跨 provider 污染（否则 rate_limit/billing/auth 的恢复路径会去改**旧的**凭据、把回退的 `base_url` 覆盖回去）。
 
@@ -675,7 +679,7 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg, pinned):
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 触发点 | 3~5 处（分类器路由 / 重试耗尽 / 空响应 / API 内层 / 真空响应） | 一处收口（`_post_chat_completions` 失败分支） |
+| 触发点 | 6 个模块 / 11 处调用点（原因分类见附录 C） | 一处收口（`_post_chat_completions` 失败分支） |
 | 判据 | 30+ `FailoverReason` 分类 + `should_fallback` 字段 | 二元（一个状态码集合，只存一份） |
 | 连接缓存 | 换 provider 清 `_transport_cache`（连接复用带旧 host） | 每次请求新建连接，**结构上无缓存可清** |
 | 凭据池 | provider 变则 `_rebind_fallback_credential_pool` | 无池；逐条自解析 key |
@@ -753,7 +757,7 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 同一份解析要服务**多个入口**：CLI（`hermes chat`）、TUI、网关（消息平台）、cron（在全新会话里跑）、ACP 编辑器会话，以及**辅助模型调用**。这几个入口的**触发时机、进程模型、有没有人坐在前面**都不一样，但"用哪个模型"的答案**必须一致** —— 不能出现"CLI 用的是 A 端点、网关用的是 B 端点、cron 又悄悄回落到 C"这种局面。所以解析逻辑被抽成**一层共享运行时**，而不是各入口各写一遍。
 
-运行中的 `/model` 切换也照同样的思路抽成一个**纯函数** `switch_model()`（`hermes_cli/model_switch.py`），内部固定四步：`route`（PATH A 显式 `--provider` / PATH B 从 model 输入）→ `_resolve_switch_credentials` → `_validate_switch` → `_build_switch_result`。**共用的接缝就是这个函数本身**：CLI 端与网关端都只是"喂种子 + 收结果"，各自只做**表面动作**（`agent.switch_model()` 原地换 + `persist_model_selection()` 落盘），**没有一家重新实现解析**。把切换写成纯函数（入参是当前 provider/model/凭据 + flag，出参是结果对象）的好处是：它**不依赖任何一家的会话状态**，所以两家能喂同一份入参、拿同一份结果。
+运行中的 `/model` 切换也照同样的思路抽成共享的 `switch_model()` 函数（`hermes_cli/model_switch.py`），内部固定四步：`route`（PATH A 显式 `--provider` / PATH B 从 model 输入）→ `_resolve_switch_credentials` → `_validate_switch` → `_build_switch_result`。**共用的接缝就是这个函数本身**：CLI 端与网关端都只是"喂种子 + 收结果"，各自只做**表面动作**（`agent.switch_model()` 原地换 + `persist_model_selection()` 落盘），**没有一家重新实现解析**。把切换逻辑集中成函数（入参是当前 provider/model/凭据 + flag，出参是结果对象）的好处是：它**不依赖任何一家的会话状态**，所以两家能喂同一份入参、拿同一份结果。
 
 再往前一层：辅助任务与**回退链**都从**同一个** provider 路由器过（注释称它 "centralized provider router"）。好处具体是三条：认证 / `base_url` / headers / `api_mode` 只在一处映射，**不重复 provider→key 映射**；走 scope-aware 的 `get_secret`（多 profile 下不会串味）；MoA / anthropic-wire / Codex 适配只维护一处。**不共享的代价是可预见的漂移**：有的入口记得 host 门控、有的忘了，凭据就可能发错端点 —— 这类 bug 没有症状，只有一个泄漏面。
 
@@ -824,9 +828,9 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 2. **`MINI_MODEL` 的 config 压 env**：A9 的 model 一栏最初没有 config 层，`export MINI_MODEL=…` 会盖掉 config 里存的模型；补上 `get_configured_model()` 才对齐顺序（反向验证抓到：删掉这段，`★ config 压 env` 立刻变红）。
 3. **"承诺了却跑不起来"**：`run_agent.py:14` 的 docstring 从第 2 章起就宣传"失败回退"，而 `fallback_providers` **全仓零调用点**。接线前那句注释是**假承诺**，必须连着实现一起改（现在 docstring 与实现一致，`test_docstring_promise_matches_implementation` 盯着）。
 
-**真跑收据（可复现）**：
+**本章交付时的离线运行收据**：
 
-- **全套件双解释器 1,063 通过 / 0 失败**：`/usr/local/bin/python3`（3.13.14）与 `/usr/bin/python3`（3.9.6）**逐文件一致**（9 个测试文件；其中 `tests/test_fallback_and_aux.py` **113 条 / 4 组**是本批新增，跑 `python3 tests/test_*.py` 汇总）。
+- **全套件双解释器 1,063 通过 / 0 失败**：`/usr/local/bin/python3`（3.13.14）与 `/usr/bin/python3`（3.9.6）**逐文件一致**（9 个测试文件；其中 `tests/test_fallback_and_aux.py` **113 条 / 4 组**是本批新增，逐个运行 `tests/test_*.py` 脚本汇总（通配符一次传给 python 不会依次执行多个脚本））。
 - **`source` 四条来源实跑**（临时 home，只打印布尔/来源，不打印 key）：显式 →`source=explicit`；写 config →`config`；**config 与 env 同设 → 仍是 `config`（config 压 env）**；删 config →`env`；再去掉 env →`auto`。
 - **host 门控实跑**：`key_candidates_for(base_url)` 对 `https://api.openai.com/v1` / `https://openrouter.ai/api/v1` / `https://api.deepseek.com/v1` 各自**只给该域名**的候选（deepseek 端点经 host 反推拿到 `DEEPSEEK_API_KEY`）。
 - **别名归一实跑**：`claude→anthropic`、`codex→openai-codex`、`deep-seek→deepseek`、`ollama→custom`、`whatever→whatever`。
@@ -856,7 +860,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 | A4 | 解析结果带 `source`（显式 / config / env / auto） | 三个解析函数 | ✅ 已抄（`756b493`） |
 | A5 | host 门控的 key（每把 key 只发自己那条域名） | `providers/host_gate.py` | ✅ 已抄（`756b493`） |
 | A6 | 凭据一律走 `get_secret`（scope-aware） | — | 已对齐（7.2 章） |
-| A7 | 回退链接线：链 + 索引 + 一次性 latch + 原地换 + 每轮复位 | `agent/fallback.py` | ✅ 已抄（`a391919`） |
+| A7 | 回退链接线：链 + 索引 + 回退状态标记 + 原地换 + 每轮复位 | `agent/fallback.py` | ✅ 已抄（`a391919`） |
 | A8 | 辅助模型路由：`auxiliary.<task>.*` + `main` 别名 | `agent/auxiliary.py` | ✅ 已抄（`a391919`） |
 | A9 | 配置层：provider / model / fallback / aux 的唯一读法 | `hermes_cli/config.py` | ✅ 已抄（`a391919`） |
 | A10 | 别名归一（`codex` ↔ `openai-codex` 等） | `providers/aliases.py` | ✅ 已抄（`756b493`） |
@@ -868,7 +872,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 | B1 | 8 级 auto 阶梯全貌（pool / OAuth / free-tier / Bedrock） | ⏭ 不抄（基座）：mini 没有那些基座，抄了没消费者（只留"按 env key 自动选"一层） |
 | B2 | 30+ `FailoverReason` 分类体系 | ⏭ 不抄（基座）：只抄**二元判据**（可回退 / 不可回退） |
 | B3 | aux 的 7800 行适配器（vision / web-extract / skills-hub / MCP） | ⏭ 不抄（规模）：mini 只要一个消费者（压缩摘要） |
-| B4 | 五个回退触发点全抄 | ⏭ 不抄（规模）：只抄一处收口（判据本身照抄） |
+| B4 | 全部回退触发点照抄 | ⏭ 不抄（规模）：只抄一处收口（判据本身照抄） |
 | B5 | secret pool / 多端点轮转 | ⏭ 不抄（基座）：mini 没有轮转的消费者 |
 | B6 | `_API_KEY_BASE_URL_RESOLVERS` 特例映射表 | ⏭ 不抄（基座）：只为 kimi / zai / copilot / lmstudio / actual 几家 |
 | B7 | 各家模型目录 / 别名清单（几十家） | ⏭ 不抄（规模）：mini 只注册 3 家画像 |
@@ -940,7 +944,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 | 1. reasoning 形状 | `agent/chat_completion_helpers.py` 的 reasoning 回显 | `run_agent.py` 的 `reasoning_content` 回显开关 | ✅ 已对齐（第 2 章） |
 | 2. 解析优先级（四层） | `runtime_provider.py:410-419` + `auth.py:1323+` | `resolve_requested_provider()` / `resolve_provider()` | ✅ 已抄（`756b493`） |
 | 3. 供应商清单 | `providers/` + **39** 个内建供应商目录 | `providers/builtin/`（3 家兜底画像） | ⬜ 没做（量级：39 → 3） |
-| 4. 解析结果长什么样 | `runtime_provider.py:249-254 _runtime()` | 门面固定六栏 dict | ✅ 已抄（`756b493`） |
+| 4. 解析结果长什么样 | `runtime_provider.py:249-254 _runtime()` | 门面基础四栏与按路径附加的元数据（不保证每条路径都有六栏） dict | ✅ 已抄（`756b493`） |
 | 5. 为什么要有这一层 | 全层 | 同上（`source` 栏就是把"为什么"落成数据） | ✅ 已抄（`756b493`） |
 | 6. AI Gateway（Vercel） | `_API_KEY_BASE_URL_RESOLVERS` 等 | 无 | ⏭ 不抄（① 基座：mini 无该中转） |
 | 7. 三把 key 各管自己的域名 | `runtime_provider.py:317-326` + `utils.py:612-620` | `providers/host_gate.py` | ✅ 已抄（`756b493`） |

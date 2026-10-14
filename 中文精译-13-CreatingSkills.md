@@ -4,6 +4,8 @@
 > **来源**：`官方文档-Developer-Guide/creating-skills.md`（**438 行** · H1 + 10 个 H2 + 12 个 H3 + 2 个 H4；`title` 逐字：*Creating Skills*）。
 > **上游**：commit `f5d1926110` · `version = "0.21.3"` · 原文 **438 行**
 
+> 术语说明：secret 指密钥、令牌等机密值，并不表示它已加密；dotpath 指用点分隔的配置路径，如 `skills.config.myplugin.path`；tap 指用户登记的技能源仓库。
+
 [TOC]
 
 ---
@@ -13,7 +15,7 @@
 技能是给 Hermes Agent 添加新能力的**首选方式**。它们比工具更容易创建，不需要对 agent 做任何代码修改，并且可以跟社区共享。这一章回答**一个能力从"该不该做成技能"到"发布出去、被人装上"的完整生命周期**：
 
 - **第 1–3 节**给出判据与格式：什么时候该写成技能，技能住在 `skills/`（随包内置）还是 `optional-skills/`（官方可选），`SKILL.md` 的 frontmatter（首部元数据）能声明什么 —— `platforms`、四个 **条件激活**字段、环境变量与凭据文件需求 —— 以及正文该有的五个小节（When to Use / Quick Reference / Procedure / Pitfalls / Verification）。
-- **第 4 节**讲**加载时的安全设置**：缺密钥**不**把技能从"可发现"里藏起来，而是在本地 CLI 里安全征询；原始密文**永不**暴露给模型；非密文的设置在 `config.yaml` 的 `skills.config` 命名空间下，OAuth 令牌这类**文件形态**的凭据另有声明方式。
+- **第 4 节**讲**加载时的安全设置**：缺密钥**不**把技能从"可发现"里藏起来，而是在本地 CLI 里安全征询；原始机密值**永不**暴露给模型；非敏感的设置在 `config.yaml` 的 `skills.config` 命名空间下，OAuth 令牌这类**文件形态**的凭据另有声明方式。
 - **第 5 节**是编写准则：零外部依赖、**渐进披露**、带上辅助脚本、用 `[[as_document]]` **以文档形式投递媒体**、`${HERMES_SKILL_DIR}` 模板替换，以及**显式开启（opt-in）**的内联 shell 片段。
 - **第 6–8 节**讲归属与自动化：技能该住在内置、`optional-skills/` 还是**技能中心（Skills Hub）**；**蓝图（blueprint）** —— 一个额外声明了排程的普通技能，装进来只登记成**待办建议**、绝不自动排程；以及统一的**建议的定时任务**面。
 - **第 9–10 节**讲发布与安全扫描：发到技能中心或自建 tap，四档信任级别与 `dangerous` 裁决的硬拦截，以及三种第三方发现模型。
@@ -196,7 +198,7 @@ required_environment_variables:
     required_for: full functionality
 ```
 
-用户可以跳过设置，照常继续加载该技能。Hermes **永不**把原始密文值暴露给模型。网关与消息会话会展示本地设置指引，而不是在带内收集密文。
+用户可以跳过设置，照常继续加载该技能。Hermes **永不**把原始机密值暴露给模型。网关与消息会话会展示本地设置指引，而不是在带内收集机密值。
 
 > 💡 **提示 · 沙箱透传（Sandbox Passthrough）**
 > 技能被加载时，任何**已设置**的、声明过的 `required_environment_variables` 都会被**自动透传**给 `execute_code` 与 `terminal` 沙箱 —— 包括 Docker、Modal 这类远端后端。你的技能脚本可以用 `$TENOR_API_KEY`（Python 里是 `os.environ["TENOR_API_KEY"]`），用户无需再做任何额外配置。细节见[环境变量透传](https://hermes-agent.nousresearch.com/docs/user-guide/security#environment-variable-passthrough)（Environment Variable Passthrough）。
@@ -205,7 +207,7 @@ required_environment_variables:
 
 ### 配置项设置（Config Settings (config.yaml)）
 
-技能可以声明非密文的设置，它们存放在 `config.yaml` 的 `skills.config` 命名空间下。与环境变量（密文，存在 `.env` 里）不同，config 设置面向路径、偏好以及其它非敏感值。
+技能可以声明非敏感的设置，它们存放在 `config.yaml` 的 `skills.config` 命名空间下。与环境变量（机密值，存在 `.env` 里）不同，config 设置面向路径、偏好以及其它非敏感值。
 
 ```yaml
 metadata:
@@ -258,7 +260,7 @@ metadata:
    ```
 
 > 💡 **提示 · 何时用哪个（When to use which）**
-> API 密钥、令牌以及其它**密文**用 `required_environment_variables`（存在 `~/.hermes/.env`，永不展示给模型）。**路径、偏好和非敏感设置**用 `config`（存在 `config.yaml`，在 config show 里可见）。
+> API 密钥、令牌以及其它**机密值**用 `required_environment_variables`（存在 `~/.hermes/.env`，永不展示给模型）。**路径、偏好和非敏感设置**用 `config`（存在 `config.yaml`，在 config show 里可见）。
 
 ### 凭据文件需求（Credential File Requirements (OAuth tokens, etc.)）
 
@@ -500,7 +502,7 @@ Hermes 现在可以从多种外部发现模型消费第三方技能：
 | passthrough | 透传 | §3.3 |
 | sandboxed execution environment | 沙箱化的执行环境 | §3.3 |
 | secure setup on load | 加载时的安全设置 | §4 |
-| secret（raw secret value） | 密文（原始密文值） | §4 |
+| secret（raw secret value） | 机密值（原始机密值） | §4 |
 | in-band | 带内 | §4 |
 | config settings | 配置项设置 | §4.1 |
 | dotpath | dotpath | §4.1 |
@@ -565,7 +567,7 @@ Hermes 现在可以从多种外部发现模型消费第三方技能：
 | `skills/research/arxiv/SKILL.md` | **282 行** | §2 示例树里的 `research/arxiv/`（在场） |
 | `skills/productivity/ocr-and-documents/` | **不在树中** | §2 示例树列出，但该锚点下不存在（见附录 C 第 4 条） |
 | `config.yaml`（`~/.hermes/config.yaml`） | — | §4.1 的 config 设置命名空间、§5 的 `skills.template_vars`、§5.4.2 的 `skills.inline_shell` |
-| `~/.hermes/.env` | — | §4 的密文存放处（`.env`） |
+| `~/.hermes/.env` | — | §4 的机密值存放处（`.env`） |
 | `skills/my-skill` | **不在树中** | §9.1 发布命令里的**占位示例路径**，非仓库实体 |
 | `skills/AGENTS.md` | **78 行** | `skills/` 目录自身的约定文件（原文未点名；为目录级实测补上） |
 
@@ -678,5 +680,5 @@ Hermes 现在可以从多种外部发现模型消费第三方技能：
 
 **C-3 · 两处说明（不算出入）**
 
-- `check_fn`：本章原文**通篇没有**这个词。它是 **平台适配器可用性探针**字段（`gateway/platform_registry.py:50` 逐字 `check_fn: Callable[[], bool]`），与 `SKILL.md` frontmatter 无关，故**不适用**于本章的出入核对。
+- `check_fn`：本章原文**通篇没有**这个词。这里引用的是**平台适配器可用性探针**字段（`gateway/platform_registry.py:50` 逐字 `check_fn: Callable[[], bool]`），与 `SKILL.md` frontmatter 无关；工具注册表也使用同名探针，不能把这个名字专属于平台适配器。
 - `hermes skills publish --to`：原文 §9.1 的标题是 "To the Skills Hub"，而 CLI 参数 `--to` 的取值是注册表名 `["github", "clawhub"]`（`hermes_cli/subcommands/skills.py:150-151`）。文档示例 `--to github` 落在取值范围内；标题用"技能中心"、参数用"注册表"，是命名口径差异，**不构成冲突**。

@@ -101,7 +101,7 @@
   > both transports bind to the same session id, so agent emits fan out to both sinks
 - **OpenAI 兼容：网关进程长驻，客户端按 HTTP 请求连一次**。端口默认 `127.0.0.1:8642`，配置项 `API_SERVER_PORT`（`config_defaults.py:2883-2884`）。
 
-**要害**：ACP / 网关是「**连一条长命通道**」（stdio 或 WS），API 是「**每次请求连一次**」。这条差别决定了前者要处理断线重连（§七），后者不用。
+**要害**：ACP / 网关是「**连一条长命通道**」（stdio 或 WS），API 按 HTTP 请求调用，也可复用连接；SSE 和浏览器控制 WebSocket 仍有长连接及断线处理，不能说 HTTP 通道不需考虑重连。
 
 ### 0.3 做什么（三条通道各把内核暴露成什么形状）
 
@@ -141,7 +141,7 @@
 4. **UI 通知失败不能杀死回合**。发通知是 fire-and-forget，失败只记日志。逐字引（`acp_adapter/server.py:260`）：
    > ``session_update`` that logs instead of raising; False on failure.
 
-（相关约束在前面的章节已讨论：**提示词字节稳定**是第 5 章的既有约束——边缘通道不得每请求重建系统提示词；**角色交替**是第 6 章的约束——mini 严格校验、真实版宽容修复。）
+（相关约束在前面的章节已讨论：**提示词字节稳定**是第 5 章的既有约束——边缘通道应避免无必要的动态变化；重建同样内容本身不必然破坏缓存；**角色交替**是第 6 章的约束——mini 严格校验、真实版宽容修复。）
 
 **要害**：前两条是「**向内不破坏内核**」，后两条是「**向外不让边缘故障拖垮内核**」。四条线合起来一句话：**持久状态由服务端按契约管理；边缘可以经显式授权的会话操作修改它，不能把任意客户端历史直接当成权威记录。UI 通知失败应隔离，但用户明确取消仍应中断回合。**
 
@@ -161,7 +161,7 @@
 - **协议错误码**分工明确：
   - `-32601`：未知方法。逐字引（`tui_gateway/rpc_dispatch.py:22-23`）：
     > `return _err(rid, -32601, f"unknown method: {method} — the client and the Hermes backend are out of sync "`
-    > `"（different versions）; run `hermes update` and restart both"`（message 原文为英文，此处按源码逐字）
+    > `"（different versions）; run `hermes update` and restart both"`（此处中文括号为解释，不是逐字英文引文）
     ACP 侧的良性探针（`ping` / `health` / `healthcheck`）也回 `-32601`，由 `entry.py:35` 的 `_BenignProbeMethodFilter` 只压掉它的 traceback 噪声。
   - `-32700`：JSON 解析失败（`tui_gateway/entry.py:310`）。
   - `4000`：入参契约校验失败（`rpc_dispatch.py:29-31`）。
@@ -222,9 +222,9 @@
 | 4 | OpenAI 兼容通道 | `api_server.py` 4,056 + `_openai_routes` 1,051 + `_runs` 948 行；`aiohttp`；HTTP + SSE | 无（`gateway` 只有消息入站路径） | 架构性 |
 | 5 | 传输与协议分离 | 一个 `dispatch()` 同时挂 stdio（`entry.py`）与 WebSocket（`ws.py`），协议逐字相同 | 无协议层可分离 | 架构性 |
 | 6 | 同步核心 vs 异步 transport | 同步 `AIAgent` 跑 worker 线程 / executor（`server.py:46`），事件循环留主线程 | 无（进程内直调，无 loop） | 架构性 |
-| 7 | 会话语义注入方式 | ContextVar / 线程局部（`edit_approval.py:37`、`server.py:721-727`），**绝不用全局 env** | 无审批注入点 | 架构性 |
+| 7 | 会话语义注入方式 | ContextVar / 线程局部（`edit_approval.py:37`、`server.py:721-727`），**绝不用全局 env** | 已有构造参数注入审批；无 ACP 专用上下文桥 | 架构性 |
 | 8 | 核心对边缘的感知 | 唯一改动 = `model_tools.py:787` 一行钩子（未绑定即空操作，CLI/gateway 直接绕过） | 无此钩子 | 架构性 |
-| 9 | 审批语义 | fail-closed：未知 → `deny`、超时 → `"timeout"`、无 response → `deny` | 无审批回调面 | 架构性 |
+| 9 | 审批语义 | fail-closed：未知 → `deny`、超时 → `"timeout"`、无 response → `deny` | 已有 `approval_callback`；没有对外协议映射 | 架构性 |
 | 10 | UI 通知失败 | non-fatal（`server.py:260` 只 log 不 raise；`events.py:52` fire-and-forget） | 无对外通知 | 架构性 |
 | 11 | 会话归属 | 服务器拥有 transcript；客户端历史只作提示；ACP 持久化 `source="acp"`（`session.py:304`） | 同源（transcript 由库拥有，但**无外部写入路径**） | 已对齐 |
 | 12 | 终态语义 | 终态事件名恒等于状态（`run.<status>`）；绝不 `completed` 且 `completed:false` | 无 run 概念 | 架构性 |
@@ -292,7 +292,7 @@
 
 **一个连接、多会话并发**。一个 agent 进程只持**一个** `acp.Client` 连接（`server.py:251 self._conn`，在 `on_connect` `:255` 里存入）；但同一进程内可以有**多个并发会话**——`SessionManager._sessions`（`session.py:160`）里每个 session 有自己独立的 `AIAgent`。并发靠一个**全局线程池** `_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="acp-agent")`（`server.py:46`）：同步的 `AIAgent` 回合跑在 worker 线程，asyncio 事件循环留在主线程。不这么做，一个会话的长回合会把事件循环冻住，别的会话连不上。
 
-**分层**（自上而下 6 层）：`acp.run_agent`(SDK 传输：分帧 + 方法派发) → `HermesACPAgent`(RPC 方法) → `prompt()`(一轮编排) → `SessionManager`/`SessionState`(会话状态) → 同步核心 `run_conversation` → **事件桥**(`events.py`/`tools.py`，把核心的同步回调翻成 ACP `session_update`) → 出口 `conn.session_update`。
+**分层**（自上而下 7 个环节）：`acp.run_agent`(SDK 传输：分帧 + 方法派发) → `HermesACPAgent`(RPC 方法) → `prompt()`(一轮编排) → `SessionManager`/`SessionState`(会话状态) → 同步核心 `run_conversation` → **事件桥**(`events.py`/`tools.py`，把核心的同步回调翻成 ACP `session_update`) → 出口 `conn.session_update`。
 
 **接缝清单：ACP 不新造任何东西**。它**复用**核心的：`AIAgent`、共享 `SessionDB`（`source="acp"`）、工具注册表 + toolset（`hermes-acp`）、危险命令审批回调、模型目录与切换、auth（= runtime provider，**不自建凭证库**）、上下文压缩、工具预览。**ACP 专属的只有 schema 映射与渲染**：`content.py`（内容块编解码）、`tools.py`（工具名 → `ToolKind` + 卡片渲染）、`events.py`（回调 → 通知）、`permissions.py`、`edit_approval.py`、`auth.py`、`commands.py`、`model_catalog.py`、`provenance.py`。一句话：**ACP = 「装回调 + 翻译 + 发通知」，没有第八层**。
 
@@ -458,16 +458,16 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
 
 （`methods_prompt.py:671-678`）要害在最后一行：`start()` 一返回就 ack `streaming`，**ack 早于模型产出**；`session["_run_thread"]` 留句柄，正是让 `session.interrupt` 能区分"真在跑"与"卡住的 running 标志"。
 
-**③ mini 的实现（现状）**：mini 没有对外接口。mini 的回合在调用者线程上同步跑完才返回 —— 没有 ack、没有独立回合线程、没有 `method:"event"` 事件流；因为没有第二个进程会来打断、审批或订阅。把 ack 与执行拆开的价值（读循环不被占、回合可被打断）只对"有长连客户端"的形态成立。
+**③ mini 的实现（现状）**：mini 没有对外接口。mini 的 `run_conversation` 是同步方法；网关会把它放到后台线程。没有 JSON-RPC ack 和 `method:"event"` 事件流；mini 网关已有独立回合线程、忙时输入和审批；这里只缺 JSON-RPC 的 ack/事件协议。不能把未实现外部协议写成没有并发回合或打断能力。
 
 **④ 与真实版的差别**：
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 回合返回 | 立刻 ack `{"status":"streaming"}`，结果走事件流 | ⏭ 不抄（进程内同步返回，无 ack 可分） |
-| 执行线程 | 回合在独立 daemon 线程跑（`methods_prompt.py:671`） | ⏭ 不抄（调用者线程即回合线程） |
+| 执行线程 | 回合在独立 daemon 线程跑（`methods_prompt.py:671`） | 网关已有后台回合线程；无 JSON-RPC 提交线程接口 |
 | 进度回推 | `method:"event"` notification，按 `session_id` 路由（`server.py:611-638`） | ⏭ 不抄（无协议面，进度直接打印到终端） |
-| 回合中可打断 | `session.interrupt` 靠 `_run_thread` 句柄判活 | ⏭ 不抄（Ctrl-C 直接杀进程） |
+| 回合中可打断 | `session.interrupt` 靠 `_run_thread` 句柄判活 | 已有协作式中断与 CLI Ctrl-C 处理；无 `session.interrupt` RPC |
 
 ---
 
@@ -513,7 +513,7 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
 | 破坏性同意 | 必需 `confirm_truncate`，抹空再要 `confirm_empty_truncate` | ⏭ 不抄（无破坏性重写路径） |
 | 落盘顺序 | 持 `history_lock`，先 DB 后内存，fail-closed（`379-381`） | ⬜ 没做（mini 无并发读者，锁内单写者即可） |
 | 回执 | `survivor_user_row_ids` 让客户端重绑失效 id（`425`） | ⏭ 不抄（无缓存 id 的客户端） |
-| 可恢复性 | `archive_dropped=True` 软归档，误切可救（`412`） | ⏭ 不抄（无软归档表结构） |
+| 可恢复性 | `archive_dropped=True` 软归档，误切可救（`412`） | 已有 `active/compacted` 消息归档字段；未实现协议 rewind 和对应审计策略 |
 
 ---
 
@@ -551,7 +551,7 @@ def is_truncated(sid: str, last_seen: int) -> bool:
 
 （`event_replay.py:111-115`）要害在注释那句"refetch history **instead of trusting the replay**"：`seq` 的价值只在"没洞"时成立，一旦越界就诚实报 `truncated`，把判断权交给客户端去拉 history —— 环是增量通道，不是事实来源。
 
-**③ mini 的实现（现状）**：mini 没有对外接口。mini 没有长连客户端、没有可断的 transport、没有 seq 水位线；它的"重连"就是重新读 `state.db`。三元组长在"进程活着 + 客户端断了"这个状态上，而 mini 的会话每次都是一次性进程内读取。
+**③ mini 的实现（现状）**：mini 没有对外接口。mini 没有长连客户端、没有可断的 transport、没有 seq 水位线；它的"重连"就是重新读 `state.db`。三元组长在"进程活着 + 客户端断了"这个状态上，而 mini 网关也是常驻进程，只是没有独立长连客户端的重连协议。
 
 **④ 与真实版的差别**：
 
@@ -559,9 +559,9 @@ def is_truncated(sid: str, last_seen: int) -> bool:
 |---|---|---|
 | 增量回放 | per-session `seq` 事件环 + `session.events.since`（`event_replay.py:50/100`） | ⏭ 不抄（无长连客户端，无水位线） |
 | 越界诚实 | `truncated=true`，客户端改拉 history（`111`） | ⏭ 不抄（无环可越界） |
-| 在途回合 | `inflight` 快照随 resume/activate 下发（`session_auto_continue.py:341`） | ⏭ 不抄（回合跑完才落库，无在途态） |
+| 在途回合 | `inflight` 快照随 resume/activate 下发（`session_auto_continue.py:341`） | mini 逐条落库，已有进行中状态；没有给重连客户端用的 inflight 协议快照 |
 | 未答请求 | `open_requests` 随三处结果下发（`server_requests.py:229`） | ⏭ 不抄（无 server→client 请求） |
-| 重启侦测 | `gateway.ready` 带 `replay_epoch`（`entry.py:277-282`） | ⏭ 不抄（每会话一次性进程内读，无跨重启水位） |
+| 重启侦测 | `gateway.ready` 带 `replay_epoch`（`entry.py:277-282`） | ⏭ 不抄（无客户端事件回放和跨重启水位） |
 
 ## §八 OpenAI 兼容服务
 
@@ -589,7 +589,7 @@ def is_truncated(sid: str, last_seen: int) -> bool:
 | 兼容面（**最小**） | `GET /v1/models`（`_handle_models`，`:2236`） | 主模型名 + 配置里的 `model_routes` 别名；每行只有 `id/object/created/owned_by/root/parent`。**绝不回凭据** | OpenAI 客户端 / basic 前端"要个模型名回填" |
 | Hermes 感知面（**全量**） | `GET /api/model/options`（`_handle_model_options`，`:2253`） | 整套 provider 行 + 每模型定价 + 能力提示（转手 `hermes_cli.inventory.build_model_options_payload`） | Hermes 感知的模型选择器 |
 
-两个面共用**同一份 payload builder**，有三个入口：API 服务器 REST（bearer key）· dashboard REST（`X-Hermes-Session-Token`）· TUI 网关 RPC `model.options`。`/api/model/options` 带 `refresh=1` 时会**打穿 provider-model 缓存**并探测所有已存自定义 provider；普通打开只探当前那一个，免得离线的已存端点把选择器卡住。判据一句话：**`/v1/models` 是给 OpenAI 客户端用的兼容端点，不是 Hermes 的模型目录**。
+Hermes 感知的模型选择器在以下三个入口共用**同一份 payload builder**；最小 `/v1/models` 使用自己的兼容响应，有三个入口：API 服务器 REST（bearer key）· dashboard REST（`X-Hermes-Session-Token`）· TUI 网关 RPC `model.options`。`/api/model/options` 带 `refresh=1` 时会**打穿 provider-model 缓存**并探测所有已存自定义 provider；普通打开只探当前那一个，免得离线的已存端点把选择器卡住。判据一句话：**`/v1/models` 是给 OpenAI 客户端用的兼容端点，不是 Hermes 的模型目录**。
 
 **形状四：`/v1/chat/completions` 收两种范式。** 非流式：一次性回 `chat.completion`。流式（SSE）：`Content-Type: text/event-stream`，逐块写 `data: {chunk}\n\n`，以 `data: [DONE]\n\n` 收尾；出错时给 OpenAI 形状的 `{"error": {"message", "type", "code"}}`。**兼容面的纪律就在这里**：这些字段名不是 Hermes 定的，是**别人定的契约**，选这条路等于被迫看清"哪些字段必须收、哪些必须吐、`model` 字段为什么可以被忽略"。
 
@@ -653,9 +653,9 @@ mini-hermes/
 
 **接缝 = 第 8 章的两段式解析 + `run_agent._apply_runtime`。** 这不是新机制：热切换在切换前先把目标 provider 解析成 `(api_mode, base_url, 凭据)`（`_resolve_switch_destination`，`:2167`），用的**正是 provider-runtime 那条链**；解析出来的东西落到 agent 上那一刻，就是"原地换运行时"。所以——
 
-> **热切换 = 用户发起的、持久化的 fallback 激活。**
+> 热切换与回退复用运行时替换逻辑；热切换还更新主路由，使用户选择跨轮生效。
 
-两者的分界只有一件事：fallback 是一次性 latch（按轮复位），**热切换更新 `_primary_runtime` 让它跨轮持续**（`:2208`）。同一个"原地换"机器，一个给自动回退用，一个给用户主动选。
+两者的分界只有一件事：fallback 按候选索引消费并在轮首复位，标记不禁止继续尝试下一项，**热切换更新 `_primary_runtime` 让它跨轮持续**（`:2208`）。共享的运行时替换机制，一个给自动回退用，一个给用户主动选。
 
 **代价 = 换完之后要做四件收尾**（回答"会不会断缓存 / 断流"）：
 
@@ -664,7 +664,7 @@ mini-hermes/
 3. **换 compressor**——窗口是模型的属性，换了模型就得换压缩阈值；
 4. **清 `_cached_system_prompt`**（`:2200`，下一轮重建）。
 
-四件事合起来的意思是：**代价 = 提示词缓存前缀那一块重算 / 重计费**；但**对话历史（transcript）不动**。所以准确说法不是"断缓存"，而是"**提示词缓存那一层重来**"。
+四件事合起来的意思是：**代价 = 客户端与提示词装配重新评估；服务端命中和计费变化取决于模型、端点及最终请求内容**；但**对话历史（transcript）不动**。所以准确说法不是"断缓存"，而是“重新评估缓存策略”。
 
 两条边界也要记住：**失败即 no-op**——`_swap_switch_runtime` 抛异常就整体回滚（`_restore_switch_snapshot`，`:2176`）再 re-raise，调用方（`tui_gateway/model_switch.py:224 _commit_agent_switch`）看到异常就 abort 整个提交；**不写进程全局 env**——桌面端一个进程里塞着多个同 profile 会话，写 `os.environ` 会泄给所有会话，所以走 **per-session `model_override`**（`tui_gateway/model_switch.py:290` 注释点明）。
 
@@ -686,8 +686,8 @@ def switch_model(
 
 ```
 run_agent.py:706   _apply_runtime(...)        ← 原地换（换 provider/model/base_url/api_mode/api_key + context_length）
-run_agent.py:748   _try_activate_fallback(...) ← 唯一的回退触发点（一次性）
-→ 热切换 = 在这两者之上接「用户选的目标 + 写 _primary_runtime 式的持久化」；核心不用动
+run_agent.py:748   _try_activate_fallback(...) ← 回退激活接口（按索引尝试下一候选）
+→ 热切换 = 在这两者之上接「用户选的目标 + 写 _primary_runtime 式的持久化」；还需同步主路由、提示词与压缩器等状态，不能只补一个命令就宣称完成
 ```
 
 ★ **mini 栏 = `已对齐`（接缝）+ `⏭` 本章不实现（用户 2026-10-12）**。
@@ -699,7 +699,7 @@ run_agent.py:748   _try_activate_fallback(...) ← 唯一的回退触发点（�
 | 用户入口 | `/model` 每个界面都有；API 请求体 `model` per-request | 无 `/model`（第 8 章已定） |
 | 原地换 | `agent_runtime_helpers.py:2150 switch_model` | 接缝已在：`run_agent.py:706 _apply_runtime` 已对齐 |
 | 该目标从哪来 | 两段式解析（`_resolve_switch_destination`） | 两段式解析已对齐（`hermes_cli/runtime_provider.py`） |
-| 跨轮持久 | 更新 `_primary_runtime` | 无（`_primary_runtime` 尚未建） |
+| 跨轮持久 | 更新 `_primary_runtime` | mini 有 `_fallback_primary` 保存回退前路由；未实现用户热切换后更新主路由的接口 |
 | 收尾代价 | 重建 client / 重算缓存标志 / 清 `_cached_system_prompt`；transcript 不动 | 未实现 |
 
 ---
@@ -762,7 +762,7 @@ run_agent.py:748   _try_activate_fallback(...) ← 唯一的回退触发点（�
 
 **合计 ≈ 340 行代码 + 契约测试（~120 条）+ 真跑收据**（curl 非流式/流式各一次 + 去文件系统核会话库）。
 
-**三条不变量必须显式守住**（这是本章最值钱的一句判据）：① 角色交替 ② 提示词字节稳定（**不许**每请求重建系统提示词）③ 会话归属（**不原样落客户端 messages**）。守住这三条 = A4/A5 的必要性；**"偷懒把客户端 messages 原样写库"会让三条全破**。
+**三条不变量必须显式守住**（这是本章最值钱的一句判据）：① 角色交替 ② 提示词内容稳定（避免不必要的动态变化；重建相同字节本身不破坏缓存）③ 会话归属（**不原样落客户端 messages**）。守住这三条 = A4/A5 的必要性；**"偷懒把客户端 messages 原样写库"会让三条全破**。
 
 **另外两条形状要抄，但不进代码、进文档**：
 

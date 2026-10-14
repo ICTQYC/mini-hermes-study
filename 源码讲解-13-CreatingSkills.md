@@ -1,10 +1,12 @@
 # 源码讲解 · 第 13 章：创建技能（Creating Skills）
 
-> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。维护节说明当前契约；正文与附录仍含各阶段源码片段，按段内提交读取。
 
-> 上游：`官方文档-Developer-Guide/creating-skills.md`（438 行）· 中文精译见 `中文精译-13-CreatingSkills.md`（680 行）。
-> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧引用按当前维护后的实现核对；章节交付快照为 `02c61d5`。
+> 上游：`官方文档-Developer-Guide/creating-skills.md`（438 行）· 中文精译见 `中文精译-13-CreatingSkills.md`（684 行）。
+> 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧混合了初始实现与后续维护阶段，按段内提交及具体引文定位；章节交付快照为 `02c61d5`。
 > ★ **引用归属约定**：mini 侧引用一律写成 `mini-hermes/<路径>:<行号>`；**未带 `mini-hermes/` 前缀的裸 `文件:行号` 一律指真实侧**（本章 mini 与真实侧有 12 个同名同路径文件，不加前缀无法判归属）。
+
+> 术语说明：secret 指密钥、令牌等机密值，并不表示它已加密；dotpath 指用点分隔的配置路径，如 `skills.config.myplugin.path`；tap 指用户登记的技能源仓库。
 
 [TOC]
 
@@ -83,7 +85,7 @@ def extract_skill_description(frontmatter: Dict[str, Any]) -> str:
 两条：
 
 1. **索引字节稳定**：扫描结果**排序后**才 yield（`agent/skill_utils.py:761-783` 的 `yield from map(Path, sorted(matches))`），磁盘快照用 manifest 逐文件签名比对（`agent/prompt_builder.py:1110-1125`）—— 同一批技能两次构建必须字节相同。
-2. **正文绝不进提示词**：索引只放 name + desc，正文只经 `skill_view` 出现。
+2. **索引不自动携带正文**：普通发现只放 name + desc；显式 `auto_load` 可把正文放进 stable 层，`skill_view` 则按需返回正文。
 
 逐字引（`tools/skills_tool.py:2-5`，模块 docstring）：
 
@@ -94,7 +96,7 @@ scripts/. `skills_list` returns name/description only; `skill_view` returns full
 linked files. Sibling modules (skills_tool_setup / _plugin / _dedup) re-export here."""
 ```
 
-**要害**：这一句就是本章的**核心承诺**——`skills_list`（索引那一跳）**只回 name/description**，`skill_view`（第二跳）才回全文。所以"正文不进提示词"不是纪律口号，是**两个工具各自的返回契约**：索引工具手里根本没有正文字段可回。
+**要害**：这一句就是本章的**核心承诺**——`skills_list`（索引那一跳）**只回 name/description**，`skill_view`（第二跳）才回全文。所以"索引不携带正文"不是纪律口号，是**两个工具各自的返回契约**：索引工具手里根本没有正文字段可回。
 
 ### 0.5 出错（三类失败，三档处置）
 
@@ -143,7 +145,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
     categories to names-only — never hidden, every name stays visible."""
 ```
 
-**要害**：这句钉死两个门 —— ①"**empty without skills tools**"：没有 skills 工具就**没有索引块**（索引与工具同生共死，mini 的 `has_skills()` 就是这个门的单一事实源）；②focus 模式只把分类降成"只有名字"，**永不隐藏**（对应渲染层的 `NEVER drop entries`）。第 5 步是整条链的**交接点**：提示词只让模型**知道存在什么**，正文永远在下一跳。
+**要害**：这句钉死两个门 —— ①"**empty without skills tools**"：没有 skills 工具就**没有索引块**（索引与工具同生共死，mini 的 `has_skills()` 就是这个门的单一事实源）；②focus 模式只把分类降成"只有名字"，**永不隐藏**（对应渲染层的 `NEVER drop entries`）。第 5 步是整条链的**交接点**：提示词只让模型**知道存在什么**，普通按需路径的正文留在下一跳；`auto_load` 是显式提前加载的另一条路径。
 
 ### 验收四问
 
@@ -156,11 +158,11 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 
 ## §〇 与真实版的差距总表
 
-★ **本章与第 11 / 12 章不同：mini 侧真有实现。** 第 11 章是地图、第 12 章连生产者都不存在；本章 mini 侧在 commit `02c61d5` 落地了技能系统的**最小形状**（发现 + 渐进披露 + 一个 `skill_view`）——因为它自己的 docstring 就写明了这个接缝（`agent/system_prompt.py:32-33`「原来还差一块……第 13 章把它补上了」，`:303` 的 `volatile_parts` 就是那个位置）。下表按「面 | 真实 Hermes | mini 现状」逐面拉平；mini 列四档口径：`✅ 已抄（02c61d5）` / `已对齐` / `⬜ 没做（量级）` / `⏭ 不抄（理由）`。真实侧锚 `f5d1926110`（v0.21.3），mini 侧锚 `02c61d5`（mini 源码最后一次改动）。
+★ **本章在 mini 侧实现了技能主干。** 第 11 章已实现状态库恢复，第 12 章的后台回执缺生产者；本章 mini 侧在 commit `02c61d5` 落地了技能系统的**最小形状**（发现 + 渐进披露 + 一个 `skill_view`）——因为它自己的 docstring 就写明了这个接缝（`agent/system_prompt.py:32-33`「原来还差一块……第 13 章把它补上了」，`:303` 的 `volatile_parts` 就是那个位置）。下表按「面 | 真实 Hermes | mini 现状」逐面拉平；mini 列四档口径：`✅ 已抄（02c61d5）` / `已对齐` / `⬜ 没做（量级）` / `⏭ 不抄（理由）`。真实侧锚 `f5d1926110`（v0.21.3），初始实现快照 `02c61d5`；内置根扩展 `4b0c96a`，当前行为以维护代码为准。
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 技能目录 + 发现 | 四层优先级 `local → create_dir → external`（`agent/skill_utils.py:398-406`）+ 项目层单独、**默认不加载、要显式 trust**（`:409-413`、`:802-811`，首见胜出） | ✅ 已抄（02c61d5）：只扫**一层** `<MINI_HOME>/skills/<name>/SKILL.md`（`agent/skill_utils.py:121-152`），每 profile 一套（走 `get_mini_home()`）。窄在**没有"分类"这个消费者**（无 browse / 无 hub 安装），等真有需求再补递归 |
+| 技能目录 + 发现 | 四层优先级 `local → create_dir → external`（`agent/skill_utils.py:398-406`）+ 项目层单独、**默认不加载、要显式 trust**（`:409-413`、`:802-811`，首见胜出） | ✅ 已抄（02c61d5）：用户根与内置根均只扫**一层** `skills/<name>/SKILL.md`（`agent/skill_utils.py:121-152`），每 profile 一套（走 `get_mini_home()`）。窄在**没有"分类"这个消费者**（无 browse / 无 hub 安装），等真有需求再补递归 |
 | **渐进披露**（索引只 name+desc，正文经 `skill_view`）★ | 索引渲染 `agent/prompt_builder.py:1327-1376`；正文 `tools/skills_tool.py:571` | ✅ 已抄（02c61d5）：内容构造 `load_skill_index()`（`agent/prompt_builder.py:645`）+ `build_skill_index`（`agent/skill_utils.py:372-400`）+ `skill_view`（`mini-hermes/tools/skills.py:84-124`）。**真跑收据**：`demos/ch13_real_run.py` 17/17 通过，含"正文独有句在提示词里搜不到" |
 | 描述硬截 60 字符 | `SKILL_PROMPT_DESC_LIMIT = 60`（`agent/skill_utils.py:741`）+ `:750-753` | ✅ 已抄（02c61d5）：`agent/skill_utils.py:69`、`:360-369`（含省略号一共 60） |
 | 索引进 volatile 层**首块**（复用前缀缓存）★ | `volatile_parts = [skills_prompt, ...]`（`agent/system_prompt.py:705-708`） | ✅ 已抄（02c61d5）：`_skill_index_parts()` 接进 `volatile_parts` **首位**（`agent/system_prompt.py:195-213`、`:303-310`） |
@@ -170,25 +172,25 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 | `skill_view` 工具（只读、**不分页**、第二跳） | `tools/skills_tool.py:571` + `:705-716` 注册 | ✅ 已抄（02c61d5）：`mini-hermes/tools/skills.py:84`，走**普通注册路径**（只读文件 ⇒ 不进 agent loop，`mini-hermes/tools/skills.py:13-19` 判据） |
 | `skills_list`（Tier 1 列表工具） | `tools/skills_tool.py:232` | ⏭ 不抄（mini 的"列表"就是提示词索引本身；再开一个列表工具与索引重复，且多一份漂移面） |
 | frontmatter 解析 | 真 YAML，失败回落逐行切分（`agent/skill_utils.py:105-125`） | 已对齐：零依赖**子集**解析器（只认顶层 `key: value`；嵌套 / 列表 / 行尾注释一律忽略）（`mini-hermes/agent/skill_utils.py:256-344`）。窄在"只为 name/description 两个标量"，为两个字段引 YAML 解析器不值（硬约束：零第三方依赖） |
-| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 是**单平台 CLI**，没有 OS 维度；`agent.platform` 那个是界面平台 cli/tui，不是 OS） |
-| 条件激活 `_CONDITION_KEYS`（含未文档化的 `session_platforms`） | 五键定义 `agent/skill_utils.py:633-641` + 判定 `agent/prompt_builder.py:1210-1228` | ⬜ 没做（可映射 mini 的 toolset 概念，**只抄 `requires_tools` / `fallback_for_toolsets` 两键**即可，~20-30 行；`session_platforms` 不抄——mini 无网关渠道门） |
+| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 没有按宿主 OS 过滤技能的能力（已有 CLI 和 console 网关）；`agent.platform` 那个是界面平台 cli/tui，不是 OS） |
+| 条件激活 `_CONDITION_KEYS`（含未文档化的 `session_platforms`） | 五键定义 `agent/skill_utils.py:633-641` + 判定 `agent/prompt_builder.py:1210-1228` | ⬜ 没做（可映射 mini 的 toolset 概念，**若将来扩展，可先接 `requires_toolsets` / `fallback_for_toolsets` 两键**，实现规模需实际评估；`session_platforms` 不抄——mini 未接技能渠道过滤） |
 | `environments:` 第三道**相关性**门 | `agent/skill_utils.py:148-153`（fail open、显式加载永远绕过、只影响 offer 面） | ⏭ 不抄（mini 无 kanban / docker / s6 环境面） |
 | `skills.disabled` 硬拒绝 + `hermes-agent` 不可禁 | `tools/skills_tool.py:605-606`；`ESSENTIAL_SKILLS`（`agent/skill_utils.py:273-275`） | ⬜ 没做（mini 有 `config.json`，~10-15 行可补；只有配上前面的 config 才有意义） |
-| Secure Setup on Load（三别名合一 + 网关降级 + 密钥值不进模型上下文） | `tools/skills_tool_setup.py:46-63`、`:87-118` | ⏭ 不抄（mini 无**密钥写面**、无网关交互面；作用域是只读快照） |
+| Secure Setup on Load（三别名合一 + 网关降级 + 密钥值不进模型上下文） | `tools/skills_tool_setup.py:46-63`、`:87-118` | ⏭ 不抄（mini 无技能密钥征询与落盘流程；作用域是只读快照） |
 | 环境变量自动 passthrough 到 sandbox | `tools/skills_tool.py:438-442` | ⏭ 不抄（mini 无 sandbox 后端 / passthrough 注册表） |
 | 凭据文件挂载（主库永不可挂、fail-closed） | `tools/credential_files.py:79-104`；Docker `:ro`（`tools/environments/docker.py:440-462`） | ⏭ 不抄（mini 无 Docker / Modal / SSH 远端后端） |
 | `skills.config` + `config migrate`（"Skill Settings"） | `agent/skill_utils.py:692-693`；`hermes_cli/config.py:993-1011`、`:1520-1548` | ⏭ 不抄（mini 的 config 是**无迁移的平铺 JSON**，没有版本迁移面） |
-| 安全扫描 + 四档信任 + `--force` | `tools/skills_guard.py:24-33`、`:660-673` | ⏭ 不抄（扫描器的前提是"从网上下来的技能"；mini 的技能都是本地手写） |
-| 发布 / 安装 / tap / 三种发现模型 | `hermes_cli/skills_hub.py`、`tools/skills_hub_*.py` | ⏭ 不抄（mini **零依赖**、无网络客户端与安装事务；唯一 HTTP 是模型调用用的 `_http_post`） |
+| 安全扫描 + 四档信任 + `--force` | `tools/skills_guard.py:24-33`、`:660-673` | ⏭ 不抄（mini 未实现来源分级或内容扫描；内置根随程序发布，用户根可手写或复制第三方文件） |
+| 发布 / 安装 / tap / 三种发现模型 | `hermes_cli/skills_hub.py`、`tools/skills_hub_*.py` | ⏭ 不抄（mini **零依赖**、无技能分发客户端与安装事务；已有模型 HTTP 调用与网页搜索，但没有技能下载、安装事务） |
 | 蓝图（skill 声明 `metadata.hermes.blueprint`） | `tools/blueprints.py:1-7`、`:44-62` | ⏭ 不抄（mini 无 cron / 调度面） |
 | 建议的定时任务四来源 + consent-first | `cron/suggestions.py:1-9`、`:37`（`MAX_PENDING = 5`） | ⏭ 不抄（mini 无编排面；第 12 章刚确认没有生产者） |
-| curator（闲置触发、只碰 `created_by: agent`、只归档不删） | `agent/curator.py:1-6`、`:29-34`；`tools/skill_usage.py:1-6` | ⏭ 不抄（mini 无长命进程 / 闲置判定） |
+| curator（闲置触发、只碰 `created_by: agent`、只归档不删） | `agent/curator.py:1-6`、`:29-34`；`tools/skill_usage.py:1-6` | ⏭ 不抄（mini 有常驻网关，但没有技能策展器与对应的闲置触发） |
 | 语义检索 / catalog | 嵌入模型或远端检索 | ⏭ 不抄（mini 只有 FTS5，且服务于**消息**；更窄的替代 = **名字 / 描述子串匹配**，成本约几十行） |
 
 **两条准确性备注**
 
 - 第 2 行与第 4 行是这个机制的**一对判据**，常被拆开讲错：**索引只放 name+desc** 解决的是"上下文别被正文撑爆"，**索引进 volatile 首块**解决的是"改了技能别废掉缓存前缀"——前者是内容约定，后者是**排序约定**，两件事。
-- 第 12 行的"只抄两键"不是妥协而是**对齐 mini 的语义**：真实 `_CONDITION_KEYS` 五键里，`requires_toolsets` / `fallback_for_toolsets` 命中的正是 mini 已有的 toolset 概念（`toolsets.py:53` 那张表），另外三键（`requires_tools` / `fallback_for_tools` / `session_platforms`）要么依赖"可用工具集"的运行时快照、要么依赖网关渠道门，mini 两样都没有。
+- 第 12 行的"只抄两键"不是妥协而是**对齐 mini 的语义**：真实 `_CONDITION_KEYS` 五键里，`requires_toolsets` / `fallback_for_toolsets` 命中的正是 mini 已有的 toolset 概念（`toolsets.py:53` 那张表），另外三键（`requires_tools` / `fallback_for_tools` / `session_platforms`）要么依赖"可用工具集"的运行时快照、要么依赖网关渠道门，mini 已有工具可用性快照和 console 网关，但尚未把这些条件接入技能过滤。
 
 ---
 
@@ -298,7 +300,7 @@ metadata:
     requires_tools: [web_search]
     fallback_for_toolsets: [browser]       # 主工具在场时隐藏
     fallback_for_tools: [browser_navigate]
-    config:                                # 非密文设置 → skills.config.<key>
+    config:                                # 非敏感设置 → skills.config.<key>
       - key: my.setting
         description: "What this setting controls"
     blueprint:                             # 声明后即是"可运行的自动化"
@@ -364,13 +366,13 @@ mini 写了一个**零第三方依赖的子集解析器**（`mini-hermes/agent/s
 
 **③ mini 的实现（现状）**
 
-⬜ 没做。mini 是**单平台 CLI**，没有 OS 维度——`agent.platform`（`mini-hermes/run_agent.py:256`，默认 `"cli"`）指的是**界面平台**（cli / tui），不是宿主 OS，与 `platforms:` 语义无关。mini 里能"按条件开关一段东西"的现成机制是 `check_fn` 或 config 段开关，但两者都不需要 OS 判定，所以这条门在 mini 里**没有前提**。
+⬜ 没做。mini 没有按宿主 OS 过滤技能的能力（已有 CLI 和 console 网关）——`agent.platform`（`mini-hermes/run_agent.py:256`，默认 `"cli"`）指的是**界面平台**（cli / tui），不是宿主 OS，与 `platforms:` 语义无关。mini 里能"按条件开关一段东西"的现成机制是 `check_fn` 或 config 段开关，但两者都不需要 OS 判定，因此当前未接这条门；跨 OS 使用技能时仍可能需要它。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 单平台 CLI，无 OS 维度） |
+| `platforms:` 宿主 OS 门 | `PLATFORM_MAP` + `skill_matches_platform`（`agent/skill_utils.py:21`、`:128-145`），含 Termux 特判 | ⬜ 没做（mini 未实现技能的宿主 OS 过滤） |
 | 不匹配的处置 | 从提示词 / `skills_list` / 斜杠命令**软隐藏**（不删文件） | 无此项（同一"软隐藏"语义由 §3.2 的条件激活承担，而条件激活也没做） |
 
 ### 条件激活（Conditional Skill Activation）
@@ -402,15 +404,15 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 **③ mini 的实现（现状）**
 
-⬜ 没做。但 mini **有可映射的承载物**：它已经有一张 toolset 表（`mini-hermes/toolsets.py:53` 的 `TOOLSETS`）与 `check_fn` 探测机制（`mini-hermes/tools/registry.py:180-186`）。所以这条门若要抄，**只抄 `requires_tools` / `fallback_for_toolsets` 两键**即可——它们命中的正是 mini 已有的"工具集是否可用"概念；另外三键（`requires_tools` / `fallback_for_tools` / `session_platforms`）要么依赖"可用工具集"的运行时快照，要么依赖网关渠道门，mini 两样都没有。量级约 20~30 行。
+⬜ 没做。但 mini **有可映射的承载物**：它已经有一张 toolset 表（`mini-hermes/toolsets.py:53` 的 `TOOLSETS`）与 `check_fn` 探测机制（`mini-hermes/tools/registry.py:180-186`）。所以这条门若要抄，**若将来扩展，可先接 `requires_toolsets` / `fallback_for_toolsets` 两键**即可——它们命中的正是 mini 已有的"工具集是否可用"概念；另外三键（`requires_tools` / `fallback_for_tools` / `session_platforms`）要么依赖"可用工具集"的运行时快照，要么依赖网关渠道门，mini 已有工具可用性快照和 console 网关，但尚未把这些条件接入技能过滤。量级约 20~30 行。
 
 **④ 与真实版的差别**
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 条件激活键 | 五键（四键文档化 + `session_platforms`）（`agent/skill_utils.py:633-641`） | ⬜ 没做（`requires_tools` / `fallback_for_toolsets` 两键可映射到 mini 的 toolset） |
+| 条件激活键 | 五键（四键文档化 + `session_platforms`）（`agent/skill_utils.py:633-641`） | ⬜ 没做（`requires_toolsets` / `fallback_for_toolsets` 两键可映射到 mini 的 toolset） |
 | 判定函数 | `_skill_should_show`（`agent/prompt_builder.py:1210-1228`），未命中 ⇒ 不进索引、**不删技能** | 无此项（同一位置由"空技能库 ⇒ 索引空串 + 工具收起"承担） |
-| 渠道门 `session_platforms` | 网关渠道闸门（`metadata.hermes.session_platforms`） | ⏭ 不抄（mini 无网关渠道门概念） |
+| 渠道门 `session_platforms` | 网关渠道闸门（`metadata.hermes.session_platforms`） | ⏭ 不抄（mini 未接技能渠道过滤概念） |
 
 ### 环境变量需求（Environment Variable Requirements）
 
@@ -450,7 +452,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 声明面是**三别名合一**：`required_environment_variables`、`setup.collect_secrets`、以及向后兼容的旧别名 `prerequisites.env_vars`，去重校验成一张表（首个出现者胜出）；变量名必须匹配 `_ENV_VAR_NAME_RE`（`^[A-Za-z_][A-Za-z0-9_]*$`），非法直接丢。真正加载时（`skill_view` / 斜杠命令 / `skills.auto_load`）走一条**就绪检查**：先看哪些必需变量**既不在 `.env` 快照、也不在密钥作用域**里，缺的才去征询。
 
-征询按**界面**分叉，这是本节最关键的一处边界：网关/消息面**没法安全弹框**，就返回一段 `gateway_setup_hint`，让用户去本地 CLI 或手填 `~/.hermes/.env`；只有桌面/TUI 带上交互标志（`HERMES_INTERACTIVE`）时才走安全回调。而这条回调的**返回值**是整章安全观感最强的地方——值写进 `.env` 由回调另一侧完成，回给调用方的只有 `success / stored_as / validated / skipped` 四个状态词，**原始密文从不流经模型上下文**。
+征询按**界面**分叉，这是本节最关键的一处边界：网关/消息面**没法安全弹框**，就返回一段 `gateway_setup_hint`，让用户去本地 CLI 或手填 `~/.hermes/.env`；只有桌面/TUI 带上交互标志（`HERMES_INTERACTIVE`）时才走安全回调。而这条回调的**返回值**是整章安全观感最强的地方——值写进 `.env` 由回调另一侧完成，回给调用方的只有 `success / stored_as / validated / skipped` 四个状态词，**原始机密值从不流经模型上下文**。
 
 加载成功后还有一步"**自动透传**"：只有**实际已设置**的那些变量会被 `register_env_passthrough` 登记，好让 `execute_code` / `terminal` 沙箱（含 Docker、Modal 远端后端）里能读到 `$TENOR_API_KEY`；而 Hermes 自己的 provider 凭据被硬性拦下——技能不得覆盖沙箱的凭据清洗（GHSA-rhgp-j443-p4rf）。若声明的是**文件形态**的凭据（`required_credential_files`），则改走另一条路（见下 H3）。
 
@@ -473,14 +475,14 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 117:    return _capture_result(remaining_names, bool(remaining_names))
 ```
 
-要害：整段代码对回调返回值**只问两件事**——`success`（成不成，`:114`）与 `skipped`（跳没跳，`:115`）；`stored_as` 里装的是**变量名**（`:113`），不是值；函数最后交出去的也只有"还剩哪几个没配"（`:117`）。**值本身没有任何一条路径能回到模型上下文**——它由回调写进 `~/.hermes/.env`，这边只收状态词。这就是文档那句"永不把原始密文值暴露给模型"的代码出处。
+要害：整段代码对回调返回值**只问两件事**——`success`（成不成，`:114`）与 `skipped`（跳没跳，`:115`）；`stored_as` 里装的是**变量名**（`:113`），不是值；函数最后交出去的也只有"还剩哪几个没配"（`:117`）。**值本身没有任何一条路径能回到模型上下文**——它由回调写进 `~/.hermes/.env`，这边只收状态词。这就是文档那句"永不把原始机密值暴露给模型"的代码出处。
 
 **③ mini 的实现（现状）**：⏭ **不抄——缺的正是安全面的两头**。
 
-- **缺 secret 的写入面**：mini 的 `agent/secret_scope.py` 只有**只读**接口——`get_secret(key)`（`:108`）在多路复用模式外回落 `os.environ`、在模式内无作用域则抛 `UnscopedSecretError`（`:117、:130`）。它确有 `set_secret_scope(dict)`（`:79`），但那是**进程内把已拿到的密钥装进 contextvar**（`:24-25` 的 ContextVar），不是"向用户安全征询一个值再落盘"的写面。没有回调注册点（真实侧 `_st._secret_capture_callback`），也就没有"值不经模型"这条契约要守——**没有写面，就没有泄密面要防**。
+- **缺 secret 的写入面**：mini 的 `agent/secret_scope.py` 只有**只读**接口——`get_secret(key)`（`:108`）在多路复用模式外回落 `os.environ`、在模式内无作用域则抛 `UnscopedSecretError`（`:117、:130`）。它确有 `set_secret_scope(dict)`（`:79`），但那是**进程内把已拿到的密钥装进 contextvar**（`:24-25` 的 ContextVar），不是"向用户安全征询一个值再落盘"的写面。没有回调注册点（真实侧 `_st._secret_capture_callback`），也就没有"值不经模型"这条契约要守——这仅说明缺少安全征询流程；只读凭据、工具输出仍有各自的保密边界。
 - **缺容器后端**：透传的目标（`execute_code`/`terminal` 沙箱、Docker、Modal）在 mini 里不存在（`tools/terminal.py` 是同步本机 `subprocess.run`）。所以"把已设置变量透传进沙箱"在 mini 里没有目的地。
 
-**推理链**：就绪状态机（`available/setup_needed/unsupported`）的存在意义 = "缺依赖时**标记而非隐藏**，并把征询安全地做掉"。mini 既没有"缺依赖"这一状态要表达（无外部 API 密钥概念），也没有安全征询的写面——**照抄一个状态机会是一个永远返回 `available` 的状态机**，正是本项目反复拒绝的投机性基础设施。
+**推理链**：就绪状态机（`available/setup_needed/unsupported`）的存在意义 = "缺依赖时**标记而非隐藏**，并把征询安全地做掉"。mini 既没有"缺依赖"这一状态要表达（未解析技能声明的外部依赖），也没有安全征询的写面——**照抄一个状态机会是一个永远返回 `available` 的状态机**，正是本项目反复拒绝的投机性基础设施。
 
 **④ 与真实版的差别**：
 
@@ -492,7 +494,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 ### 配置项设置（Config Settings (config.yaml)）
 
-**① Hermes 怎么做的**：与密文分流的是**非密文**设置——路径、偏好、其它非敏感值。声明写在 frontmatter 的 `metadata.hermes.config`（每项 `key` 必需 / `description` 必需 / `default`、`prompt` 可选），缺 `key` 或 `description` 的项直接跳过；存储前缀是常量 `SKILL_CONFIG_PREFIX = "skills.config"`，值落进 `config.yaml` 的 `skills.config.<logical key>`。
+**① Hermes 怎么做的**：与机密值分流的是**非敏感**设置——路径、偏好、其它非敏感值。声明写在 frontmatter 的 `metadata.hermes.config`（每项 `key` 必需 / `description` 必需 / `default`、`prompt` 可选），缺 `key` 或 `description` 的项直接跳过；存储前缀是常量 `SKILL_CONFIG_PREFIX = "skills.config"`，值落进 `config.yaml` 的 `skills.config.<logical key>`。
 
 **发现**与**注入**是两个面：`hermes config migrate` 扫**所有已启用且平台兼容**的技能、按 key 去重、把未配置的项提示给用户（`Configure skill settings? [y/N]:`）；`hermes config show` 里则单独有一段 `_section("Skill Settings")`。**运行时注入**发生在技能加载时——解析出的值被拼进技能消息，形如 `[Skill config (from <HERMES_HOME>/config.yaml): …]`，于是 agent 看到已配置的值，**不必自己去读 `config.yaml`**。
 
@@ -582,9 +584,9 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 ### 渐进披露（Progressive Disclosure）
 
-**① Hermes 怎么做的**：这是**本章的核心**。整套技能系统对上下文只暴露**两跳**：第一跳是系统提示词里的一行**紧凑索引**——每个技能一行 `    - 名字: 描述`，描述被**硬截到 60 字符**；第二跳是模型按需调 `skill_view(name)` 拿**正文**。正文**从不进系统提示词**。
+**① Hermes 怎么做的**：这是**本章的核心**。整套技能系统对上下文只暴露**两跳**：第一跳是系统提示词里的一行**紧凑索引**——每个技能一行 `    - 名字: 描述`，描述被**硬截到 60 字符**；第二跳是模型按需调 `skill_view(name)` 拿**正文**。普通索引路径不把正文自动塞进系统提示词；上游显式 `auto_load` 是例外。
 
-为什么必须这样：① **token 经济**——技能库里几十上百个技能，正文全塞进提示词会当场炸掉上下文，而绝大多数技能当轮用不到；② **缓存不变式**——索引被放在 **volatile 层的首块**，让"没变的那一行留在被复用的前缀里、变了才从这一行重新 prefill"，这是把"运行期可变的技能"和"字节稳定的前缀缓存"两件事同时满足的唯一摆法。
+为什么必须这样：① **token 经济**——技能库里几十上百个技能，正文全塞进提示词会当场炸掉上下文，而绝大多数技能当轮用不到；② **缓存不变式**——索引被放在 **volatile 层的首块**，让"没变的那一行留在被复用的前缀里、变了才从这一行重新 prefill"，这是当前采用的排序；它保住变化点之前的公共前缀，不能据此证明这是唯一可行的排序。
 
 还有一条配套的**硬规矩**：技能加载类工具**没有 `offset`/`limit` 分页**——模型必须一次读完技能全文（分了页它会只读第一页就跳过其余，拿着半份说明书干活）。这是"数据工具必须分页、instructional 工具绝不"这条更一般纪律的一个实例。
 
@@ -608,7 +610,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 - **进提示词**：`mini-hermes/agent/prompt_builder.py:645` `load_skill_index()`（薄封装，保证扫描只有一份实现）被 `mini-hermes/agent/system_prompt.py:195` 的 `_skill_index_parts` 取用，插在 `volatile_parts` **列表头**（`:303-306`，在 `_memory_parts` 之前）。
 - **第二跳**：`tools/skills.py`（136 行）的 `skill_view` 走**普通注册路径**（不需要 agent 对象，故不碰 `run_agent.py`/`model_tools.py`），返回正文 + 目录列表，**不分页**（schema 只有 `name` 一个参数）。
 
-**真跑收据**（`demos/ch13_real_run.py`，17/17 通过）：① 真提示词连续两次构建**字节完全一致**、`invalidate` 之后重建仍一致；② 索引块就是 volatile 层开头；③ **★ 正文独有句（"正文独有句：鹦鹉会在凌晨三点背诵圆周率。"）不在真提示词里**，`p1.count("鹦鹉") == 0`；④ 同一句话只有 `skill_view("alpha")` 能取出，且取回的正文仍不在提示词里；⑤ 描述确实被硬截到"`前缀 + ...`"共 60 字符；⑥ 无技能库时索引是**空串**（提示词里连标题都不出现，`skill_view` 工具也同时不可见）。配套契约测试 `tests/test_skills.py` **72/72（6 组）**，其中组 1 钉"索引字节稳定"（写无关文件、落一条消息、只改 mtime 都不变）、组 2 钉"**正文只经 `skill_view` 出现**"。
+**真跑收据**（`demos/ch13_real_run.py`，17/17 通过）：① 真提示词连续两次构建**字节完全一致**、`invalidate` 之后重建仍一致；② 索引块就是 volatile 层开头；③ **★ 正文独有句（"正文独有句：鹦鹉会在凌晨三点背诵圆周率。"）不在真提示词里**，`p1.count("鹦鹉") == 0`；④ 同一句话只有 `skill_view("alpha")` 能取出，且取回的正文仍不在提示词里；⑤ 描述确实被硬截到"`前缀 + ...`"共 60 字符；⑥ 无技能库时索引是**空串**（提示词里连标题都不出现，`skill_view` 工具也同时不可见）。配套契约测试 `tests/test_skills.py` **72/72（6 组）**，其中组 1 钉"索引字节稳定"（写无关文件、落一条消息、只改 mtime 都不变）、组 2 钉"**普通发现不自动加载正文**"。
 
 **④ 与真实版的差别**：
 
@@ -679,7 +681,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 要害：注释逐字说明"**解析不出来的 token 原样留着**"（`:13-14`）——"没有会话时原样保留"不是疏漏，而是**故意让作者自己看得见**那个没被替换的值；替换实现里同一句被写成 *tokens without a value stay in place*（`:35`）。开关的默认值是**开**：`cfg.get("template_vars", True)`（`:99`），关它要显式写 `skills.template_vars: false`。
 
-**③ mini 的实现（现状）**：⏭ **不抄（有更窄的替代）**。mini 的 `skill_view` 直接在返回里给出 `path` 字段（`mini-hermes/tools/skills.py:117`，相对技能库的绝对路径），模型据此也能拼出"跑随包脚本"的命令；但 mini **没有** `${HERMES_SKILL_DIR}` / `${HERMES_SESSION_ID}` 的模板替换面，激活消息也没有 `[Skill directory: …]` 这一块——这条更窄的替代覆盖了"拿到绝对路径"这个需求，没有覆盖 `HERMES_SESSION_ID`。
+**③ mini 的实现（现状）**：⏭ **不抄（有更窄的替代）**。mini 的 `skill_view` 直接在返回里给出 `path` 字段（`mini-hermes/tools/skills.py:117`，技能文件的绝对路径），模型据此也能拼出"跑随包脚本"的命令；但 mini **没有** `${HERMES_SKILL_DIR}` / `${HERMES_SESSION_ID}` 的模板替换面，激活消息也没有 `[Skill directory: …]` 这一块——这条更窄的替代覆盖了"拿到绝对路径"这个需求，没有覆盖 `HERMES_SESSION_ID`。
 
 **④ 与真实版的差别**：
 
@@ -758,7 +760,7 @@ _CONDITION_KEYS = ("fallback_for_toolsets", "requires_toolsets", "fallback_for_t
 
 要害："住在哪"不只是"有用没用"，还是一个**信任决定**——从一个 clone 自动加载的项目技能是注入向量，所以默认**不加载**，只有 root 进了 `skills.trusted_project_dirs` 才生效（`:410-411`）；而且 `cwd + trust list` 是**会话固定**的，这样技能索引才能字节稳定（`:412-413`）。**发现范围的定义同时是攻击面的定义**——这是本节最该记住的一句。
 
-**③ mini 的实现（现状）**：✅ **已抄**（`02c61d5` 的"与 profile 的关系" + `4b0c96a` 的**第二个发现根**：内置 `<repo>/mini-hermes/skills/` 与用户根共存、用户优先）；⏭ **不抄**信任门（判据见下一条：mini 没有"不可信来源"这回事）。
+**③ mini 的实现（现状）**：✅ **已抄**（`02c61d5` 的"与 profile 的关系" + `4b0c96a` 的**第二个发现根**：内置 `<repo>/mini-hermes/skills/` 与用户根共存、用户优先）；⏭ **不抄**信任门（判据见下一条：mini 没有从任意项目自动发现技能的路径）。
 
 - **每个 profile 一套技能**：`mini-hermes/hermes_cli/profiles.py:43` 把 `skills` 加进 `PROFILE_DIRS = ["logs", "hooks", "skills"]`——新建 profile 时就建出该目录（注释逐字：*第 13 章才补进来：在此之前技能库没有消费者，所以刻意不建*）。路径来源是 `mini-hermes/agent/skill_utils.py:121-130` 的 `skills_dir()` = `get_mini_home() / "skills"`。因为**一个 profile = 一个 home**，所以"技能属于谁"这件事**一行都不用另写**——`get_mini_home()` 自动隔离，天然不串味。
 - **只扫一层**：mini 只扫 `skills/<name>/SKILL.md`（`mini-hermes/agent/skill_utils.py:29-31` 的 docstring 逐字：*只扫一层（真实 Hermes 会递归走分类目录，如 `skills/github/xxx`）*）。★ **两个根都如此** —— 第 13b 加的是"去哪儿找"的第二个根，不是 `<category>/` 那层深度，"多根 ≠ 多层"。
@@ -877,11 +879,9 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
         "--repo", default="", help="Target GitHub repo (e.g. openai/skills)")
 ```
 
-**③ mini 的实现（现状）**：⏭ **不抄——无网络客户端封装与安装事务**。真实侧的 publish 需要的每一样东西 mini 都没有：一个通用 HTTP 客户端（mini 唯一的网络出口是模型调用用的 `_http_post`，不是通用客户端）、GitHub / ClawHub 的鉴权与交互、以及一次"安装事务"（下载 → 解包 → 落盘 → 扫描 → 信任判决 → 原子替换）。更根本的是：这些东西的存在前提是"技能从**外**来"，而 mini 的技能是**手写落在本地库**的。
+**③ mini 的实现（现状）**：mini 没有技能发布、下载和安装事务。当前发现有两个来源根：随程序发布的内置根，以及每个 profile 的用户根；用户同名技能优先。把文件放入用户根只完成本机发现，不等于发布给他人。已有模型 HTTP 与网页搜索不能替代技能分发流程。
 
-**更窄的替代**正在这里：mini 的"发布 / 发现"被压成了一个动作——**把 `SKILL.md` 写进 `<MINI_HOME>/skills/<name>/`**。发现就是扫目录（`agent/skill_utils.discover_skills()`，每次真读盘、无缓存），**落盘即被发现**。没有 hub、没有 tap、没有安装、没有信任分级——因为技能来源只有一个（本地手写），"信任"这件事在结构上**不存在**：不是"扫了但放过"，而是根本没有"从外来的一侧"。技能名也不是路径片段，`resolve_skill()` 只拿它做**相等比较**（路径永远来自扫描结果），所以连"发布到一个命名空间"这个概念都不需要。整条 publish → tap → browse → install → scan → trust 的链，在 mini 里塌缩成"写一个文件"——这不是"把发布做小"，而是回到发布当初为什么存在（**把技能送到别人的机器上**），而 mini 只有一台机器。
-
-唯一被保留下来、且与发布同源的是**渐进披露**那条纪律：即便技能库变大，mini 也不会把正文塞进提示词（本节的 `02c61d5` 已实现）。发布链回答"技能怎么来"，渐进披露回答"技能怎么被用"——后者 mini 有了，前者它不需要。
+普通发现仍遵循渐进披露：索引列名字与描述，正文由 `skill_view` 按需读取。
 
 **④ 与真实版的差别**：
 
@@ -896,7 +896,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 
 **① Hermes 怎么做的**：技能是**可执行的说明书**——模型会照着它去跑 shell、读文件、调工具。只要技能有一个来源是"陌生人"，这件事就不再是"文档质量"问题，而是**供应链**问题。所以 Hermes 对技能的处置分成两层：**扫内容**（`skills_guard` 的正则静态扫描）与**定信任**（按来源给一个信任级别，再拿级别去查放行策略）。这两层是分开的，且**信任不是"扫完再打分"，是"从来源一次决定"**——`_resolve_trust_level`（`tools/skills_guard.py:780-788`）的 docstring 逐字写的是 *"Source id -> trust level."*，它吃的是 `source` 字符串（`"official"`、`"agent-created"`、`github` 标识…），输出一个信任级别。同一份技能内容，从 `openai/skills` 装进来与从某个陌生仓库装进来，扫出来的发现（`Finding` 列表）一模一样，但**判决不同**——差别全在信任档上。
 
-判决链有两步。**第一步把发现压成裁决**：`_determine_verdict`（`:791-794`）逐字 `return "dangerous" if "critical" in sev else "caution" if "high" in sev else "safe"`——`critical` → `dangerous`、`high` → `caution`、**只有 `medium`/`low` 时算 `safe`**（docstring 逐字 *"medium/low alone are informational (safe)"*）。**第二步拿（信任级别, 裁决）去查策略矩阵**，也就是下面 ② 引的那张 `INSTALL_POLICY`。四档信任里有一档要单独说：`builtin` 是**"从不扫描"**，不是"扫了但放过"——模块 docstring（`:4`）逐字 *"builtin (never scanned)"*，矩阵里对应的三个格子全是 `"allow"`。随包内置的 `skills/` 与 `optional-skills/`（来源 `official`，其信任级别直接判成 `builtin`，见 `:786-787`）走的就是这一档。
+判决链有两步。**第一步把发现压成裁决**：`_determine_verdict`（`:791-794`）逐字 `return "dangerous" if "critical" in sev else "caution" if "high" in sev else "safe"`——`critical` → `dangerous`、`high` → `caution`、**只有 `medium`/`low` 时算 `safe`**（docstring 逐字 *"medium/low alone are informational (safe)"*）。**第二步拿（信任级别, 裁决）去查策略矩阵**，也就是下面 ② 引的那张 `INSTALL_POLICY`。四档信任里有一档要单独说：`builtin` 的安装策略是始终允许；扫描入口仍可能被安装或审计路径调用——模块 docstring（`:4`）逐字 *"builtin (never scanned)"*，矩阵里对应的三个格子全是 `"allow"`。随包来源 `official` 被判为 `builtin`；不要把模块注释的 never scanned 当作所有调用路径都会跳过扫描的保证。
 
 `--force` 是本节最容易读漏边界的地方。它不是"万能覆盖"：`should_allow_install`（`:660-673`）先算一个 `hard_block`（`:665` 逐字 `hard_block = result.verdict == "dangerous" and result.trust_level in ("community", "trusted")`），再逐级判——`:668` 是 `if force and not hard_block:`，也就是说**`--force` 能覆盖除"`community`/`trusted` 上的 `dangerous`"以外的每一个 block**；docstring（`:661-662`）把这条写死了：*"*force* overrides every block except a dangerous verdict on community/trusted sources."*。被硬挡住时返回的理由（`:673`）逐字是 `"--force does not override a dangerous verdict."`——用户看到的**不是**"Use --force to override"（那是可被覆盖时的文案）。docstring 前半句还点明了查表口径，**默认兜底落在查表那一行**（`:663` 逐字 `decision = INSTALL_POLICY.get(result.trust_level, INSTALL_POLICY["community"])[VERDICT_INDEX.get(result.verdict, 2)]`）：`trust_level` 查不到时按 `community` 处理——**未知来源不会意外获得宽松待遇**。
 
@@ -919,31 +919,27 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 33: }
 ```
 
-要害：**这张表就是"信任 × 裁决 → 动作"的全部权威**，四行三列十二个格子，读法从左到右是信任收紧、从上到下是裁决变坏。三处细节只能在源码里读到、文档读不到：其一，**`trusted` 那一行并非全 allow**——`dangerous` 是 `"block"`，与 `community` 的 `dangerous` 一样被拦（`:29` 的第三个格子），这正是附录 C ② 要纠正的那半句；其二，**`agent-created` 的 `dangerous` 既不是 allow 也不是 block，是 `"ask"`**，第三种判决值，靠 `:31` 的注释定义其语义（不是拒绝，是"把发现当错误退给 agent 重试"）；其三，**`builtin` 的三个格子全是 `"allow"` 是因为它根本不被扫**（模块 docstring `:4` 逐字 *"builtin (never scanned)"*）——把这张表读成"所有技能都扫、只是放行尺度不同"就错了。表格右对齐的 `safe / caution / dangerous` 三列与 `VERDICT_INDEX = {"safe": 0, "caution": 1, "dangerous": 2}`（`:35`）是一一对应的，`:663` 的查表就是靠这个下标。
+要害：**这张表就是"信任 × 裁决 → 动作"的全部权威**，四行三列十二个格子，列从左到右是裁决变坏，行区分来源信任（`agent-created` 另有重试策略）。三处细节只能在源码里读到、文档读不到：其一，**`trusted` 那一行并非全 allow**——`dangerous` 是 `"block"`，与 `community` 的 `dangerous` 一样被拦（`:29` 的第三个格子），这正是附录 C ② 要纠正的那半句；其二，**`agent-created` 的 `dangerous` 既不是 allow 也不是 block，是 `"ask"`**，第三种判决值，靠 `:31` 的注释定义其语义（不是拒绝，是"把发现当错误退给 agent 重试"）；其三，**`builtin` 的三个格子全是 `"allow"`，表示策略始终允许**（模块 docstring `:4` 逐字 *"builtin (never scanned)"*）——把这张表读成"所有技能都扫、只是放行尺度不同"就错了。表格右对齐的 `safe / caution / dangerous` 三列与 `VERDICT_INDEX = {"safe": 0, "caution": 1, "dangerous": 2}`（`:35`）是一一对应的，`:663` 的查表就是靠这个下标。
 
-**③ mini 的实现（现状）**：⏭ **不抄——但要讲清为什么 mini 根本不需要它**。这不是"扫描器太重所以省掉"，而是**扫描器的前提在 mini 里不存在**。
+**③ mini 的实现（现状）**：mini 未实现技能内容扫描与按来源分级。内置根随程序发布，用户根由使用者管理，没有任意项目自动加载和 hub 安装流程；这是当前省略这些机制的范围依据，并不证明本地文件必然可信。
 
-扫描器的存在前提，逐字写在它自己的 docstring 里（`tools/skills_guard.py:2`）：*"regex static scan of **externally-sourced** skills plus a trust-aware install policy"*——它扫的是**从外部来源装进来的技能**。信任矩阵的第一列（`builtin`/`trusted`/`community`/`agent-created`）也不是"内容属性"，而是**来源属性**：`_resolve_trust_level` 吃的入参是 `source` 字符串（`:780-783`）。也就是说，整套机制回答的是一个**来源问题**："这个技能是从哪儿来的，值不值得信？"——而 mini **没有来源这个概念**。mini 没有 hub、没有 `search`/`install`/`tap`/`publish`；全仓的网络出口只有两处——模型调用（`mini-hermes/run_agent.py:1089` `_http_post`）与 `web_search` 工具（`mini-hermes/tools/web_search.py:181` `urllib.request.urlopen`）——**没有一处能下载技能**。技能只可能由**用户在本人机器上亲手写或亲手复制**进 `<MINI_HOME>/skills/<name>/SKILL.md`。**"技能从哪来"这个问题在 mini 里只有一个答案：用户自己写的**，所以四档信任塌成一档，矩阵的行数变成 1——没有矩阵可查，`--force` 也没有可覆盖的对象。
+`agent/skill_utils.py` 与 `tools/skills.py` 只负责发现和读取，不能由此断言整个程序没有技能写入路径：通用文件工具和终端也能写文件，用户也可能复制第三方技能。读取技能不等于认可其所有指令，路径校验也不能检测正文里的恶意指令。
 
-更硬的一条：**mini 的技能系统是只读的**。实测 grep `agent/skill_utils.py` 与 `tools/skills.py`，`write_text` / `open(...,"w")` / `shutil` / `mkdir` / `install` / `urllib` / `requests` **零命中**；模块 docstring 的"没抄"清单里写着 *"安全扫描与四档信任（技能都是本地手写）"*（`mini-hermes/agent/skill_utils.py:11`）。也就是说 mini 里**没有任何代码路径能把内容写进技能库**——没有 `skill_manage` 那种写入面。于是"恶意技能"要出现，必须**由用户亲手把文件放到磁盘上**；而那一刻，**用户本人就是信任边界**，再装一道扫描器并不能多保护什么（用户放进来的东西，正是用户自己认可的东西）。
-
-对照真实侧的五个时机，可以逐个数出 mini 缺少的基座：安装（无 hub）、审计（无已装来源可审计）、发布前（无 publish）、agent 自建（无写入面）、项目技能每次读（mini 没有项目技能源，只有 `<MINI_HOME>/skills/` 一处）。**五个时机在 mini 里全部无对象**。
-
-但这里有一个不该混为一谈的区分，值得单独点出来：**"扫内容"与"防名字被当路径"是两件事**。前者防的是"技能**内容**本身有恶意"，前提是有不可信内容进入；后者防的是"**命名**被拼进路径"（`../`、绝对路径、符号链接逃逸），前提只是"模型/用户给的字串会被用来找文件"——**这个前提 mini 成立**。所以 mini **没有**抄扫描器，却**抄到了**这一半安全边界：`skill_view` 的名字只用来做相等比较（路径永远来自扫描结果），`is_valid_skill_name`（`mini-hermes/agent/skill_utils.py:245-250`）拒绝空/空白/`..`/路径分隔符/NUL/前导点，`load_skill_body` 再做两道纵深防御，符号链接目录在发现阶段就跳过。**该防的在防，不该建的没建**——这比"看到安全两个字就抄一整套"更接近 mini 的纪律：技能库里没有消费者、没有外部来源的东西，不预先为它造基础设施（同一条纪律的原文见 `mini-hermes/tools/terminal.py:20` 那句"在只有一种后端的时候做一张后端表，就是投机性基础设施"）。
+目前已做的是文件访问边界：名字只做相等比较，路径来自扫描结果；非法名字、符号链接和库外读取由发现与加载校验拒绝。内容信任与路径安全是两种不同的保障，不能互相替代。
 
 **④ 与真实版的差别**：
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 四档信任 × 三判决矩阵 | `INSTALL_POLICY`：`builtin/trusted/community/agent-created` × `safe/caution/dangerous`（`tools/skills_guard.py:26-33`） | ⏭ 不抄（只有一种来源 = 用户本机手写；无 `source` 概念，矩阵塌成一行） |
-| 来源 → 信任的解析 | `_resolve_trust_level`（`:780-788`）：`official`→`builtin`、`agent-created` 单列、其余看 `TRUSTED_REPOS` | ⏭ 不抄（无来源可解析） |
+| 四档信任 × 三判决矩阵 | `INSTALL_POLICY`：`builtin/trusted/community/agent-created` × `safe/caution/dangerous`（`tools/skills_guard.py:26-33`） | ⏭ 不抄（内置根与用户根共存，未按内容来源作信任分级） |
+| 来源 → 信任的解析 | `_resolve_trust_level`（`:780-788`）：`official`→`builtin`、`agent-created` 单列、其余看 `TRUSTED_REPOS` | ⏭ 不抄（未记录用户技能的分发来源） |
 | 裁决映射 | `_determine_verdict`：`critical`→`dangerous`、`high`→`caution`、`medium/low` 单独出现→`safe`（`:791-794`） | ⏭ 不抄（无 `Findings`） |
-| 正则扫描器 + 结构检查 | 131 条正则（`:114-391`）+ 结构检查（`:690-736`）+ 隐写检测（`:577-582`）；`Finding.category` 实测 **13 类** | ⏭ 不抄（无不可信内容进入） |
+| 正则扫描器 + 结构检查 | 131 条正则（`:114-391`）+ 结构检查（`:690-736`）+ 隐写检测（`:577-582`）；`Finding.category` 实测 **13 类** | ⏭ 不抄（尚未实现内容信任检查） |
 | `--force` 与硬边界 | 覆盖除 `community`/`trusted` 的 `dangerous` 外所有 block（`:665`/`:668`/`:673`） | ⏭ 不抄（无 block 可覆盖） |
 | 扫描时机（五处 + 收口） | 安装（`hermes_cli/skills_hub.py:628-641`/`:721-723`）· 审计（`:905`/`:927`）· 发布前（`:1164-1168`）· agent 自建 opt-in 写后（`tools/skill_manager_tool.py:41`/`:50-72`）· 项目技能每次读（`agent/skill_utils.py:519-557`） | ⏭ 不抄（五个时机的消费者全都不存在） |
-| 写入面（"恶意的入口"） | `skill_manage` 可写技能；故须在写后扫（opt-in） | ❌ **没有**：`agent/skill_utils.py` / `tools/skills.py` grep 无任何写入 API，技能库只读 |
+| 写入面（"恶意的入口"） | `skill_manage` 可写技能；故须在写后扫（opt-in） | ❌ **没有**：`agent/skill_utils.py` / `tools/skills.py` grep 无任何写入 API，这两个技能模块只读；通用工具仍可写文件 |
 | 「名字当路径」的安全边界 | `skill_view` 的路径解析 + 名字校验 | ✅ **已抄**：`is_valid_skill_name`（`agent/skill_utils.py:225-230`）+ 路径只来自扫描结果 + 符号链接发现阶段即拒（`tests/test_skills.py` 组 5 钉住） |
-| 不可见 Unicode / 结构检查 | `scan_file`（`:554-582`）与 `_check_structure`（`:690-736`） | ⏭ 不抄（同上：没有不可信内容） |
+| 不可见 Unicode / 结构检查 | `scan_file`（`:554-582`）与 `_check_structure`（`:690-736`） | ⏭ 不抄（同上：尚未实现内容信任检查） |
 
 ---
 
@@ -952,8 +948,8 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 > 本附录把 §十 的「② 读 Hermes 的代码」单块塞不下的 `文件:行号` 集中归档，**按文件分组**（正文 ② 已引的 `INSTALL_POLICY` `:26-33` 不在此重复）。每条给：`文件:行号` + 该行/该段首 20 字 + 一句它证明什么。
 >
 > - **真实侧**锚 `f5d1926110`：`git -C ~/.hermes/hermes-agent show f5d1926110:<path>`
-> - **mini 侧**行号按当前维护后的文件核对；历史实现落在 `02c61d5`：`sed -n 'Np' mini-hermes/<path>`
-> - 全部行号**逐条真身打印核对过**；括号里的说明是「它在说什么」，不当逐字引文用。
+> - **mini 侧**行号按对应章节快照读取；历史实现落在 `02c61d5`：`sed -n 'Np' mini-hermes/<path>`
+> - 行号应按对应提交的引文定位，不能把历史行号直接用于当前工作树；括号里的说明是「它在说什么」，不当逐字引文用。
 
 ### 真实侧（锚 `f5d1926110`）
 
@@ -1163,7 +1159,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 **③ 文档完全没提第三道 `environments:` 相关性门。**
 
 - **文档怎么说**：§3.2「条件激活」只列了四个 `requires_*` / `fallback_for_*` 字段（`creating-skills.md:126-131` 的表格，示例 `:120-123`），`platforms:` 另立一节（`:101-111`）。全篇 grep `environment` 只命中 `required_environment_variables` 与环境变量那一节（`:137-181`）——**没有一处 `environments:`**。
-- **源码实际怎么**：`mini-hermes/agent/skill_utils.py:148-153` 逐字——
+- **源码实际怎么**：`agent/skill_utils.py:148-153` 逐字——
   ```
   148: # An ``environments:`` tag is a *relevance* gate for offer surfaces (index,
   149: # autocomplete, slash commands), not a compatibility gate: an explicit load

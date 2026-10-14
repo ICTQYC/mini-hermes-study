@@ -70,7 +70,7 @@ HERMES_HOME="$HOME/.hermes" hermes sessions repair --check-only
 HERMES_HOME="$HOME/.hermes" hermes sessions repair
 ```
 
-`sessions repair` **默认**会建一份 SQLite 备份，并通过仓库里那条**受守卫的快照-提升（snapshot-and-promotion）路径：先生成并验证独立快照，再以它替换目标库**做结构性的活。**不要**用 `cp` **单独**去拷 `state.db`、`state.db-wal` 和 `state.db-shm`；那三个文件是**同一幅活的 SQLite 镜像**。
+`sessions repair` 默认先建立原始字节及随行文件的取证备份（raw-copy）；内部另用 SQLite backup API 生成修复快照，见附录 C ①，并通过仓库里那条**受守卫的快照-提升（snapshot-and-promotion）路径：先生成并验证独立快照，再以它替换目标库**做结构性的活。**不要**用 `cp` **单独**去拷 `state.db`、`state.db-wal` 和 `state.db-shm`；那三个文件是**同一幅活的 SQLite 镜像**。
 
 修复之后、重启网关之前，验证健康探针、陈旧标记、触发器集合和权威行的行数：
 
@@ -87,7 +87,7 @@ sqlite3 "$HOME/.hermes/state.db" \
    UNION ALL SELECT 'messages', COUNT(*) FROM messages;"
 ```
 
-那条标记查询**应当返回零行**，预期的 FTS 触发器**应当在场**，而权威行数**绝不允许下降**。如果修复失败，把**活库和报告出来的备份都保留下来**；**永远不要**为了甩掉一个派生索引的错误而删掉权威行。
+那条标记查询应当返回零行；上面的 SQL 只检查 base 三个触发器，trigram 三个及可选 CJK 触发器还需按实际启用的 schema 检查（见附录 C ②），而权威行数**绝不允许下降**。如果修复失败，把**活库和报告出来的备份都保留下来**；**永远不要**为了甩掉一个派生索引的错误而删掉权威行。
 
 ---
 
@@ -152,7 +152,7 @@ sqlite3 "$HOME/.hermes/state.db" \
 
 - 原文 §3 逐字：*"`sessions repair` creates a SQLite backup by default"*。
 - 源码里那份**面向用户、由 `--no-backup` 控制**的备份是 raw copy：`hermes_state_repair.py:849` `def repair_state_db_schema(db_path: Path, *, backup: bool = True)`；其 docstring `hermes_state_repair.py:855` 逐字：*"transactionally, so canonical rows are never modified by a failed attempt. **A raw backup is taken first**"*；实现 `hermes_state_repair.py:479` 逐字：*"**Raw-copy** a (possibly malformed) DB plus sidecars to a timestamped backup."*；调用点 `hermes_state_repair.py:991` `bpath, backup_error = _backup_db_file(db_path)`；备份文件名形如 `state.db.malformed-backup-<stamp>`。`--no-backup` 门控的正是它（`hermes_cli/sessions_cmd.py:115`）。
-- 全仓库唯一一次 SQLite **在线备份 API** 调用是 `hermes_state_repair.py:684` `source.backup(destination, pages=256, progress=_check_deadline, sleep=_REPAIR_LOCK_POLL_SECONDS)`，属于**内部修复快照** `_copy_database_snapshot`（`:664`），**不受** `--no-backup` 控制、也不是 CLI 告知用户的那份备份。
+- 本修复模块中 SQLite **在线备份 API** 的调用是 `hermes_state_repair.py:684` `source.backup(destination, pages=256, progress=_check_deadline, sleep=_REPAIR_LOCK_POLL_SECONDS)`，属于**内部修复快照** `_copy_database_snapshot`（`:664`），**不受** `--no-backup` 控制、也不是 CLI 告知用户的那份备份。
 - **结论**：术语层面**对不上** —— 面向用户的"备份"是**原始字节拷贝**，而非文档所说的 "SQLite backup"。
 
 **2. §3 的触发器验证查询只列了 3 个触发器名，而 schema 定义的是 6 个。**

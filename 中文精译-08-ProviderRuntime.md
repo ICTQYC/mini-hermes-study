@@ -1,7 +1,7 @@
 # 中文精译 · 第 8 章：Provider 运行时解析（Provider Runtime Resolution）
 
 > **原文**：`website/docs/developer-guide/provider-runtime.md`（**222 行**，官方侧边栏 `developer-guide` 第 15 位；
-> 同时是 `architecture.md`「Recommended Reading Order」的**第 4 篇** —— 两份官方推荐口径**唯一共同点名**、我们此前一直没做的一篇）。
+> 同时是 `architecture.md`「Recommended Reading Order」的**第 4 篇** —— 两份官方阅读入口都点名的核心篇目，本章开工前尚未实现）。
 > **本篇定位**：精译为主（看懂"这一层在干什么、为什么必须有"）。差异与源码深挖留给《源码讲解-08》。
 > **📌 行号锚**：真实源码 `~/.hermes/hermes-agent/`，锚上游 commit **`f5d1926110`**（`version = "0.21.3"`）。
 > 本文所有 `文件:行号` 都对这个 commit（本篇只用到文件级引用，行号在源码讲解里给）。
@@ -16,7 +16,7 @@
 
 ## 0. 这一章在回答什么
 
-一句话：**"用哪个供应商、哪个模型、哪把钥匙、发到哪个地址" 这件事，Hermes 只解析一次，五个入口共用。**
+一句话：**"用哪个供应商、哪个模型、哪把钥匙、发到哪个地址" 这件事，Hermes 把解析逻辑集中一处，多个入口按需调用。**
 
 五个入口是：CLI（`hermes chat`）、网关（消息平台）、cron 任务（全新会话里跑）、ACP 编辑器会话、
 以及**辅助模型调用**（下面 §10 会讲它是什么）。
@@ -86,7 +86,7 @@ Hermes 在**做任何字符串操作之前**先把它拍平（flatten），而�
 反面例子就一句话：**别让一个"上一次 shell 里导出过的旧环境变量"悄悄盖掉用户刚刚在 `hermes model` 里选的端点。**
 —— 这正是把 config 排在 env **上面**的原因。
 
-**配置优先级的设计，不能让环境变量盖过配置文件。**
+这里规定的是保存的 model/provider 选择优先级；不能把它推广成所有配置项都必须压过环境变量。
 
 ---
 
@@ -172,7 +172,7 @@ GMI Cloud · StepFun · Qwen OAuth · Xiaomi · Ollama Cloud · LM Studio · Ten
 
 - `OPENROUTER_API_KEY` **只**发给 `openrouter.ai` 的端点；
 - `AI_GATEWAY_API_KEY` **只**发给 `ai-gateway.vercel.sh` 的端点；
-- `OPENAI_API_KEY` 用于自定义端点，**并作为兜底**。
+- 原文称 `OPENAI_API_KEY` 用于自定义端点并作兜底；**实际源码按权威 host 门控**，不会给任意自定义端点发送这把 key（见附录 C ③）。
 
 Hermes 还会区分两件长得很像的事：
 
@@ -262,7 +262,9 @@ Hermes 支持配置一条**回退供应商链**：一串 `(provider, model)` 条
    - **瞬时错误**（HTTP 429 / 500 / 502 / 503）重试到上限之后。
 
    📌 注意这与第 2 章讲过的重试纪律**同一套判据**：401/403/429/5xx 可回退，400/422 不回退。
-3. **激活流程**（`_try_activate_fallback` 逐步）：
+**源码核对注**：下列步骤保留原文的旧单次回退描述。当前实现按 `_fallback_index` 消费多项，成功回退后仍能尝试下一项；`_fallback_activated` 记录回退状态，不是禁止后续切换的门。详见源码讲解 §七。
+
+3. **激活流程**（原文旧流程）：
    - 已经激活过、或压根没配 → **立刻返回 False**；
    - 调 `auxiliary_client.py::resolve_provider_client()` **建一个新客户端**（带正确的认证）；
    - 决定 `api_mode`：`openai-codex` → `codex_responses`；`anthropic` → `anthropic_messages`；其余 → `chat_completions`；
@@ -276,13 +278,15 @@ Hermes 支持配置一条**回退供应商链**：一串 `(provider, model)` 条
    - 网关：`gateway/run_config_loaders.py` 的 `_load_fallback_model()` 读 `config.yaml` → 传给 `AIAgent`；
    - **校验**：`provider` 与 `model` 两个键都非空，否则回退**直接禁用**。
 
-### 11.2 哪些地方**不**支持回退
+### 11.2 原文列出的回退限制（源码已有变化）
 
 - **子代理委派**（`tools/delegate_tool.py`）：子代理继承父级的供应商，但**不继承回退配置**；
 - **辅助任务**：走它们自己那套独立的供应商自动探测链（见 §10）。
 
 **cron 任务支持回退**：`run_job()` 从 `config.yaml` 读 `fallback_providers`（或旧的 `fallback_model`）
 并传给 `AIAgent(fallback_model=...)`，与网关的 `_load_fallback_model()` 同一套路。
+
+**源码核对注**：未 pinned 的子代理默认继承父回退链，显式 `[]` 可断链；辅助任务有解析期回退。见附录 C ①。
 
 ### 11.3 测试覆盖（原文列出的三处）
 
@@ -308,7 +312,7 @@ Hermes 支持配置一条**回退供应商链**：一串 `(provider, model)` 条
 | 解析 | resolution | 从四层来源（显式 → config → env → 默认/auto）定下"这次用哪家、哪个模型、哪把钥匙、发哪里" |
 | **辅助模型** | **auxiliary model** | **不干主对话的活但也要调模型**的那些调用（看图、摘要、记忆刷写…）。它可以配自己的供应商/模型，默认可用 `main` 表示"跟主对话同路" |
 | 辅助流 | auxiliary stream | 辅助任务的流式/非流式响应通道（§1 里要一起拍平 reasoning 的五处之一） |
-| 回退链 | **fallback chain** | 主模型失败时按顺序尝试的 `(供应商, 模型)` 列表；**只触发一次**（`_fallback_activated`） |
+| 回退链 | **fallback chain** | 主模型失败时按顺序尝试的 `(供应商, 模型)` 列表；候选按索引消费；回退标记不禁止继续尝试下一项 |
 | ACP | Agent Client Protocol | 编辑器（VS Code / Zed / JetBrains）接进来的那套协议（官方有 `acp-internals` 一篇，我们还没做） |
 | 中转 / 网关（此处） | relay | 第三方"OpenAI 兼容"转发服务（OpenRouter、AI Gateway 这类）；它返回的字段形状不保证与官方一致 → §1 |
 

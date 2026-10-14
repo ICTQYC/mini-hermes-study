@@ -8,8 +8,8 @@
 > 体例同《源码讲解-03》：**先给差异一览表**（一眼看全）→ 逐项「mini 怎么做的 /
 > 真实 Hermes 怎么做的 / 差在哪」→ 深读 → 真问题 → 结尾差距清单。
 >
-> 📌 **数字与行号锚标签 `ch04-tools-runtime`**（第 4 章末状态）。
-> 要精确核对：`git show ch04-tools-runtime:mini-hermes/tools/registry.py`。
+> 📌 **主体代码与规模锚 `db47e97`；搜索侧线锚 `0d8d3ff`**；当前维护另行注明。
+> 要精确核对：`git show db47e97:mini-hermes/tools/registry.py`。
 
 [TOC]
 
@@ -228,7 +228,7 @@ def module_registers_tools(path: Path) -> bool:
 机制的**内核和 mini 完全同构**（文本预筛 → `ast.parse` → 只看 `tree.body`），
 但多了四样：
 
-**① AST 检查其实是四条规则**（mini 只认 2 条）
+**① 分开比较注册语法与筛选规则**（不能混用数量）
 
 | 规则 | mini | Hermes |
 |---|---|---|
@@ -280,14 +280,14 @@ Hermes 把 AST 结论按 `(mtime_ns, size)` 存到磁盘。理由：**它在启�
 | | mini | Hermes |
 |---|---|---|
 | 发现判据 | 同构（文本预筛 + AST + 只看模块体） | 同构 |
-| 认几种写法 | 3（含装饰器变形） | 3（含包入口） |
+| 注册语法与入口 | 装饰器或普通调用，支持模块级 for | 普通调用，支持模块级 for；另发现包入口 |
 | 磁盘缓存 | ❌ | ✅（`(mtime_ns, size)`） |
 | 包入口 `tools/<pkg>/tool.py` | ❌ | ✅ |
 | `__init__.py` 守卫 | ❌ | ✅ |
 | 文件数 | 6 | 258（43 个工具） |
 
 **为什么 mini 不做磁盘缓存**：Hermes 需要它是因为**每次启动都要重扫 ~100 个文件**；
-mini 只有 6 个 → 缓存本身的开销（读写磁盘 + 失效判断）**大于**它省下的时间。
+mini 只有 6 个 → 尚无证据说明磁盘缓存能明显改善这一级规模的启动耗时；读写与失效判断也有成本。
 **"优化"要按规模给，不是按样例给。**
 
 **📌 可以带走的判据**（两条）：
@@ -296,7 +296,7 @@ mini 只有 6 个 → 缓存本身的开销（读写磁盘 + 失效判断）**�
    **自己做的副作用**。混起来讲会导致"为什么我加了注册却没生效"这类问题查不清。
 2. **模块级副作用同时决定了"它会在谁的调用栈上执行"。** 同一段 MCP 发现代码，
    放在模块级 = 在网关的事件循环里跑（冻结心跳）；放到各入口的启动路径 = 没事。
-   Hermes 为此有**两种应对**（移走 vs `_run_async` 桥接），判据是"**是不是每次都要**"。
+   Hermes 为此有**两种应对**（启动时卸到线程 vs `_run_async` 同步桥接）；不能只按调用频率决定调度方式。
 
 ---
 
@@ -671,7 +671,7 @@ guardrails、`tool_call` 桥接解包（`tool_call` 会被**解包成真实工�
 前者 **⊇** 后者。原文说的"四个工具被拦截"**只描述了下面那 4 个**，
 漏掉了更大的那一类——只在 `INLINE` 里、不在 `AGENT_LOOP` 里的 10 个：
 `annotate_preview` / `clarify` / `desktop_preview` / `drive_preview` / `gui_tour` /
-`manage_connections` / `memory` / `message_agent` / `read_window_below` / `session_search`。
+`manage_connections` / `message_agent` / `read_terminal` / `read_window_below` / `setup_mcp`。
 
 它们共同的形状：**需要 callback 或会话界面**，不需要 Store。
 （原文给的理由"需要 TodoStore/MemoryStore"只盖了需要 **Store** 的那一类。）
@@ -727,8 +727,7 @@ mini 的 `approval.py` 只做了**前一半**——这是有意的，因为"决�
 
 ### mini 版怎么做的
 
-**只有 local 后端**。但按计划**把"后端表"的位置留出来了**——
-`tools/terminal.py` 顶部的注释写清了"如果加第二个后端，接口该长什么样"。
+**只有 local 后端，未建立后端表**。`tools/terminal.py` 顶部说明了为什么等第二个后端出现时再抽表，不能把这段取舍注释算成已经预留了接口。
 
 ### 真实 Hermes 怎么做的
 
@@ -919,7 +918,7 @@ registry.register(
     check_fn=_check_feishu, requires_env=[], ...)
 ```
 
-没配飞书凭据 → `_memo_check` 返回 False → **这一行 `continue`** →
+缺少 `lark_oapi` SDK → `_memo_check` 返回 False → **这一行 `continue`** →
 **它的 schema 根本不出现在这次请求里**。模型连"有这么个工具"都不知道。
 
 > 📌 对比一下就清楚了**两道闸门的分工**：
@@ -1256,10 +1255,7 @@ agent/prompt_builder.py    tools/terminal.py
   所以 `system_prompt.py` 和已有测试的调用点一行都不用改。
 - 三个工具改用 `resolve_context_cwd()`（`search_files` 原本是 `cwd=None` = 继承进程 cwd）。
 
-**为什么不"启动后 `os.chdir()`"**（先做了实验，别猜）：
-`python -m` 的 `sys.path[0]` 是 `''`——**cwd 相对**。实测 3.9 与 3.13 都一样：
-`chdir` 之后 `import mod` 直接失败，因为 `''` 跟着去了新目录。
-**所以"启动后改 cwd"这条路会砸掉 import。**
+**为什么不靠运行中 `os.chdir()` 传项目目录**：它改变进程级 cwd，会影响同进程的其他线程与会话，不能实现 profile 隔离。原来的 import 理由经双解释器复核不成立：`python -m` 的 `sys.path[0]` 在本次 3.9 / 3.13 实测中是启动目录的绝对路径，切换 cwd 后仍可导入启动目录里的模块；不能把它与 `python -c` 的空字符串路径混为一谈。
 
 **为什么不"启动器不 cd"**：`cd` 的作用是把安装树放进 `sys.path`；
 去掉它，用户项目里若有同名的 `tools/`、`agent/` 就会**抢掉 mini 自己的模块**
@@ -1329,7 +1325,7 @@ check("每个注册的工具都归属某个 toolset", not toolsets.orphan_tools(
 
 > 📌 **契约断言 vs 数量断言**：数量断言（"应该有 5 个工具"）每次加工具都要改，
 > 而且不告诉你任何**关系**；契约断言（"每个工具都有 toolset"）在有人忘了加 toolset 时
-> **自动报警**。Hermes 的 `tools/AGENTS.md` 明确要求写前者。
+> **自动报警**。Hermes 的 `tools/AGENTS.md` 明确要求写后者（契约断言）。
 
 ---
 
@@ -1438,9 +1434,7 @@ PROVIDERS = (
 
 所以 `TAVILY_API_KEY` 的值放 `~/.hermes/.env`（单一来源），mini 那份留空。
 
-**顺序就是优先级**，现在 **Serper 在前** —— 它额度更大（2,500/月）
-而且 **Hermes 不占用它**；Tavily 那 1,000/月是 Hermes 和 mini **共享**的，
-留给 Hermes 独占更划算。两边各用各的额度，不会互相挤。
+**顺序就是优先级**，mini 当前把 **Serper 放在前面**。这是实现的选择；账户额度、计费周期及两程序是否共用账户由使用者配置决定，不能从顺序推断。
 
 ⚠️ 测试要**自己隔离这两个 key**（`_isolate_search_keys`）：机器上真配了
 `TAVILY_API_KEY` 时，Serper 那几条会被悄悄切走 —— 假红，看起来像代码坏了。
@@ -1468,7 +1462,7 @@ payload.get("organic")                                   # 结果字段名
 |---|---|---|---|
 | **工具进度回调不带结果**（`done` 只有名字） | 成功与失败在终端上**长得一样**（都 `✓ 完成`），失败原因只在模型的消息里 ⇒ 用户分不清哪次失败、不知道模型在重试什么 | ✅ **已改**（本次解冻） | 已做（2026-10-14） |
 | **`check_fn` 缓存按 profile 分键** | 缓存和失败宽限都不能跨 home 复用 | ✅ **已改**（发布前修复） | 已做；回归测试验证 A→B→A |
-| 发现结果的磁盘缓存 | 启动慢（mini 只有 6 个文件，<1ms） | ❌ 不值得 | 工具文件 >50 个 |
+| 发现结果的磁盘缓存 | 启动慢（第 4 章工具规模很小；尚未提供启动耗时实测） | ❌ 不值得 | 真有启动耗时实测表明需要缓存时 |
 | 包入口 `tools/<pkg>/tool.py` | 工具不能是包 | ❌ 不值得 | 真有工具需要多文件时 |
 | `__init__.py` 守卫 | 无（mini 不打包成 wheel） | ❌ 不值得 | 真要发布成包时 |
 | 动态 schema 修补（10 条） | 描述里不能点名别的工具 | ⬜ 有需求再补 | 有 `execute_code` 那类工具时 |
@@ -1507,10 +1501,10 @@ tools/terminal.py       78  →  115 行
 tools/file_tools.py     92  →  147 行
 tools/search_files.py  （无） →  130 行
 tools/todo.py          267  →  267 行（未动）
-tests/test_tools_runtime.py（无）→ 74 条 / 8 组
+tests/test_tools_runtime.py（无）→ 89 条 / 10 组（搜索工具侧线完成后）
 
 注册 6 个工具；默认暴露 6 个（5 个 + todo_list，web_search 因未配 key 被挡住）
-源码 4813 行 · 测试 2888 行 · demo 276 行
+搜索侧线完成后的 0d8d3ff：源码 4915 行 · 测试 3047 行 · demo 276 行（wc -l）
 测试合计 310 条（154 + 54 + 13 + 89），Python 3.13.14 与 3.9.6 都过
 ```
 
@@ -1593,8 +1587,7 @@ if not isinstance(schema, dict):
     raise ValueError(f"Tool {name!r}: schema must be a dict, got {type(schema).__name__}")
 params = schema.get("parameters")
 if params is not None and not isinstance(params, dict):
-    raise ValueError(...)
-self_name = f"Tool {name!r}: schema['parameters'] must be an object (JSON Schema dict), ...")
+    raise ValueError(f"Tool {name!r}: schema['parameters'] must be an object (JSON Schema dict), ...")  # 错误文案节选
 ```
 
 **这段注释值得单独读**——它讲的正是"为什么要在最早的地方失败"：
@@ -1619,13 +1612,13 @@ def _slot(self, scope: Optional[str], *, create: bool = False) -> Dict[str, Tool
     if scope is None:
         return self._tools                                  # ← 全局槽：内置工具
     if create:
-        return self._scoped_tools.setdefault(scope, {})     # ← 覆盖槽：每个插件一份
+        return self._scoped_tools.setdefault(scope, {})     # ← 覆盖槽：每个 scope 一份
 ```
 
 | 词 | 准确含义 |
 |---|---|
 | **全局槽**（`self._tools`） | `scope=None` 时注册进去的东西——**所有内置工具**（`tools/*.py` 里调 `register()`） |
-| **覆盖槽**（`self._scoped_tools[scope]`） | 插件注册时**带 scope** 落进去的地方，**每个插件（每个 profile）一份** |
+| **覆盖槽**（`self._scoped_tools[scope]`） | 插件注册时**带 scope** 落进去的地方，**按 scope 分组（通常对应 profile）；同一 scope 可有多个插件** |
 | **影子（shadow）** | 一个插件工具的名字**和全局槽里已有的工具重名**——于是它在取值时会**盖住那一个** |
 
 **"盖住"是字面意义上的覆盖**，看取值逻辑：
@@ -1694,7 +1687,7 @@ if existing and existing.toolset != toolset:
 >
 > **只有第一道闸门**：任何粗心或恶意的插件都能悄悄把 `terminal` 换掉，
 > 用户完全看不出来（工具名没变、schema 可能也没变）。
-> **只有第二道**：那是一个全局开关，等于"以后谁都能替换我的核心工具"。
+> **只有第二道**：使用者的逐插件授权没有表达本次注册是否有意覆盖，仍需作者用 `override=True` 明示意图。
 > 两道都要 = **声明意图 + 授予权限**，而且**都是逐个插件**的。
 
 #### 两个失败形态为什么一个记日志、一个抛异常
@@ -1733,7 +1726,7 @@ def _plugin_owner_of(self, handler: Callable) -> Optional[str]:
 > callback***（**插件不能通过回调把一次覆盖"洗白"**）。
 >
 > 也就是说：插件**不能**把内置工具的函数包一层 lambda 就冒充成自己的实现——
-> 因为 lambda 继承的是**定义处**的模块名（`__globals__["__name__"]`），不是调用处的。
+> 因为 lambda 继承的是**定义处**的模块名（`__globals__["__name__"]`），不是调用处的。这里绑定的是实现归属，不能把这道检查理解成对任意恶意 Python 插件的沙箱。
 >
 > 规律：**判定身份要选"不会被伪装/漂移的信号"。**
 > "调用位置"是可以伪装的，"定义位置"是固定的。
@@ -1763,11 +1756,11 @@ def tool_result(data=None, **kwargs) -> str:
 
 **为什么必须是 JSON 而不是人看的文本？** 因为工具结果要**从历史里被重新解析**——
 `todo` 的状态重建就靠这个（第 2 章那条：网关每条消息新建一个 AIAgent，
-所以状态必须能从历史里读回来）。给人看的文本解析不了。
+所以状态必须能从历史里读回来）。任意散文不适合稳定重建程序状态；这不是说模型无法阅读纯文本。
 
 ### 来自《中文精译-04》· ## 2. 发现机制（`discover_builtin_tools()`）
 
-#### ① AST 检查：其实是四条规则
+#### ① AST 检查：语法条件与模块级 for 支持
 
 ```python
 # tools/registry.py:58
@@ -1813,7 +1806,7 @@ def _module_registers_tools(module_path: Path) -> bool:
         for stmt in tree.body)
 ```
 
-第 4 条规则：**模块级的 `for` 循环里注册也算**。注释：*Table-driven modules register several
+另外，**模块级的 `for` 循环里注册也算**。注释：*Table-driven modules register several
 tools from one loop, still at import time.*（表驱动的模块用一个循环注册好几个工具，
 同样发生在 import 时。）
 
@@ -1882,7 +1875,7 @@ return Path(get_hermes_home()) / "cache" / "tool_discovery_cache.json"
 
 > 📌 这里出现了本章第二次"**启动路径上的性能优化**"。
 > 判据和别处一样：**这段代码在每个进程启动时都跑**，所以它的常数要抠。
-> 而缓存键用 `(mtime_ns, size)` 而不是内容 hash——**改了文件就失效，没改就复用**。
+> 缓存键用 `(mtime_ns, size)` 而不是内容 hash；只有检测到这些元数据变化才失效，保留相同时间戳与大小的改写可能漏检。
 
 #### ⑤ 数字：258 个文件里只有 43 个是工具
 
@@ -2148,14 +2141,14 @@ def _memo_check(fn: Callable, memo: Dict[Callable, bool]) -> bool:
 | 返回 `bool`，**抛异常当 `False`** | 调用方不 try/except（fail-safe） | `_run_check_fn_uncached` 里的 `except: return False` |
 | **必须便宜** | 每 30 秒就可能跑一次，且在启动路径上 | `_CHECK_FN_TTL_SECONDS = 30` + feishu 的 ~5s 注释 |
 | **不能有可见副作用** | 它会在桌面 app 启动时跑 | browser 那句 "Windows .cmd shims flash a console" |
-| **不能阻塞 / 做 I/O** | 在 schema 构建路径上 | browser 那句 "must not cost a blocking probe" |
+| **避免昂贵或长时间阻塞的探测**；本地配置与文件检查可做有限 I/O | browser 的 raw endpoint 检查专门避免阻塞网络探测 | browser 那句 "must not cost a blocking probe" |
 | **凭据要走 `get_secret`，不能 `os.getenv`** | 一个进程服务多个 profile | `UnscopedSecretError` 的处理分支 |
 | 结果被**进程级缓存** | 所以它**不能**回答"这次会话专属"的问题 | `_check_fn_cache` + `_load_enabled_toolsets` 的分工 |
 | 想不缓存：`@no_cache_check_fn` | 本地配置读，必须立刻生效 | `memory_tool` / `kanban_tools` / `browser_vault` 三处 |
 
 > 📌 **最后那两条是同一条边界的两个方向**，值得说清楚：
 >
-> - **`check_fn` 回答"这个环境里它现在能用吗"** → 环境是**进程级**的，所以可以缓存
+> - **`check_fn` 回答"这个环境里它现在能用吗"** → 答案按 **profile/home** 隔离后才可在进程内缓存，不能把所有 profile 当成同一个环境
 > - **`toolset` 回答"这次会话该不该给它"** → 会话是**每次不同**的，所以不能进 `check_fn`
 >
 > `AGENTS.md` 把这条反例写得很具体（而且给了它一个名字）：
@@ -2601,16 +2594,18 @@ def _get_worker_loop():
 > 区别有实际后果：**任何"新起的线程里调 async 工具"都走第二条路**，
 > 不管它是不是文档说的"并发工具线程"。
 
-这段里藏着**四个**原文没说的设计：
+这段里藏着**五个**原文没说的设计：
 
 **a) 为什么"有 loop 时"不能直接 `run_until_complete`？**
 因为**你不能在一个已经跑着的 loop 里再跑一个 loop**（`RuntimeError`）。
 也不能用 `asyncio.run()`（它要求当前线程没有 running loop）。
 所以只能**扔到另一个线程**去跑。
 
-**b) 为什么不用 `ThreadPoolExecutor.cancel()` 做超时取消？** 注释直接给了答案：
+**b) 为什么不能靠 `Future.cancel()` 取消正在执行的工作？** 注释直接给了答案：
 
 > *ThreadPoolExecutor.cancel() is a no-op on a running worker*
+>
+> 译注：这句源码注释把 API 名字写错了；实际是 `Future.cancel()`，`ThreadPoolExecutor` 没有 `cancel()` 方法。
 > （对已经在跑的 worker，`cancel()` 是空操作。）
 
 于是必须**先把 worker 里的 loop 引用拿出来**，超时时用

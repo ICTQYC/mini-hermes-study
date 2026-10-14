@@ -40,8 +40,8 @@
 
 - **`compaction` ≠ 第 5 章的 `compression`**。第 5 章那个是"把旧轮次摘要成一段"；
   本章说的 **compaction 是行级的**：把旧行打上 `active=0`（归档）、把保留的上下文
-  作为 `active=1`（活行）重新插入。**两者都动库，但动的方式不同**（→ §1.7）。
-- **`state.db` 是"一个文件、多个 profile"**。每个具名 profile 有**自己的** `state.db`；
+  作为 `active=1`（活行）重新插入。摘要生成先改消息列表，持久化层再将结果落库；它们不是两套各自直接写库的算法（→ §1.7）。
+- **每个 profile 有一个独立的 `state.db`，一个进程可以持有多个库**。每个具名 profile 有**自己的** `state.db`；
   一个 `hermes serve` 进程可能同时服务好几个 profile，所以"现在该用哪个库"是**跟着会话走的**，
   不是跟着进程走的（→ §1.2、§1.6）。
 
@@ -228,7 +228,7 @@ Hermes 根**或**真实的具名 profile** 下打开生产 `state.db`，保护�
 
 | 决策 | 为什么 |
 |---|---|
-| **WAL 模式** | 允许多个读者 + 一个写者（网关多平台场景） |
+| **WAL 模式** | 允许读写并行，每一时刻仍只有一个写者（网关多平台场景） |
 | **FTS5 虚拟表** | 跨全部会话消息的快速文本搜索 |
 | **会话血缘**（`parent_session_id` 链） | 上下文压缩触发的会话分裂 |
 | **来源标记**（`cli` / `telegram` / `discord` …） | 按平台过滤 |
@@ -292,7 +292,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_title_unique
 
 看这几行 DDL 能读出三件事：
 
-1. **计费信息全在会话行上**（`estimated_cost_usd` / `actual_cost_usd` / `pricing_version` …），
+1. 会话汇总计费信息在会话行上，按模型/任务的归属另存于 `session_model_usage`（`estimated_cost_usd` / `actual_cost_usd` / `pricing_version` …），
    也就是"价格表变了"这件事是靠 `pricing_version` 记录当时用的版本。
 2. **`title` 是"非 NULL 之间唯一"**（`WHERE title IS NOT NULL` 的部分索引）——
    允许大量没有标题的会话，但一旦起了标题就不能重名。
@@ -424,7 +424,7 @@ FTS5 表**靠三个触发器**与 `messages` 表保持同步（INSERT / UPDATE /
 
 | 手段 | 具体值 | 为什么 |
 |---|---|---|
-| **短 SQLite 超时** | **1 秒**（不用默认的 30s） | 长等会把"谁先拿到锁"拖成秒级 |
+| **短 SQLite 超时** | **1 秒**（原文对比 30s；Python `sqlite3.connect` 的默认值实际为 5s） | 长等会把"谁先拿到锁"拖成秒级 |
 | **应用层重试 + 随机抖动** | 20–150ms，最多 15 次 | 见下面的"车队效应" |
 | **`BEGIN IMMEDIATE` 事务** | 在事务**开始**时就显式取写锁 | 让争用在事务起点暴露，而不是在中间某次写时炸 |
 | **周期性 WAL checkpoint** | 每 **50** 次成功写入一次（`PASSIVE`） | 防止 WAL 无限长大 |
@@ -452,10 +452,12 @@ _CHECKPOINT_EVERY_N_WRITES = 50
 ### 初始化
 
 ```python
+from pathlib import Path
 from hermes_state import SessionDB
 
 db = SessionDB()                              # 默认：~/.hermes/state.db
-db = SessionDB(db_path=Path("/tmp/test.db"))  # 自定义路径
+db.close()
+db = SessionDB(db_path=Path("/tmp/test.db"))  # 或用自定义路径；用完也应关闭
 ```
 
 ### 建 / 管会话
@@ -503,7 +505,7 @@ conversation = db.get_messages_as_conversation("sess_abc123")
 ```
 
 **这两个方法的区别值得记**：前者是"库里的样子"（带 id、时间戳、token_count、reasoning…），
-后者是"要发给模型的样子"（角色 + 内容）。**别混用**。
+后者是"要发给模型的样子"（角色、内容及工具调用等重放字段）。**别混用**。
 
 ### 会话标题
 
@@ -576,7 +578,7 @@ results = db.search_messages("help", role_filter=["user"])
 ## 10. 会话血缘（Session Lineage）
 
 会话之间可以靠 `parent_session_id` 串成链。**什么时候会产生链**：
-网关里**上下文压缩触发了会话分裂**（第 5 章那套压缩的产物）。
+旧流程或显式轮转可产生父子会话；当前默认压缩原地归档消息，并不必然分裂会话。
 
 ### 查：找血缘
 
@@ -709,7 +711,7 @@ db.delete_session("sess_abc123")
 | escape hatch | 逃生门 | 专门用来关掉某项保护的开关（本章是测试专用） |
 | live-system guard | 实盘保护 | 防止测试碰到生产 `state.db` 的硬保护 |
 | byte-fidelity | 字节保真 | 存的是**实际发出去的字节**，用于缓存稳定重放 |
-| lone surrogate | 孤立代理项 | 非法 UTF-16 半截字符，sqlite3 绑不上 |
+| lone surrogate | 孤立代理项 | 未与另一代理码位配对的 Unicode 代理码位，不能按普通 UTF-8 编码交给 sqlite3 |
 
 ---
 

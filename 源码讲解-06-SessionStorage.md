@@ -12,8 +12,8 @@
 > （**Hermes 怎么做 → 读源码 → mini 怎么做 → 为什么没做成这样**）→ 真问题 → 差距清单 → 附录。
 >
 > 📌 **两边的锚不是同一个东西，别混**：
-> - **mini 侧**：本文描述**第 6 章末**状态，对应标签 `ch06-session-storage`。
->   核对：`git show ch06-session-storage:mini-hermes/hermes_state.py`
+> - **mini 侧**：本文描述**第 6 章末**状态，实现提交 `0a72dec`；发布前维护节另述当前行为。
+>   核对：`git show 0a72dec:mini-hermes/hermes_state.py`。现有章标签已移到统一维护提交，不代表原始第六章末快照。
 > - **真实 Hermes 侧**：行号是**某一刻的快照**，锚在上游 commit
 >   **`f5d1926110`**（`pyproject.toml:5` → `version = "0.21.3"`，取证于 2026-09-23）。
 >   上游每合并一个 PR 行号就会漂 —— 引用时请连同这个 commit 一起引。
@@ -92,7 +92,7 @@ mini 版（本仓库，第 6 章末）                      真实版
 
 ### 0.3 什么时候写、怎么写：写入礼节
 
-`_execute_write()`（`hermes_state.py:920-960`）是全局唯一的写入通道，docstring 逐字：
+`_execute_write()`（`hermes_state.py:920-960`）是常规事务写入的统一通道，docstring 逐字：
 
 > `Run *fn(conn)* inside BEGIN IMMEDIATE with jittered lock retry; commit is handled here
 > (callers must not commit). Returns *fn*'s result. BEGIN IMMEDIATE takes the WAL write lock up
@@ -108,10 +108,10 @@ _WRITE_RETRY_SLOW_MIN_S, _WRITE_RETRY_SLOW_MAX_S = 0.250, 1.000   # 慢档
 _CHECKPOINT_EVERY_N_WRITES = 50
 ```
 
-连接参数也**都不是默认值**（`:731`）：`timeout=1.0`（不是 30）、`isolation_level=None`
+连接参数也**都不是默认值**（`:731`）：`timeout=1.0`（Python sqlite3 默认 5s；上游文档对比的是 30s）、`isolation_level=None`
 （自己显式事务）、`check_same_thread=False`（工具是并发线程跑的）。
 而且设完 WAL 会**回头读一次磁盘上的真实模式**（`_on_disk_journal_mode`，`:740`）——
-因为 WAL 在某些文件系统上会静默退回 delete 模式，而"以为自己开了 WAL"会让并发行为完全不是你想的那样。
+因为不能仅凭请求 WAL 就假定设置成功；文件系统不支持时也可能报错，而"以为自己开了 WAL"会让并发行为完全不是你想的那样。
 
 ### 0.4 表结构怎么演进：改一处就够
 
@@ -205,7 +205,7 @@ agent 回合里产出消息
 ## 〇、差异一览表（先看这张）
 
 列序：**真实 Hermes | mini 版 | 性质 | 值得改**。
-「mini 版」这一列**一律指当前代码**（要看某章交付时的样子，用标签 `git show`）。
+本表的 mini 列记录 **`0a72dec` 的第六章交付快照**，不是当前差距。后续第七章加入网关与 profile，第十一章加入 FTS 降级、结构损坏隔离与显式 repair；当前历史恢复和只读版本探测见“发布前维护”节。
 
 | # | 主题 | 真实 Hermes | mini 版 | 性质 | 值得改 |
 |---|---|---|---|---|---|
@@ -264,18 +264,18 @@ class SessionDB(SessionSessionsMixin, SessionMessagesMixin,
                 SessionSearchMixin, SessionSchemaMixin):
 ```
 
-4 个 mixin / 5 个文件（`hermes_state.py` 223 行 + 4 个兄弟 185/178/223/248 行）。
+4 个 mixin / 6 个文件：门面 `hermes_state.py` 223 行；5 个兄弟为 common 185、schema 178、sessions 223、messages 223、search 248 行（`0a72dec`）。common 放公共辅助函数，不是 mixin。
 
 ### 为什么没做成 13 个
 
 | 真实的 mixin | mini 有吗 | 没有的原因 |
 |---|---|---|
-| Sessions / Messages / Search / Schema / Titles | ✅ | 本就有主题 |
+| Sessions / Messages / Search / Schema（Titles 逻辑在 Sessions 内） | ✅ | 本就有主题 |
 | Compression | ❌ | mini 的压缩世代落库只有 `record_compaction()` 一个方法，不值得单开文件 |
 | Portability / Maintenance | ❌ | 导出/恢复/整理是 CLI 子命令族（差距清单 #7） |
 | Telegram / Gateway / Rewind / Usage / FtsSetup | ❌ | 对应能力 mini 都没有（平台、网关、回退、计费、多索引布局） |
 
-**判据**：拆文件的理由是"这个主题有足够多的内容"，不是"上游有 21 个"。mini 装 5 个刚好。
+**判据**：拆文件的理由是"这个主题有足够多的内容"，不是"上游有 21 个"。该快照按 4 个 mixin 加公共辅助模块组织，文件数与 mixin 数不能混算。
 
 ---
 
@@ -370,7 +370,7 @@ sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=1.0, isolati
 
 | 参数 | 值 | 理由 |
 |---|---|---|
-| `timeout` | 1.0（默认 30） | 长等会把"谁先拿锁"拖成秒级；真正解决争用靠应用层重试 |
+| `timeout` | 1.0（Python sqlite3 默认 5） | 长等会把"谁先拿锁"拖成秒级；真正解决争用靠应用层重试 |
 | `isolation_level` | None | 关掉 Python 的隐式事务，改成显式 `BEGIN IMMEDIATE` |
 | `check_same_thread` | False | 工具是并发线程执行的 |
 
@@ -391,8 +391,7 @@ self._wal_active = str(mode).lower() == "wal"
 
 ### 为什么值得抄
 
-一句话：**"我以为我开了 WAL"和"磁盘上现在是 WAL"是两件事**。网络盘上 SQLite 会静默退回
-delete 模式；那时并发行为完全不同（读者会挡住写者），而你的代码看起来一切正常。
+一句话：**"我以为我开了 WAL"和"磁盘上现在是 WAL"是两件事**。WAL 依赖共享内存等条件，通常不适用于网络文件系统。设置失败可能报错，返回其他模式时并发行为也不同；必须读取实际结果。
 
 ---
 
@@ -430,7 +429,7 @@ _BUSY_MARKERS = ("database is locked", "database table is locked", "database sch
 
 判据是"mini 有没有真实争用"。有的 —— **第 2 章的工具是并发线程执行的**
 （`ThreadPoolExecutor`），agent 又会在回合里逐条落盘，所以"同一进程内两个线程同时写库"
-是**每天都会发生**的事，不是假想。
+是需要支持的并发路径；本项目没有测量其日常发生频率。
 
 测试也是真争用（不是 mock）：甲连接 `BEGIN IMMEDIATE` 持锁 250ms，乙连接此刻写 →
 必须重试后成功，且"重试不算多次写入"（`b.write_count == 1`）。
@@ -498,8 +497,7 @@ _MESSAGE_COLUMNS = tuple(parse_schema_columns(SCHEMA_SQL)["messages"])
 row = {k: v for k, v in locals().items() if k in _MESSAGE_COLUMNS}
 ```
 
-这一步比我原来想的更值：**"列清单"和"插入语句"都从同一份 DDL 长出来**，所以加了列忘了改
-插入代码这件事**不可能发生**（要么自动带上，要么根本不在列里）。
+这一步比我原来想的更值：**"列清单"和"插入语句"都从同一份 DDL 长出来**，因而不必再维护一份重复的 INSERT 列清单。但新增需要调用者赋值的列时，仍须同步函数参数和取值逻辑；DDL 并不会自动产生参数。
 
 ### 一处刻意的不同：`tool_name` 只进库、不进消息 dict
 
@@ -632,8 +630,7 @@ db.get_messages_as_conversation("leaf", include_ancestors=True)
 
 第 5 章之前，mini 的对话**不会分裂**（压缩是原地替换消息列表），所以"父会话"是个没有来源的概念
 （旧 `hermes_state.py` 的 docstring 里只是**许诺**了 lineage）。
-第 5 章接上压缩之后，**网关侧的会话轮转**才会真的产生"新会话 + 旧会话"的结构
-—— 消费者出现了，机制才值得做。
+第五章 mini 压缩仍是原地替换；本章为后续网关轮转准备血缘存储，并用测试显式创建父子会话。不能把这项接口当作第五章已经产生轮转的证据。
 
 ### mini 没抄的
 
@@ -704,8 +701,8 @@ docstring 描述：
 
 判据不是"上游有"，而是"mini 有没有这个需求 + 代价"：
 
-- **需求**：有（中文用户搜中文历史）。但 **LIKE 兜底已经解决了**（mini 的库规模下性能足够）。
-- **代价**：trigram 会给每张索引表加 ~2.6 倍影子存储（上游 v30 的注释原话），
+- **需求**：有（中文用户搜中文历史）。但 **LIKE 兜底已经解决了**（能提供所需中文子串检索；本章未给出性能基准）。
+- **代价**：trigram 在上游记录的那份数据库里有约 2.6 倍的影子存储成本（不是任意数据库的固定比例），
   还要一套"老库重建 + optimize-storage"的机制 —— 那是 mini 用不上的规模。
 - **结论**：⬜ 有规模需求再补（差距清单 #4）。
 
@@ -928,7 +925,7 @@ B 家：库 = /tmp/iso-b/state.db    搜「猎户座」 → 0 条
             input_tokens=18700  output_tokens=503  system_prompt_hash=03005014070f…
   messages: 8 行，role 序列 user/assistant/tool/assistant/tool/assistant/user/assistant
             tool 行带 tool_name，assistant 行带 tool_calls JSON
-  messages=8  messages_fts=8        ← 外部内容表：索引行数跟着主表（触发器真的在工作）
+  messages=8  messages_fts=8        ← 历史查询输出；外部内容表 COUNT 不能独立证明索引同步
   system_prompts: 1 行 / 3671 字符  ← 提示词去重（8 条消息 + 1 个会话只存一份）
   schema_version: 1
   目录里还有 state.db-wal / state.db-shm（WAL 生效）
@@ -962,17 +959,19 @@ B 家：库 = /tmp/iso-b/state.db    搜「猎户座」 → 0 条
 | 12 | 两种读法 + 世代（`active`/`compacted`） | `get_messages*` + `archive_active_rows()` + `record_compaction()`（**接在压缩路径上**） |
 | 13 | FTS5 外部内容表 + 触发器 + 查询清洗 + 标题/血缘 | `hermes_state_search.py` / `_titles` 部分 / `session_lineage()` |
 
-### B 批 · 不抄（10 条，每条带原因与代价）
+### B 批 · 第六章当时未实现的 10 条
+
+这是当时的决策记录。多 profile 和部分恢复能力已在后续章节加入，不能据此判定当前仍缺失。
 
 | # | 条目 | 为什么不抄 | 代价 |
 |---|---|---|---|
-| 1 | 多 profile（多库 + `profile_name` + 回填闸门 + IDOR 范围） | mini 单 profile，消费者不存在 | 支持多 profile 时必须补，否则**静默串库** |
+| 1 | 多 profile（多库 + `profile_name` + 回填闸门 + IDOR 范围） | mini 单 profile，消费者不存在 | 后续第七章已加入文件层 profile 隔离；行层回填与跨平台权限需分别评估 |
 | 2 | `compression_locks` / `session_turn_leases` / `_COMPRESSION_BUSY_WAIT_S` | 跨进程锁；mini 单进程 | 多进程压缩会互相踩（第 7 章） |
 | 3 | trigram / cjk 索引 + `fts_storage_version` 独立计数 + 后台重建 + `optimize-storage` | 实测 **trigram 救不了 2 字中文词**；cjk 需要编译扩展 | CJK 检索靠 LIKE 扫描；库大了会慢 |
 | 4 | 展示层（`display_*` 5 列 + 6 触发器 + 世代去重） | 消费者是桌面端 | 桌面端要重排历史时得补；`include_compacted` 会返回重复内容 |
 | 5 | 计费全套（11 列 + `session_model_usage` 三表） | 规模型 | 不能按模型/任务出账 |
 | 6 | 网关字段（`observed` / `platform_message_id` / `effect_disposition` / `api_content`）+ 输入归属仲裁 | 消费者是网关异常路径与平台重投 | 重复写消息时没有"谁负责"的仲裁（第 7 章） |
-| 7 | CLI 族（`sessions recover` / `export_all` / `prune_sessions` / 导入限额） | 规模型 + 子命令族 | 库损坏时没有恢复工具 |
+| 7 | CLI 族（`sessions recover` / `export_all` / `prune_sessions` / 导入限额） | 规模型 + 子命令族 | 第十一章已加入显式 `sessions repair`；不等同于上游完整 recover/导入导出工具族 |
 | 8 | 实盘 guard（`HERMES_STATE_DB_GUARD_BYPASS` + pytest 标记） | mini 测试全走临时 `MINI_HOME` | 别人写测试时可能碰真实库 |
 | 9 | `repair_alternation` / `include_row_ids` / 祖先重放去重 | 消费者是"桌面端 + 网关轮转复制尾巴" | 历史被污染时 mini 会**炸**而不是悄悄修（有意选择，见 §八） |
 | 10 | `system_prompt` 旧文本列迁移 CASE / JSONL→SQLite 迁移器 | 没有历史库要迁移（上游也只说 "replaces"） | 第 6 章之前的 JSON 会话读不出来（git 里有旧版本） |
@@ -1018,12 +1017,12 @@ B 家：库 = /tmp/iso-b/state.db    搜「猎户座」 → 0 条
 第 7 章  网关 / 平台       —— 消息从外部怎么进来（跨进程锁、多 profile、输入归属都在那一章）
 ```
 
-**本章与第 5 章的接口**（两条，都接上了）：
+**本章与第 5 章的接口**（第一条已接，第二条为差距）：
 
 | 接口 | 落地 |
 |---|---|
 | 压缩要**改库里的行** | `record_compaction()` 接在 `_preflight_compression()` 之后（老世代归档 + 新世代插入） |
-| 压缩要**跨进程锁** | `compression_locks` 表在真实版里；mini 没有 → 第 7 章（差距清单 #2） |
+| 压缩要**跨进程锁** | 真实版有 `compression_locks`；mini 本章未实现，当前也没有这套数据库压缩租约（见差距清单 #2） |
 
 **谁会读这个库**（本章之后会反复遇到）：
 

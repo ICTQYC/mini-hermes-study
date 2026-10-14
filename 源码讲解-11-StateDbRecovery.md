@@ -39,7 +39,7 @@
 | 开库受守卫重建 | `hermes_state_schema.py::_recover_stale_fts`（`:545`） |
 | 标记与跨进程准入锁 | `hermes_state_common.py`（`FTS_STALE_KEY` `:880` / `fts_rebuild_admission` `:1168`） |
 
-真正的**入口函数只有两个**：写路径的 `_execute_write`（所有写入都经它，也正因此"摘索引继续写"只能在这里接线），和恢复路径的 `_recover_stale_fts`（只有"开库"或"网关 tick"会调它）。
+真正的**入口函数只有两个**：写路径的 `_execute_write`（常规事务写入经它，也正因此"摘索引继续写"只能在这里接线），和恢复路径的 `_recover_stale_fts`（只有"开库"或"网关 tick"会调它）。
 
 逐字引（`hermes_state_fts.py:28-31`，模块注释的 "Split DDL" 那一段）：
 
@@ -57,7 +57,7 @@
 分岔口是**分类谓词**，判据只有一句："SQLite 有没有把这次损坏**归到 FTS 对象**上？"
 
 - **有 `sqlite_errorcode` 时，码优先**：只认 `SQLITE_CORRUPT_VTAB`（267）为 FTS 范围；裸 `SQLITE_CORRUPT` / `SQLITE_NOTADB` 没有对象归属 ⇒ 归"整文件损坏"。
-- **无码时**（Python < 3.11、或被 RPC 包过的字符串）才让**文本**说话，且必须命中 `messages_fts*` 对象名 **且**（`fts5:` 且含 `corrupt`）或损坏词表。
+- 无码时才看文本：上游接受 `fts5:` 开头且含 `corrupt` 的报告，或“损坏词 + `messages_fts*` 对象名”。mini 额外要求对象名，文本兜底更窄，并非逐条等价（见 §二）。
 
 逐字引（`hermes_state_errors.py:105-110`，`is_fts_scoped_corruption_error` 的 docstring）：
 
@@ -159,7 +159,7 @@
 > _FTS_STALE_RETRY_MAX_SECONDS = 3600.0
 > ```
 
-**要害**：整条时间线里唯一"不得不往前走"的是**重建归属**—— fail-open 只是**推迟**重建（摘干净、留标记），真正的 `rebuild` 必须等一个"独占窗口"。所以"损坏发生了"和"数据丢了"是两件事：前者在第 3 步就结束了，后者只在有人违背 0.4 的不变式时才会发生。
+**要害**：整条时间线里唯一"不得不往前走"的是**重建归属**—— fail-open 只是**推迟**重建（摘干净、留标记），真正的 `rebuild` 必须等一个"独占窗口"。所以"损坏发生了"和"数据丢了"是两件事：第 3 步切断了 FTS 对写入的影响，并没有修好物理索引；数据是否可恢复还取决于损坏范围、备份及后续操作。
 
 ### 验收四问
 
@@ -175,7 +175,7 @@
 
 | # | 面 | 真实 Hermes | mini 现状 | 性质 |
 |---|---|---|---|---|
-| 1 | 分类谓词 | `is_fts_scoped_corruption_error`（码优先只认 `SQLITE_CORRUPT_VTAB=267`，无码才让文本命中 `messages_fts\w*`+词表，`hermes_state_errors.py:100`）；`classify_persistence_error` 的 `"fts_index"` 桶（`:256-257`） | ✅ 已对齐（d269953）：`hermes_state_errors.py:82-110`（谓词）+ `:115-147`（`classify_persistence_error`）+ `:149-170`（`is_structural_corruption_error`，判定式子照抄） | 已对齐 |
+| 1 | 分类谓词 | `is_fts_scoped_corruption_error`（码优先只认 `SQLITE_CORRUPT_VTAB=267`，无码才让文本命中 `messages_fts\w*`+词表，`hermes_state_errors.py:100`）；`classify_persistence_error` 的 `"fts_index"` 桶（`:256-257`） | ✅ 已实现（d269953，文本条件更窄）：`hermes_state_errors.py:82-110`（谓词）+ `:115-147`（`classify_persistence_error`）+ `:149-170`（`is_structural_corruption_error`，无码文本条件更窄，详见文首维护边界） | 已对齐 |
 | 2 | `state_meta` + `fts_stale` 标记 | 表 `state_meta(key,value)`；`FTS_STALE_KEY = "fts_stale"`（`hermes_state_common.py:878-880`）；写 `value='1'`（`hermes_state_fts.py:365-369`） | ✅ 已对齐：纯加表 `hermes_state_common.py:175-178`；键 `:70-81`；读/写/清三个助手 `hermes_state_fts.py:92-122` | 已对齐 |
 | 3 | fail-open：同事务摘触发器 | `_enter_fts_fail_open`：`BEGIN IMMEDIATE` → 落标记 → `_drop_all_fts_triggers` → commit（`hermes_state_fts.py:353-403`） | ✅ 已对齐：`enter_fts_fail_open`（`hermes_state_fts.py:146-182`），门禁 + 同事务形状逐条对齐（"同一个事务 = 自己开的那个"写进 docstring） | 已对齐 |
 | 4 | 写入环降级重跑 | `hermes_state.py:1020-1035`：fail-open 为真 ⇒ `continue` 重跑同一个 `fn`；结构损坏 ⇒ `_halt_db_corrupt` | ✅ 已对齐：`_execute_write` 分岔（`hermes_state.py:195-260`）+ `_degrade_or_raise_on_corruption`（`:261-291`） | 已对齐 |
@@ -286,7 +286,7 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 
 **③ mini 的实现（现状）**：✅ 已抄（`d269953`）。三个模块分工，判据、事务形状、重跑逻辑逐条对齐。
 
-- **分类谓词**（`hermes_state_errors.py`）：`is_fts_scoped_corruption_error`（`:82-110`）实现真实版那条唯一的「归因规则」——**有码时码说了算**（`sqlite_errorcode == SQLITE_CORRUPT_VTAB`，常数 `:68`），**无码时才让文本说话**，且必须同时命中 `messages_fts\w*`（`_FTS_OBJECT_RE :79`）与「`fts5:` + `corrupt`」或损坏词表（`_DB_CORRUPTION_MARKERS :38-46`）。同一文件里 `classify_persistence_error`（`:115-147`）把桶分成 `locked / fts_index / corrupt / disk / unknown`，纪律是 **provenance 先于文本、corrupt 桶排在 locked/disk 之前**；`is_structural_corruption_error`（`:149-170`）是「裸 `CORRUPT`/`NOTADB` 且**无** FTS provenance」那半边，两桶**互斥**。`StateDbCorruptError`（`:173-193`）继承 `sqlite3.DatabaseError`，让每个按父类分类的降级路仍然认得它。
+- **分类谓词**（`hermes_state_errors.py`）：`is_fts_scoped_corruption_error`（`:82-110`）采用保守的「归因规则」，但无码文本路径比上游更窄——**有码时码说了算**（`sqlite_errorcode == SQLITE_CORRUPT_VTAB`，常数 `:68`），**无码时才让文本说话**，且必须同时命中 `messages_fts\w*`（`_FTS_OBJECT_RE :79`）与「`fts5:` + `corrupt`」或损坏词表（`_DB_CORRUPTION_MARKERS :38-46`）。同一文件里 `classify_persistence_error`（`:115-147`）把桶分成 `locked / fts_index / corrupt / disk / unknown`，纪律是 **provenance 先于文本、corrupt 桶排在 locked/disk 之前**；`is_structural_corruption_error`（`:149-170`）是「裸 `CORRUPT`/`NOTADB` 且**无** FTS provenance」那半边，两桶**互斥**。`StateDbCorruptError`（`:173-193`）继承 `sqlite3.DatabaseError`，让每个按父类分类的降级路仍然认得它。
 - **fail-open 本体**（`hermes_state_fts.py`）：`enter_fts_fail_open`（`:146-184`）——门禁 `if not self._fts_enabled or not is_fts_scoped_corruption_error(exc)`（`:164`）→ `BEGIN IMMEDIATE`（`:168`）→ `_write_fts_stale_marker`（`:171`）→ `_drop_fts_triggers`（`:173`）→ `COMMIT`（`:175`），`BaseException` 则 `ROLLBACK` 后 `raise`（`:176-178`）；顶端三个助手 `_read / _write / _clear_fts_stale_marker`（`:92 / :106 / :114`）读写的就是 `state_meta(key='fts_stale')`，摘除用 `_drop_fts_triggers`（`:125-133`，逐个 `DROP TRIGGER IF EXISTS`）。
 - **写入环降级路**（`hermes_state.py`）：`_execute_write` 里 `OperationalError` 非锁分支先走一次损坏分岔口（`:242-249`，因为 `OperationalError` 也是 `DatabaseError` 子类，不这样做会被漏掉），`DatabaseError` 分支在 `:253-259`：
 
@@ -303,7 +303,7 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 归因规则（码优先 + 文本兜底） | `is_fts_scoped_corruption_error`（`hermes_state_errors.py:100-122`）；裸 CORRUPT/NOTADB 必然落 corrupt 桶 | ✅ 已抄（`d269953`）：`hermes_state_errors.py:82-110`，判定式子逐条对齐 |
+| 归因规则（码优先 + 文本兜底） | `is_fts_scoped_corruption_error`（`hermes_state_errors.py:100-122`）；裸码不取得 FTS 归属；是否落 corrupt 桶还取决于损坏词表（见 §六） | ✅ 已抄（`d269953`）：`hermes_state_errors.py:82-110`，判定式子逐条对齐 |
 | 摘除的范围 | base 3 + trigram 3 + CJK 3 共 **9** 个触发器（`hermes_state_schema.py:212-216`） | ✅ 已对齐：`drop_all_fts_triggers`（`:136-143`）语义是「别只摘一半」，眼下只有 base 一套 3 个 |
 | 同事务（marker + drop） | `_enter_fts_fail_open`（`hermes_state_fts.py:353-403`，含 CJK 触发器在则另写 `fts_cjk_stale`） | ✅ 已抄主体（`enter_fts_fail_open` `:146-184`）；无 CJK 标记（mini 无第二套索引） |
 | 写前代际守卫 | `_raise_if_db_corrupt()` + `_halt_if_db_generation_changed()` 两道前置（`:359-360`） | 部分：写前守卫 `_raise_if_db_corrupt` 已接（A7）；**无** `generation_changed` 代际检测（⬜ 没做） |
@@ -315,7 +315,7 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 
 **① Hermes 怎么做的**：fail-open 摘掉触发器，搜索就得换条路——**绕开不可信的派生索引，直接 LIKE 扫权威表 `messages`**。为什么「必须绕开」而不是「接着用坏索引」：触发器摘掉意味着索引有**范围未知的空窗**（`messages` 里那些「触发器缺席期间写进来」的行从未进过索引），而影子表本身还坏着。此时走 `MATCH` 只有两种结局，**都不可接受**：要么直接抛 `DatabaseError`；要么更坏——**静默漏项**（索引与权威表不一致，搜索结果少东西却不报错）。搜索是给人看的，**漏项比慢更坏**。所以降级的答案不是「勉强用索引」，而是「换一条不依赖索引的路」。
 
-这条路只在**权威表**上做：`LIKE` 全表扫 `messages`。它**慢**（无 FTS 排名、无分词、全表过一遍），但它**只读权威表、不依赖任何派生状态、也永远不会去动索引**，所以它给出的结果对 canonical 行而言是**完整且正确**的——降级丢的是**速度**，不是**准确性**。
+这条路只在**权威表**上做：`LIKE` 全表扫 `messages`。它**慢**（无 FTS 排名、无分词、全表过一遍），但它**只读权威表、不依赖任何派生状态、也永远不会去动索引**，因此它不依赖损坏索引，但 LIKE 与 FTS 的分词、布尔语法、排序和限制规则不同；降级结果不能保证与正常 FTS 完全等价。
 
 **为什么重建只能在受守卫的开库路径上**：一次「活搜索」绝不允许变成一次无界全量重建（同样是那张 25GB 库上 ~16 分钟写锁的账）。重建需要**独占准入**（跨进程锁 + 外部持有者守卫）和**一个写事务**，这份等待只有「**下次开库**」那条受守卫路径付得起（第 7 章）；长命网关则用 housekeeping tick 上的**非阻塞**重试（`timeout=0`）在进程内补上——两条路都受同一把准入锁管，只是超时预算不同。活搜索**永远**只做降级，**永不**做重建，这条不变式在真实侧被三处注释钉死（写路径、搜索、fail-open 各一处）。
 
@@ -329,7 +329,7 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 920:        search never runs the unbounded rebuild. Other ``DatabaseError``s propagate."""
 ```
 
-要害：最后那半句 `a live search never runs the unbounded rebuild` 就是「活路径绝不 rebuild」在**搜索侧**的原文出处——搜索命中损坏时，动作只有「摘 + 从权威行作答」，**不是**「顺手重建一下」。前半句 `answers from canonical rows` 说明降级的兜底永远是权威表；`Other DatabaseError's propagate` 则划出边界：**只有** corruption 类才降级，语法/分词类错误照旧上抛（不能拿降级掩盖真正的查询错误）。
+要害：最后那半句 `a live search never runs the unbounded rebuild` 就是「活路径绝不 rebuild」在**搜索侧**的原文出处——搜索命中损坏时，动作只有「摘 + 从权威行作答」，**不是**「顺手重建一下」。前半句 `answers from canonical rows` 说明降级的兜底永远是权威表；`Other DatabaseError's propagate` 则划出边界：**只有** corruption 类才降级，语法/分词错误可返回 None 由调用方回退；其他 DatabaseError 上抛（必须按该 docstring 区分）。
 
 **③ mini 的实现（现状）**：✅ 已抄（`d269953`）。路由判据加了一条腿——`hermes_state_search.py:173` 由 `has_cjk(query)`（FTS5 默认分词器不切 CJK，第 6 章既有）扩成：
 
@@ -346,7 +346,7 @@ mini 的**耦合方式与真实版同形**：触发器写在 `POST_RECONCILE_SQL
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 降级触发判据 | 入口先 `_refresh_fts_stale_state()` 跨进程观测标记，再 `if self._fts_stale:` 走 LIKE（`hermes_state_search.py:1084-1087`） | ✅ 已对齐语义：`if has_cjk(query) or self._fts_stale:`（`hermes_state_search.py:173`） |
-| 跨进程观测标记 | `_refresh_fts_stale_state` 读 `state_meta` 发现**别的进程**发起的 fail-open（`:991-1001`） | ⬜ 没做：mini 单进程，开库时读一次标记即可（`hermes_state.py:140`） |
+| 跨进程观测标记 | `_refresh_fts_stale_state` 读 `state_meta` 发现**别的进程**发起的 fail-open（`:991-1001`） | 未实现跨进程刷新；CLI 与网关可能共享库，仅开库读一次不能及时感知其他进程的降级（`hermes_state.py:140`） |
 | 搜索自身命中损坏 | `except sqlite3.DatabaseError → _enter_fts_fail_open` 再 LIKE（`:1106-1115`） | ⬜ 没做：mini 的 `_search_fts` 未接损坏兜底（降级靠写入环触发） |
 | 路径名 | `like_scan_fts_stale` / `like_scan` / `fts5`（`:881-896`） | ✅ 已抄三个名字（`_describe_search_path:191-212`）；结果字段 `route` 保守起见只在降级时改名 |
 | 不许活搜索 rebuild | 三处注释钉死（`:918-920` 等） | ✅ 已抄：模块 docstring + `_search_like` docstring 逐字引该句（`hermes_state_search.py:26-32` / `:240-248`） |
@@ -423,8 +423,8 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 |---|---|---|
 | 恢复归属 | 交给"下一个打开 `state.db` 的人"；打开时受守卫重建（`hermes_state_schema.py:1163-1168`） | ⏭ 不抄：重建只走显式 `sessions repair`（`hermes_state_fts.py:187-217`），无"开库即重建" |
 | 开库读标记 / 保持摘除 | `hermes_state_schema.py:958-963` | ✅ 已抄（`hermes_state.py:138-151`） |
-| 跨进程准入锁 | `fts_rebuild_admission`（`hermes_state_common.py:1168-1224`，flock + 120s 超时） | ⏭ 不抄：单进程，无并发重建者 |
-| 外部持有者守卫 | 扫 `/proc/<pid>/fd` 比 inode（`hermes_state_holders.py:187-232`） | ⏭ 不抄：无多进程持有者模型 |
+| 跨进程准入锁 | `fts_rebuild_admission`（`hermes_state_common.py:1168-1224`，flock + 120s 超时） | 未实现；修复前必须停掉其他数据库使用者 |
+| 外部持有者守卫 | 扫 `/proc/<pid>/fd` 比 inode（`hermes_state_holders.py:187-232`） | 未实现；CLI 与网关可能同时持库 |
 | 长命退避重试 | `retry_deferred_fts_recovery`（`hermes_state_schema.py:561-620`）+ 网关 tick（`run.py:4566-4579/4650`） | ⏭ 未实现：mini 已有常驻网关与巡检，但尚未接入 FTS 自动重建的退避路径 |
 
 ## §五 结构损坏：停写就是保护
@@ -436,7 +436,7 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 3. **`close()` 后永不重开连接。** `_reopen_after_close_locked`（`:888-905`）里，被隔离的句柄 `raise self._corrupt_error(...)` 拒绝重开（`:900-904`）。注释 `:899` 写明理由：重开会把**路径再解析一遍**，被替换的文件会顺着过期的 WAL/shm 假设被写；**被隔离的句柄绝不能把一条新连接交给一个受损文件**。
 4. **`close()` 跳过显式 WAL 检查点。** `close()`（`:1415`）在锁内先算 `_quarantine_reason()`（`:1362-1375`，隔离中返回 `structural corruption (<原因>)`），非空就打印 warning 并**不跑** `PRAGMA wal_checkpoint(PASSIVE)`（`:1449-1457`）。这是**第二道防线** —— 停写之后，连"收尾时顺手 checkpoint 一下"也要忍住。
 
-在此之上还有**第三道**：`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（Python 3.12+）。SQLite 自己在 `close()` 里还有一次"最后连接检查点"，隔离时用 `Connection.setconfig` 把它也关掉（能力探测 `:405-408`、真正开关 `_disable_close_time_checkpoint` `:1267-1283`，`setconfig(flag, True)` 在 `:1281`），于是 `-wal` 侧车在 `close()` 后**存活供取证**。**3.11 没有 `setconfig`** ⇒ 那次内部检查点**不可避免**（`StateDbCorruptError` docstring `hermes_state_errors.py:199-200`；`:599-600` 的 `_prepare_connection_retirement` 分支）⇒ 文档因此要求把 `state.db` / `-wal` / `-shm` **三件套一起拷**。
+在此之上还有**第三道**：`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（Python 3.12+）。SQLite 自己在 `close()` 里还有一次"最后连接检查点"，隔离时用 `Connection.setconfig` 把它也关掉（能力探测 `:405-408`、真正开关 `_disable_close_time_checkpoint` `:1267-1283`，`setconfig(flag, True)` 在 `:1281`），于是 `-wal` 侧车在 `close()` 后**存活供取证**。**3.11 没有 `setconfig`** ⇒ 仍可能发生内部检查点（`StateDbCorruptError` docstring `hermes_state_errors.py:199-200`；`:599-600` 的 `_prepare_connection_retirement` 分支）⇒ 文档因此要求把 `state.db` / `-wal` / `-shm` **三件套一起拷**。
 
 **现场事故（为什么"多写"比"不写"更坏）** —— `tests/hermes_state/test_state_db_corrupt_quarantine.py:3-9` 逐字记录：网关在第一次报结构损坏（`database disk image is malformed`）后**仍重试写入约 50 分钟**；SIGTERM 时的关停 `PRAGMA wal_checkpoint(PASSIVE)` 把 **15 页**写到**错误的页号**上（第 1 页收到一个 `messages_fts_trigram_data` 叶子），把一个**"还能读"**的文件变成了**"完全打不开"**。
 
@@ -465,7 +465,7 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 - **拒重开**：`_reopen_after_close`（`:329-351`）在 `_execute_write` 接线（`:228-230`）；健康句柄照常懒重连，被隔离的抛 `StateDbCorruptError`。
 - **`close()`**：`:382-407` 只做裸关（`:402` 置 `_closed`、`:404` `self._conn.close()`），**这条关停路径不发显式 checkpoint，但 SQLite 仍可能自动执行**（`:401` 一行显式声明）。
 
-**关键差异（差异表要写明）**：mini 的 `close()` **从来就不 checkpoint** ⇒ 上游"`close()` 跳过显式 WAL 检查点"这**第二道防线**在 mini 是**天然满足**的（不是"为安全而跳过"，而是"原本就没有可跳的检查点"）。mini 的写入路径确实每 50 次成功写入做一次 PASSIVE 检查点（`_try_wal_checkpoint`，`:364-374`），但那是**写路径**的收尾，**不是关停**检查点。mini **未实现** `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（B8），因此 SQLite 自己在最后连接关闭时的自动检查点仍可能发生；没有显式 `PRAGMA` 不代表没有自动检查点。这是实际的保护差距。另外，mini 把"拒重开"**显式化**成一个被接线的方法（真实版连接是懒开的，mini 的连接 `__init__` 只建一次 ⇒ 只留注释的守卫**不可测**；显式化方向与真实版一致，但**扩大了** mini 的语义）。
+**关键差异（差异表要写明）**：mini 的 `close()` 从来不发显式 checkpoint ⇒ 上游"`close()` 跳过显式 WAL 检查点"这**第二道防线**在 mini 是**天然满足**的（不是"为安全而跳过"，而是"原本就没有可跳的检查点"）。mini 的写入路径确实每 50 次成功写入做一次 PASSIVE 检查点（`_try_wal_checkpoint`，`:364-374`），但那是**写路径**的收尾，**不是关停**检查点。mini **未实现** `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（B8），因此 SQLite 自己在最后连接关闭时的自动检查点仍可能发生；没有显式 `PRAGMA` 不代表没有自动检查点。这是实际的保护差距。另外，mini 把"拒重开"**显式化**成一个被接线的方法（真实版连接是懒开的，mini 的连接 `__init__` 只建一次 ⇒ 只留注释的守卫**不可测**；显式化方向与真实版一致，但**扩大了** mini 的语义）。
 
 **④ 与真实版的差别**：
 
@@ -474,9 +474,9 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 | 失败写入不重试 | `_halt_db_corrupt` 抛 `StateDbCorruptError`，不在 locked/busy/IOERR 重试分支（`hermes_state.py:1251-1265`） | ✅ 已抄（`hermes_state.py:304-317/288-289`） |
 | 之后写立即失败 | `_raise_if_db_corrupt`（`:1340-1343`），调用点 `:942` | ✅ 已抄（`hermes_state.py:319-327`，调用点 `:226`） |
 | `close()` 后拒重开 | `_reopen_after_close_locked`（`:888-905`） | ✅ 已抄（`hermes_state.py:329-351`），做成被接线的方法 |
-| `close()` 跳检查点 | `close()` 隔离中不跑 `PRAGMA wal_checkpoint(PASSIVE)`（`:1449-1457`） | ✅ **天然满足**：mini `close()` 本就裸关、永不 checkpoint（`hermes_state.py:382-407`） |
-| `NO_CKPT_ON_CLOSE`（3.12+） | `setconfig(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)`（`:405-408/1267-1283`） | ⏭ 不抄（B8）：mini 无"要关掉的关停检查点" |
-| 3.11 三件套一起拷 | 无 `setconfig` ⇒ 内部检查点不可避免（`hermes_state_errors.py:199-200`） | 差异同上：mini 3.9–3.13 均裸关，无此告警面 |
+| `close()` 跳检查点 | `close()` 隔离中不跑 `PRAGMA wal_checkpoint(PASSIVE)`（`:1449-1457`） | ✅ **天然满足**：mini 不发显式 checkpoint；SQLite 最后连接关闭仍可能自动 checkpoint（`hermes_state.py:382-407`） |
+| `NO_CKPT_ON_CLOSE`（3.12+） | `setconfig(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)`（`:405-408/1267-1283`） | ⏭ 不抄（B8）：mini 未关闭 SQLite 自动关停 checkpoint，仍有实际保护差距 |
+| 3.11 三件套一起拷 | 无 `setconfig` ⇒ 内部检查点仍可能发生（`hermes_state_errors.py:199-200`） | 差异同上：mini 3.9–3.13 均裸关，无此告警面 |
 
 ## §六 隔离的边界（两种"认不出的损坏"）
 
@@ -543,7 +543,7 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 
 这条链要解决的核心难题是：**修一个已经打不开的库，本身可能把它毁得更彻底。** 于是真实实现把"改什么"和"改在哪"拆成两层：
 
-- **先备份，再动手。** 默认先做一次 **raw-copy 备份**（原样拷字节，产物名 `state.db.malformed-backup-<stamp>`）。它**故意不保证 SQLite 一致性**——库既然可能已经打不开，唯一还能保存它的方式就是把字节原封不动拷出来。这份"取证镜像"是**全部修复策略都失败时唯一的恢复源**，所以一旦它被拒，repair 直接 **HARD STOP**（宁可不动）。`--check-only` 只看不改、`--no-backup` 才跳过这份备份。
+- **先备份，再动手。** 默认先做一次 **raw-copy 备份**（原样拷字节，产物名 `state.db.malformed-backup-<stamp>`）。它**故意不保证 SQLite 一致性**——库既然可能已经打不开，唯一还能保存它的方式就是把字节原封不动拷出来。这份取证镜像保留修复前的字节，其他备份或快照也可能成为恢复来源，所以一旦它被拒，repair 直接 **HARD STOP**（宁可不动）。`--check-only` 只看不改、`--no-backup` 才跳过这份备份。
 - **不在原地修，改成"受守卫的快照-提升"。** 真正的修复在 **scratch 副本**上跑：先按排他守卫把库快照到 `*.repair-scratch`，在副本上按**从轻到重**的策略阶梯跑（`rebuild_fts` → `reindex_btree` → `dedup_schema` → 最后 `drop_fts_rebuild` 含 `VACUUM`），只有证明"能干净打开"了，才用 **SQLite 在线 backup API 事务性地回写**回主文件。为什么不能原地：最后一条策略是 `VACUUM`，它按"SQLite 还能解析的 schema"重建整个文件——若损坏恰恰在 **schema b-tree**，`VACUUM` 会把挂在那段不可读页上的表**静默丢掉**，越修越少。为什么回写**绝不 `os.replace`**：Windows 会在句柄占用下拒绝替换，POSIX 会把旧句柄留在旧 inode 上；改为通过备份 API 在事务里写入，`state.db` 就永远不会从句柄底下被换掉。
 - **修完证明修好了（三段验证）。** 修复的成功不是靠"没报错"判定，而是三条**查询事实**：① `fts_stale` 标记查询应**零行**；② 预期的 FTS 触发器**在场**；③ 权威行数**不得下降**。三条全过才叫修好。
 
@@ -577,7 +577,7 @@ fail-open 本体之外，mini 还顺手做了**开库时的一次保持摘除**�
 
 **③ mini 的实现（现状）**
 
-mini 把这条链压到"**能真跑出收据的最小版**"，落在两个新文件：修复引擎 `hermes_state_repair.py`（291 行）与 CLI 外壳 `hermes_cli/sessions_cmd.py`（139 行），并在 `hermes_cli/main.py:88-99` 注册 `sessions` 子命令。
+mini 把这条链压到"**能真跑出收据的最小版**"，落在两个新增实现模块：修复引擎 `hermes_state_repair.py`（291 行）与 CLI 外壳 `hermes_cli/sessions_cmd.py`（139 行），并在 `hermes_cli/main.py:88-99` 注册 `sessions` 子命令。
 
 - 健康探针 `_db_opens_cleanly`（`hermes_state_repair.py:61`）：问的是"能不能打开、schema 能不能解析"，**不**跑全量 `PRAGMA integrity_check`——因为"schema 能读"恰恰是允许重建 FTS 的前提，把 FTS 损坏也算成"打不开"会把唯一能修的情形挡在门外。
 - raw-copy 备份 `_backup_db_file`（`:153`）：原样拷字节 + 三件 sidecar（`:52`），产物名 `state.db.malformed-backup-<stamp>`（`:168`），同秒避让序号；返回 `(None, reason)` 时 repair 视为 HARD STOP。
@@ -594,7 +594,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | CLI 面 | `sessions repair`（`--check-only`/`--no-backup`）+ `sessions recover` 整族（`hermes_cli/subcommands/sessions.py:160-207`） | 只有 `sessions repair [--check-only]`；`recover` 及 `--output`/`--allow-partial` 等整族裁掉（B9） |
 | 修复算法 | 受守卫的 **snapshot-and-promotion**：scratch 副本 → 策略阶梯 → 在线 backup 事务提升（禁 `os.replace`） | 只做 `rebuild_fts`（**不动 canonical**）⇒ 无需 scratch、无需提升 |
 | 备份 | **两种**：raw-copy 取证镜像（`_backup_db_file:478`，受 `--no-backup` 控）＋ 在线 `backup()`（`_copy_database_snapshot:664`，内部） | 只有 raw-copy（`_backup_db_file:153`），且定为**无开关的纪律**（不接受 `--no-backup`） |
-| 并发守卫 | 跨进程修复锁 + 排他守卫连接（`_exclusive_repair_db_guard:641`） | 单进程，不做（B1/B2） |
+| 并发守卫 | 跨进程修复锁 + 排他守卫连接（`_exclusive_repair_db_guard:641`） | 尚未实现（B1/B2）；显式修复前需停其他持有者 |
 | 策略阶梯 | 4 条（`rebuild_fts`/`reindex_btree`/`dedup_schema`/`drop_fts_rebuild`+VACUUM） | 只留 `rebuild_fts` |
 | 三段验证 | 文档 §3 三条 | 逐字实现（`_verify_repair:194`） |
 | 修复账本/去重 | `.repair-attempts.json`（`_MAX_PERSISTENT_REPAIR_ATTEMPTS=3`）+ 备份去重 + 保留上限 3 | 不做（纯运维防御；一次真实事故攒了 89GB 雷同备份） |
@@ -620,7 +620,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | `tests/test_packaging.py` | 417 → **420** | 零第三方依赖白名单加 3 个新模块名 | — |
 | `demos/ch11_real_run.py` | **0 → 208**（新） | 真跑脚本（两条损坏路径 + 修复） | — |
 
-真实侧还有四个 mini **没有对应物**的模块：`hermes_state_holders.py`（363）、`hermes_state_schema.py`（1298）、`hermes_cli/doctor_state.py`（491）、`gateway/shutdown_flush.py`（296）——它们服务的是 B 批里"不抄"的那几条（跨进程守卫 / FTS 受守卫重建的节拍接线 / doctor 体检 / 落盘 sink）。
+真实侧另有这些未完整对齐的能力：持有者扫描（`hermes_state_holders.py`）、schema 模块中的受守卫恢复（mini 已有同名 schema 模块）、doctor 数据库体检和关停暂存池——它们服务的是 B 批里"不抄"的那几条（跨进程守卫 / FTS 受守卫重建的节拍接线 / doctor 体检 / 落盘 sink）。
 
 **契约测试：12 组覆盖面**（`tests/test_state_db_recovery.py`，`GROUPS` 见 `:799-823`）
 
@@ -707,7 +707,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | **B4** | 替代落盘 sink（JSONL + `pending_messages/` 暂存池） | `session_persistence.py:256-262`、`session_transcript.py:140-160/238-240`、`shutdown_flush.py:37/117` | 需要 mini **完全没有**的 sink 基座（第 7 章差距清单已挂"未做"）；隔离机制本身不依赖它 |
 | **B5** | 内部在线备份 API 快照（`source.backup(pages=256,…)` + 进度/截止） | `hermes_state_repair.py:664/684` | mini 用 raw-copy 备份就够；`pages=`/进度/截止是给长库修复用的 |
 | **B6** | `state-snapshots/` 快照目录与快速回滚（`/snapshot list` + `restore`） | `hermes_cli/backup.py:37/1212/1255/1302` | 运维设施，与"恢复机制的形状"无关 |
-| **B7** | 第二/第三套 FTS 索引 + 6 触发器全集（含 trigram 三个） | `hermes_state_common.py:321-322` | 纯规模：mini 一套 bigram + 3 触发器已够本机制演示（**差异表已记明**） |
+| **B7** | 第二/第三套 FTS 索引 + 6 触发器全集（含 trigram 三个） | `hermes_state_common.py:321-322` | 纯规模：mini 一套默认 unicode61 词索引 + 3 触发器已够本机制演示（**差异表已记明**） |
 | **B8** | `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`（3.12+，关掉 SQLite 自己的关停检查点） | `hermes_state.py:405-408/1267/1275-1281` | mini 不发显式 checkpoint，但 SQLite 自动关停 checkpoint 仍可能发生；当前未关闭它，第三道防线尚未满足 |
 | **B9** | 参数面与命名细节（`--output` / 备份名 `state.db.malformed-backup-<stamp>` / `--no-backup` 语义） | `hermes_cli/subcommands/sessions.py:166-207` | 细节；A8 保留 `--check-only` 与"默认先备份"两条即可 |
 
@@ -791,7 +791,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | 行号 | 该行/该段首 20 字 | 它证明什么 |
 |---|---|---|
 | `:478-479` | `def _backup_db_file(` | 面向用户的备份是 **raw-copy**（docstring: *Raw-copy a (possibly malformed) DB plus sidecars*）。 |
-| `:664` | `def _copy_database_s` | 内部快照 `_copy_database_snapshot` 定义——**唯一**用 SQLite 在线备份 API 的地方。 |
+| `:664` | `def _copy_database_s` | 内部快照 `_copy_database_snapshot` 定义——本修复模块使用 SQLite 在线备份 API 的位置。 |
 | `:684` | `source.backup(destin` | 在线备份 API 调用点 `source.backup(destination, pages=256, ...)`——属**内部快照**，不受 `--no-backup` 控制。 |
 | `:849` | `def repair_state_db_` | `repair_state_db_schema(db_path, *, backup: bool=True)`——三段式修复入口。 |
 | `:855` | `transactionally, so` | 其 docstring 逐字：*... A raw backup is taken first*——**再次**把「面向用户的备份」定性为 raw。 |
@@ -834,7 +834,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | `:304-317` | `def _halt_db_corrupt` | 隔离句柄 `_halt_db_corrupt`：**粘性**置位 + 抛错 + 绝不做就地修复（docstring 引真实 `:1249-1267`）。 |
 | `:319-327` | `def _raise_if_db_cor` | 写前守卫 `_raise_if_db_corrupt`（对齐真实 `:1340-1343`）。 |
 | `:329-351` | `def _reopen_after_cl` | `_reopen_after_close`：健康句柄照常重连、被隔离句柄**拒重开**（对齐真实 `_reopen_after_close_locked :888-904`）。 |
-| `:382-407` | `def close(self) -> N` | `close()`：**绝不** WAL checkpoint（对齐真实 `:1449-1457` 的「跳过」分支）；`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` 标为不实现（B8）。 |
+| `:382-407` | `def close(self) -> N` | `close()`：不发显式 WAL checkpoint；自动 checkpoint 另见 B8（对齐真实 `:1449-1457` 的「跳过」分支）；`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` 标为不实现（B8）。 |
 
 **`hermes_state_fts.py`（219 行）**
 
@@ -915,7 +915,7 @@ mini 的**简化点**是：它的修复只做 `rebuild_fts`（**不动 canonical
 | **⑪ `NO_CKPT_ON_CLOSE`（3.12+）** | `hermes_state.py:405-408`（探测）`：1267`（入口）`：1275-1281`（设置） | ——（**B8 不抄**，理由见 `hermes_state_errors.py:173` docstring） | §2、§五 |
 | **⑫ 开库保持摘除** | `hermes_state_schema.py:958-963` | `hermes_state.py:138-151` | §1、§四 |
 | **⑬ 受守卫重建（准入锁 + 外部持有者守卫）** | `hermes_state_schema.py:545-559`；`hermes_state_common.py:1168-1224`；`hermes_state_holders.py:187-232` | ——（**B 批不抄**：缺跨进程基座） | §1、§四 |
-| **⑭ 长命网关的进程内重试** | `hermes_state_schema.py:561-620`；`gateway/run.py:4566-4579`（tick）`：4650`（槽位） | ——（**B 批不抄**：无 housekeeping tick 对应面） | §1、§四 |
+| **⑭ 长命网关的进程内重试** | `hermes_state_schema.py:561-620`；`gateway/run.py:4566-4579`（tick）`：4650`（槽位） | ——（**B 批不抄**：已有巡检，但尚未接入 FTS 恢复任务） | §1、§四 |
 | **⑮ 显式 repair（备份 → 重建 → 三段验证）** | `hermes_state_repair.py:849`（入口）`：478-479`（raw 备份）`：664/684`（内部快照）`：982/1008/1018/1021`（快照-提升） | `hermes_state_repair.py:226`（入口）`：153`（raw 备份）`：194`（三段验证） | §3、§七 |
 | **⑯ CLI 出口（`sessions repair`/`recover` + doctor）** | `hermes_cli/subcommands/sessions.py:166/197`；`hermes_cli/sessions_cmd.py:101/115/144/156-168`；`hermes_cli/doctor_state.py:196-200/206-212/241-247` | `hermes_cli/sessions_cmd.py:34/76/128`（仅 `repair`；无 recover、doctor 不碰库） | §2、§3、§七 |
 
@@ -941,7 +941,7 @@ $ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_repair.py | sed -n 
 
 - 原文 §3 逐字：*"`sessions repair` creates a **SQLite backup** by default"*。
 - 源码：面向用户、由 `--no-backup` 门控的那份备份是 **raw-copy**——`hermes_state_repair.py:855` 逐字 *"A raw backup is taken first"*，实现 `:478-479` 逐字 *"**Raw-copy** a (possibly malformed) DB plus sidecars to a timestamped backup."*，门控点 `hermes_cli/sessions_cmd.py:115` 正是 `backup=not ...no_backup`。
-- 全仓唯一一次 SQLite **在线备份 API**（`source.backup(...)`）在 `hermes_state_repair.py:684`，属**内部修复快照** `_copy_database_snapshot`（`:664`），**不受** `--no-backup` 控制、也不是 CLI 告知用户的那份。
+- 本修复模块的 SQLite **在线备份 API** 调用（`source.backup(...)`）在 `hermes_state_repair.py:684`，属**内部修复快照** `_copy_database_snapshot`（`:664`），**不受** `--no-backup` 控制、也不是 CLI 告知用户的那份。
 - **结论**：术语层面**对不上**——面向用户的「备份」是原始字节拷贝，而非文档所说的 "SQLite backup"。
 
 **2. §3 的触发器验证 SQL 只列了 3 个名字，而 schema 定义的是 6 个。**

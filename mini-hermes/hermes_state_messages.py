@@ -10,7 +10,7 @@
       msg = dict(locals())  # every keyword above is a message-dict field of the same name
 
 ★ 抄的第二个决策：**列清单从 `SCHEMA_SQL` 推出来**（不是手抄一份）。
-  加了列忘了改这里 = 类型错误；从 SCHEMA_SQL 推 = 不可能不一致。
+  INSERT 列名不再另抄一份；新增需调用者赋值的列仍要同步参数和取值。
 
 ★ 抄的第三个决策：**归档行（active / compacted）**。
   真实版就一行 SQL（`hermes_state_messages.py:44`）：

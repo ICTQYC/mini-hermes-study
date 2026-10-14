@@ -1,7 +1,7 @@
 # 中文精译 · 第 12 章：小篇合卷 —— 代码归属图与完成回执投递（Codebase Ownership Map & Background Completion Backlogs）
 
 > **本篇定位**：精译为主（看懂"改动该落在哪个子系统、找哪份文档入门"，以及"多个后台进程几乎同时完成时，界面怎么把它们并成一个通知回合送进来"）。它是一章两篇的**合卷**（收尾路线里的"小篇合卷"）：上篇《代码归属图》是一张"子系统 ↔ 源码目录 ↔ 文档入口"的导航图；下篇《后台完成回执》是这条投递链路的规格说明。差异对比、源码深挖与实现日志留给《源码讲解-12》。
-> **来源**：`官方文档-Developer-Guide/codebase-ownership.md`（**34 行**，H1 + 无 H2；`title` 逐字：*Codebase Ownership Map*）与 `官方文档-Developer-Guide/completion-backlog-delivery.md`（**52 行**，H1 + 2 个 H2；`sidebar_label` 逐字：*Completion backlogs*）。两篇在官方侧边栏里相邻，`codebase-ownership` 在前。
+> **来源**：`官方文档-Developer-Guide/codebase-ownership.md`（**34 行**，H1 + 无 H2；`title` 逐字：*Codebase Ownership Map*）与 `官方文档-Developer-Guide/completion-backlog-delivery.md`（**52 行**，H1 + 2 个 H2；`sidebar_label` 逐字：*Completion backlogs*）。本项目将导航与后台通知两篇合卷阅读；官方排序与本项目章号是不同口径。
 > **上游**：commit `f5d1926110` · `version = "0.21.3"` · 原文合计 **86 行**
 
 [TOC]
@@ -47,7 +47,7 @@ Hermes 是一个大仓库，而绝大多数贡献**恰好只碰一个子系统**
 
 - **改动应当留在它自己的子系统内。** 一个需要去改核心文件的插件是**设计坏味道** —— 应当去拓宽通用的插件面（见仓库 `AGENTS.md` 里的**贡献评审准则**）。
 - **你碰过的每个源码目录，都跑它的镜像测试目录。** 对 `plugins/platforms/telegram/` 的一次改动，需要 `tests/plugins/platforms/` **变绿**，而不只是你碰巧想到的那个测试文件。
-- **当牵涉两个子系统时，由更窄的那个拥有这次改动。** 宁可把修复做在适配器或插件里，也不要在代理核心里加一个分支；核心是一道**窄腰**，那里每加一样东西，都要在**每一次 API 调用**上付账。
+- **当牵涉两个子系统时，由更窄的那个拥有这次改动。** 宁可把修复做在适配器或插件里，也不要在代理核心里加一个分支；核心是一道**窄腰**，共享核心的改动会影响更多调用方；是否增加每次调用的开销仍取决于实际执行路径。
 
 ---
 
@@ -69,7 +69,7 @@ Hermes 是一个大仓库，而绝大多数贡献**恰好只碰一个子系统**
 
 ### Local validation and its limits —— 本地验证及其边界
 
-`evals/completion_backlog_probe.py REPO OUTPUT.json` 会在**临时目录**里**真启动**本地 shell 子进程，读它们**真实的**完成事件，并驱动**生产**的 CLI、TUI 轮询器与回合后通知路由。一个 **loopback HTTP 回合汇点（turn sink）**替换掉 `chat` / `_run_prompt_submit`；它会记录**真实的投递**，但**不**演练模型推理、原生渲染器交互、或任何托管的平台。合成的 watch 与委派**信封**是**带标签的测试样本（fixture）**；委派的认领用的是**真实的临时 SQLite 账本**。backlog 这个用例里**包含一个非零退出码**。
+`evals/completion_backlog_probe.py REPO OUTPUT.json` 会在**临时目录**里**真启动**本地 shell 子进程，读它们**真实的**完成事件，并驱动**生产**的 CLI、TUI 轮询器与回合后通知路由。一个仅监听本机回环地址的 HTTP 接收端（turn sink，记录投递而不运行模型）替换掉 `chat` / `_run_prompt_submit`；它会记录**真实的投递**，但**不**演练模型推理、原生渲染器交互、或任何托管的平台。合成的监视输出与委派事件数据（envelope）是**带标签的测试样本（fixture）**；委派的认领用的是**真实的临时 SQLite 账本**。backlog 这个用例里**包含一个非零退出码**。
 
 探针会检查：一个**就绪的积压**、**单个精确负载**、被**显式消费**的结果、**外部归属**、以及**与完成事件交错的** watch/委派。它度量的是**通知边界上的回合准入**，而不是模型层面省下的 token。
 
@@ -99,7 +99,7 @@ Hermes 是一个大仓库，而绝大多数贡献**恰好只碰一个子系统**
 | route-keyed short-window batching | 按路由键的短窗口批处理 | 第二部分（`Consumers and ownership`） |
 | claim/complete ledger | 认领/完成账本 | 第二部分（`Consumers and ownership`） |
 | envelope | 信封（envelope） | 第二部分（`Local validation and its limits`） |
-| fixture | 固定装置（fixture） | 第二部分（`Local validation and its limits`） |
+| fixture | 测试样本（fixture） | 第二部分（`Local validation and its limits`） |
 | ledger | 账本 | 第二部分（`Consumers and ownership`） |
 | turn sink（loopback HTTP turn sink） | 回合汇点（loopback HTTP 回合汇点） | 第二部分（`Local validation and its limits`） |
 | probe | 探针 | 第二部分（`Local validation and its limits`） |

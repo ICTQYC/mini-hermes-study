@@ -57,7 +57,7 @@
 要么在「已知限制」里点名**。
 
 砍掉"一进程多 profile"（也就是永远一 profile 一进程）会怎样？**资源**上：N 个 profile =
-N 个 Chromium 级的常驻进程 + N 个平台连接池 + N 份 cron 心跳，一台小机器就吃不消；
+N 个 Python 网关进程、各自的平台连接与 cron 调度会增加资源开销；具体内存和容量需测量，不能直接等同于 N 个 Chromium 进程；
 **操作**上：加一个 profile 要动 supervisor 配置、要重启别的东西。
 但反过来说，**一进程多 profile 的代价正是这一章全文**：所有"进程级"的东西
 （环境变量、监听口、注册表、发现槽位）都会变成**跨 profile 的共享状态**，
@@ -87,7 +87,7 @@ N 个 Chromium 级的常驻进程 + N 个平台连接池 + N 份 cron 心跳，�
 三道来源（env / config / 预检）看着啰嗦，但它们对应**三种不同的人**：
 运维（要能一键覆盖）、用户（配置文件里的偏好）、程序（自己判断这台机器能不能跑）。
 砍掉预检、直接默认开，会出现最糟的一种：**安装里还有一个 profile 自己跑着网关**，
-两个进程抢同一个 bot token / 同一个端口 —— 那不是报错，是**间歇性错乱**。
+两个进程抢同一个 bot token / 同一个端口 —— 可能被锁冲突拒绝、连接失败，或出现平台侧竞争；预检用于提前识别冲突。
 
 ---
 
@@ -120,7 +120,7 @@ finally 里按相反顺序解开
 好让"全局网关设置"解析得一致。
 
 **两个作用域都是 `contextvar`** —— 所以它们会通过 `copy_context()` **传播进线程池的工作线程**，
-并且**确定性地解开**。**任何东西都不写进 `os.environ`，永远不。**
+并且**确定性地解开**。这两个运行期作用域管理器不改写共享的 `os.environ`；无作用域的启动期加载另有规则（见 §4）。
 
 为什么不干脆"进事件时 `os.environ.update(profile_env)`"？
 因为 `os.environ` 是**进程级**的：并发处理两个 profile 的事件时，
@@ -289,14 +289,14 @@ HTTP 准入**、**路由资格**、以及**运行时状态面**。
 ## 10. Control plane —— 桌面插件怎么管 profile
 
 桌面插件只能通过 **ws JSON-RPC 那扇门**够到网关，所以**profile 的枚举与配置**
-住在 `tui_gateway/methods_profiles.py` 里，方法一共六个：
+住在 `tui_gateway/methods_profiles.py` 里，原文列出六个核心方法；该源码快照另有 `profiles.remember_onboarding`：
 
 ```text
 profiles.list      profiles.create     profiles.describe
 profiles.configure profiles.set_asset  profiles.get_asset
 ```
 
-**读写都跑在目标 profile 的 HERMES_HOME 覆盖之下**。
+需要配置解析的读写在目标 home 覆盖之下；资产等方法直接使用显式解析出的目标目录。
 **资产（asset）的写入是原子的，且按类型与大小设上限。**
 
 "读写都跑在目标 profile 的作用域下"这条，正是 §3/§5 那套机制**在非回合路径上的复用**：
@@ -342,7 +342,7 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | **终端 / 沙箱环境（`TERMINAL_*`）** | 按白名单保持全局；工具从**进程环境**读它 |
 | **内置工具注册表** | 内置的是进程级；**插件注册的工具按 profile 叠加**（靠 `hermes_home_key()`） |
 | **provider / 能力注册表** | 同一种"混合叠加"模式（浏览器、图像生成、TTS、转写、视频生成、网络搜索、密钥源） |
-| **HTTP 监听、relay 入口、进程锁** | 一个进程一份，归默认/活动 profile 所有。按 profile 的 `gateway_state.json` **仍然照写**（⚠️ 原文写 `runtime_status.json` ——
+| **HTTP 监听、relay 入口、进程锁** | 原文描述为一个进程一份，归默认/活动 profile；源码的多路复用状态写到启动 home 的 `gateway_state.json`，次级平台合并在同一记录里（⚠️ 原文写 `runtime_status.json` ——
 **代码里没有这个文件名**，见附录 C ④） |
 
 > ⚠️ **上游文档出入**：**MCP 那条已经不是原文说的样子了** —— 它已经被修掉（详见附录 C ③）。
@@ -373,7 +373,7 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 
 这句话是**防止把安全责任放错层**。一个常见误读是"上了多路复用，就等于做了多租户隔离" ——
 **不是**：多路复用保证的是"**两个 profile 之间**不串味"，
-它**不保证**"同一个 profile 里的两个用户之间不串味"（那要靠配对/白名单那一层）。
+它**不保证**"同一个 profile 里的两个用户之间不串味"（授权要靠配对/白名单，会话上下文隔离还要靠按用户构造会话键）。
 把这两件事混起来，会出现"以为做了租户隔离，其实只是配置隔离"的部署事故。
 
 ---
@@ -393,7 +393,7 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | **home 覆盖**（HERMES_HOME override） | 上下文局部的"家在哪"；`get_hermes_home()` 先查它再查环境变量 |
 | `hermes_home_key()` | 按 home 分桶的注册表用的稳定键 |
 | `get_process_hermes_home()` | 少数"机器级、不该跟着覆盖走"的资源用的出口 |
-| **`profile_routes`** | `(平台, 公会, 聊天, 线程)` → profile 的路由表；合取匹配、最具体优先、线程走父链 |
+| **`profile_routes`** | `(平台, 公会, 聊天, 线程)` → profile 的路由表；合取匹配、最具体优先、线程匹配当前聊天或直接父聊天（单跳） |
 | **服务集合**（served set） | 这个网关当前服务的 profile 集合；适配器/cron/路由/HTTP 准入都看它 |
 | **单闸口**（chokepoint） | "只能有一份实现"的那个函数（这里是 `profiles_to_serve`） |
 | **lane（会话线）** | 一个 bot 在某个聊天里的那条会话；锁/队列/缓存都按它分桶 |
@@ -401,7 +401,7 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 | **`_owner_profile`** | 装在适配器上的"我属于哪个 profile"，供**早于来源盖章**的入口使用 |
 | **控制面**（control plane） | 桌面插件管 profile 的那六个 JSON-RPC 方法 |
 | **资产**（asset） | profile 的可写附件（头像之类）；写入原子 + 类型/大小上限 |
-| **tombstoned profile** | "已下葬"的 profile 目录（删除后留的墓碑）；枚举时要跳过 |
+| **tombstoned profile** | 已被删除标记标明失效的 profile 目录；枚举时跳过 |
 | **进程级 / 混合叠加**（process-global / overlay） | 已知限制表里的两类：完全共享、或"内置全局 + 插件按 profile 叠" |
 
 ## 附录 B · 章节位置与本章的债
@@ -430,9 +430,9 @@ activity, not per turn` 那句话的另一半（作用域绑在"**活动**"上�
 会话键命名空间 —— 分别对应原文的 `Serving selected profiles`、`Scope composition`、
 `Workstream A`、`Inbound routing`。
 
-**本章还没做的（原文里有、mini 里没有）**：真正的"同进程多 profile 并发服务"
+**本扩展开工时的清单（历史）**：当时尚未实现真正的“同进程多 profile 服务”
 （per-bot session lanes 的完整落地）、按 profile 的持久化句柄缓存、
-控制面方法、失败模式的四类处置 —— 这些是第 9 章实现阶段的正题。
+控制面方法、失败模式的四类处置 —— 后续已在 `f34fdaa` / `9e7c8e4` 实现作用域、按 home 缓存句柄与每 profile 适配器；当前剩余差距见源码讲解 §十七。
 
 ## 附录 C · 上游文档出入（本次核实 6 处；另附已核实/未核清单）
 

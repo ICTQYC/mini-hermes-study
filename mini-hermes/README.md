@@ -10,6 +10,10 @@
 已修复审查确认的 19 项代码问题和启动路径文档问题，并补齐工具探测缓存的 profile 隔离；明细见仓库根《发布前修复记录.md》。
 当前全套 **1,674 / 1,670 通过 · 0 失败**（Python 3.13 / 3.9），共 **15 个测试文件**；其中跨模块回归 **86 条 / 6 组**。章表里的统计保留章节交付时点。
 
+## 历史复现入口
+
+已有 `chXX` 标签曾随统一维护向后移动，不能全部视作原章末快照。第 2 章主体用 `db6229c`，第 3 章主体与规模表用 `338c78f`（后续启动器修复 `558550e` / `4382e24`），第 4 章主体用 `db47e97`、搜索侧线用 `0d8d3ff`。优先按正文注明的提交和阶段复现，运行当前实现则使用维护后的主分支。其余正文已按提交复核：第 5 章 `f59d4f8`，第 6 章 `0a72dec`，第 7 章 `858d1f2`，扩展 7.1 `a4799bb`，扩展 7.2 `f34fdaa` / `9e7c8e4`，第 8 章 `756b493` / `a391919`，第 10 章 `f261aa2` / `1770a9e`，第 11 章 `d269953`，第 12 章 `653b627`，第 13 章 `02c61d5` / `4b0c96a`，第 14 章 `a6ed019`，第 15 章 `1ccaa50`。现有标签未移动。
+
 ## 当前进度
 
 | 章 | 官方文档 | mini 版状态 | 配套文档 |
@@ -25,7 +29,7 @@
 | 8 | `provider-runtime.md` | ✅ **已实现并跑通**（**providers/ 包**（723 行）+ **两段式解析** + `api_mode` 判定 + `source` + host 门控 + 别名归一（`756b493`）· **回退链** `agent/fallback.py` + **辅助路由** `agent/auxiliary.py` + 配置层 `hermes_cli/config.py`（`a391919`，回退链首次真正接线）· **219 条新契约测试**（106 + 113）· 全套件 **1,063 通过 / 0 失败**（双解释器）· 真跑：`source` 四来源 / host 门控三端点 / 别名归一 · 差异表 18 行 / 差距清单 A 批 10 + B 批 8 · **上游文档 3 处出入**（子代理继承链 / 触发点数 / key 门控）） | 《中文精译-08-ProviderRuntime.md》《源码讲解-08-ProviderRuntime.md》 |
 | 10 | `micro-compaction.md` | ✅ **已实现并跑通**（`agent/micro_compaction.py` **537 行**（`MicroCompactionMixin`）+ 接线三处 · **119 条测试 / 10 组** · 全套件 **1,187 通过 / 0 失败**（双解释器）· 反向验证 **5/5 + 补丁 2/2 干净变红** · 真跑 **5/5 核验通过**（真 DeepSeek，脚本 `demos/ch10_real_run.py`）· 差异表 18 行 / 差距清单 A6 + B9 · ★ 补上「摘要被截断 ⇒ 丢弃半截」判据（`_summary_llm_meta()`，微压缩与批量两条路径）） | 《中文精译-10-MicroCompaction.md》《源码讲解-10-MicroCompaction.md》 |
 | 11 | `state-db-recovery.md` | ✅ **已实现并跑通**（新增 `hermes_state_errors.py` **202** / `hermes_state_fts.py` **219** / `hermes_state_repair.py` **291** / `hermes_cli/sessions_cmd.py` **139**；改 `hermes_state.py`（223→**417**）、`hermes_state_common.py`（270）、`hermes_state_search.py`（317） · **121 条测试 / 12 组** · 全套件 **1,309 / 1,305 通过 / 0 失败**（双解释器）· 反向验证 **5/5 干净变红** · 真跑**两条损坏路径 + 修复**全绿 · 真跑拓出并修掉 1 处真 bug（旧库体检误诊）） |
-| 12 | **小篇合卷**：`codebase-ownership.md` + `completion-backlog-delivery.md` | ✅ **已交付**（精译 **204 行** · 源码讲解 **837 行** · **mini 侧无代码实现项**——两篇分别属「地图/约定」与「投递债」型，且 B 篇那套机制在 mini 里连生产者都不存在 · 唯一落地 = 文档级：README 新增「改动 → 该跑哪些测试」归属映射表 · 全套件 **1,309 / 1,305 通过 / 0 失败**） |
+| 12 | **小篇合卷**：`codebase-ownership.md` + `completion-backlog-delivery.md` | ✅ **已交付**（精译 **204 行** · 源码讲解 **838 行** · **mini 侧无代码实现项**——两篇分别属「地图/约定」与「投递债」型，且 B 篇那套机制在 mini 里连生产者都不存在 · 唯一落地 = 文档级：README 新增「改动 → 该跑哪些测试」归属映射表 · 全套件 **1,309 / 1,305 通过 / 0 失败**） |
 
 ## 章族表（★ 章号怎么数）
 
@@ -42,7 +46,7 @@
 | 第 10 章 | `micro-compaction` | `中文精译-10-…` / `源码讲解-10-…` | `ch10-micro-compaction` |
 | **第 11 章** | `state-db-recovery` | `中文精译-11-…` / `源码讲解-11-…` | `ch11-state-db-recovery` |
 | **第 12 章** | 小篇合卷：`codebase-ownership`（34 行）+ `completion-backlog-delivery`（52 行） | `中文精译-12-…` / `源码讲解-12-…` | `ch12-ownership-and-backlog` |
-| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） · ✅ 源码讲解 `f1141e8`（**1,178 行** · H1=1 · H2=15 · H3=22）· 审计后小修（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条）（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条） | `ch13-skills` |
+| **第 13 章** | Extending 代表作：`creating-skills`（438 行）→ **技能系统最小版**（发现 + 渐进披露 + `skill_view`） | ✅ 精译 `b37f5db`（**680 行**）· ✅ 实现 `02c61d5`（新 `agent/skill_utils.py` 436 · `tools/skills.py` 136 · `tests/test_skills.py` 525/6 组；**1,430/1,426 通过 · 反验 4/4 · 真跑 17/17**） · ✅ 源码讲解 `f1141e8`（**1,178 行** · H1=1 · H2=15 · H3=22）· 审计后小修（多行块丢弃 · 软链 `SKILL.md` 拒收 · 测试 72→82 · 真跑 19→17 条） | `ch13-skills` |
 | **第 14 章** | Extending 代表作（插槽型）：`context-engine-plugin`（272 行）→ **把已有压缩器做成可替换插槽**（不碰压缩机制，默认路径逐字节一致） | ✅ 精译 `2b9f080`（**416 行**）· ✅ 实现 `a6ed019`（新 `agent/engine_registry.py` 348 · 改 `agent/context_engine.py` 112 / `run_agent.py` 1341 / `hermes_cli/config.py` 370 / `agent/context_compressor.py` 1046；新 `tests/test_context_engine.py` 555/7 组 · `demos/ch14_real_run.py` 233；**1,436/1,432 通过 · 反验 4 条（RV-1/RV-2 测试 7/2 红 · 审计修复 RV-3/RV-4 各 2 红）· 真跑 12/12**） · ✅ 源码讲解 `baf9251`（**1,336 行**）· 审计修复 + 回落警告出口收口（`a3a2753`/`add7680`） | `ch14-context-engine` |
 | └ 扩展 **13b** | **内置技能级**：仓内 `mini-hermes/skills/`（随程序发布）+ 用户级共存，**用户优先**（PATH 语义）；`agent/skill_utils.py` 551 · `tests/test_skills.py` 691/7 组 · 新 `demos/ch13b_real_run.py`（17/17）· **1,457/1,453 通过** · 反验 6 条（RV-1 32 红 / RV-2 5 红 / RV-3 4 红 / 根内排序 2 红） | 并入第 13 章两篇文档（`源码讲解-13` 的 `:262`/`:272`/`:759`/`:762`/`:768` 已同步；精译无需改） | `ch13b-bundled-skills` |
 | **第 15 章** | Extending 代表作（遥测面）：`observer-hooks`（331 行）→ **只读观察者**（注册契约 + 零成本快路径 + 失败放开 + 载荷安全 + 关联 id） | ✅ 精译 `977cc85`（**526 行**）· ✅ 实现 `1ccaa50`（新 `agent/observer.py` **461** · `run_agent.py` **1704**（+395/−16）· 新 `tests/test_observers.py` **994 / 6 组 / 124 条** · 新 `demos/ch15_real_run.py` **368 / 28 条**；**1,581 / 1,577 通过 · 0 失败** · 反验 **7 条干净变红** · 真 API 收据（10 条事件 / 1 `turn_id` / 2 `api_request_id` / 8025 字符带 truncated / 0 观察者 7 构造器 0 次）） | ✅ 源码讲解 `10ca3c7`（**1,202 行** · H1=1 · H2=16 · H3=10 · 引用 354 条死 0） | `ch15-observer-hooks` |
@@ -111,9 +115,9 @@
 
 **差额一句话**：A 是"少而精的必读路线"（10 篇），B 是"目录顺序"（14 + Extending 那一片）。
 A 里我们还欠 **adding-providers / acp-internals** 两篇；
-B 里只剩 codebase-ownership / completion-backlog-delivery 两篇 —— 正好合成**第 12 章（合卷）**。
+B 的 14 篇已全部阅读；codebase-ownership / completion-backlog-delivery 合为**第 12 章**。
 
-（"插件 / 技能 / 工具群"那一族在 developer-guide 的 Extending 分组里，仓库里的占位仍写着"第 10 章"。）
+技能、上下文引擎与观察者扩展已在第 13–15 章交付；其余扩展面的范围见收尾总览。
 
 ## 环境 / 依赖
 
@@ -458,14 +462,13 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 
 改排序规则只动后者，新增一种上下文来源只动前者。Hermes 也是这么分的。
 
-## 故意没做的（等对应章节）
+## 当前未实现的能力
 
-流式输出 · **子目录 AGENTS.md 的逐步发现** · **存盘提示词的校验** · 插件段 · 外部记忆 provider ·
-**技能系统与技能索引** · Anthropic/Codex 的 API 模式 ·
-网关多平台 · 子 agent
-（~~SQLite 会话存储~~ → 第 6 章已做）
+流式输出、子目录 AGENTS.md 逐步发现、通用插件宿主、外部记忆 provider、Anthropic/Codex 原生 API、网关多平台与子 agent 尚未实现。SQLite、恢复时提示词漂移告警、技能索引与内置技能、可替换上下文引擎已实现，不能继续列为缺项。
 
-详细清单和"砍掉的代价"见《中文精译-02-AgentLoop.md》和《中文精译-03-PromptAssembly.md》的附录 B。
+## 历史章节决策备查
+
+以下保留各章交付时的取舍，后续补齐处写明。当前差距以对应讲解的维护说明及《收尾总览》为准。
 
 > 📌 **第 4 章故意跳过的，按"抄结构不抄数量"分类**：
 >
@@ -485,11 +488,11 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > - **`scoped slots` / 影子 / override 双闸门**：Hermes 允许插件注册同名工具覆盖内置的，
 >   但要过两道闸门（作者声明 `override=True` + 使用者 `config.yaml` 里 `allow_tool_override: true`），
 >   而且用 `handler.__globals__["__name__"]` 防止"包一层 lambda 冒充自己的实现"。
->   mini 没有插件系统 → 第 10 章再回来加。
+>   mini 没有通用插件覆盖机制，仍属当前差距。
 > - **`_DYNAMIC_SCHEMA_REWRITERS`**：发 schema 前动态改工具描述（Hermes 用它把
 >   "可用工具清单"塞进 `execute_code` 的描述里）。mini 没有 `execute_code` 工具。
 > - **MCP 发现**：Hermes 把它**故意**从模块级移走了（阻塞 120s 会冻结网关心跳，
->   issue #16856），改由每个入口自己在启动时跑。mini 没有网关。
+>   issue #16856），改由每个入口自己在启动时跑。mini 已有 console 网关，但没有 MCP 发现流程。
 >
 > **顺手修好的两个真 bug**（不是"没做"，是"做错了被这一章的原则抓出来"）：
 > - 提示词里一直宣传 `search_files`（"不要用 grep/find"），但注册表里**没有这个工具**
@@ -501,7 +504,7 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 >
 > **规模型**（抄了没意义）：
 > - 引擎解析链是**三跳**（`plugins/context_engine/<名字>/` → 通用插件系统 → 内置），
->   还有深拷贝保护和"找不到就警告回退"。mini 没有插件系统 → 等第 10 章。
+>   还有深拷贝保护和"找不到就警告回退"。第 14 章已补上下文引擎目录发现；通用插件宿主仍未实现。
 > - 窗口的**九级降级链**（config → 缓存 → 端点探测 → models.dev → 硬编码表 → 256K 兜底）。
 >   mini 只留"查证过的表 + 环境变量覆盖"，**宁可压早不可压晚**（理由：mini 没有被拒后补救）。
 > - 提示词缓存"**不插标记**"的判据有 **10 类**（传输方式、自定义 provider 能力声明、
@@ -509,8 +512,7 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 >
 > **归属别章**：
 > - **网关侧的会话维护（session hygiene，85%）**：进 agent 之前的兜底压缩，服务于"两轮之间长起来"的会话 → 第 7 章。
-> - **摘要失败冷却阶梯**（60→300→900s，持久化在 `state.db`）：mini 单进程、无网关、
->   无 `state.db` → 它的消费者还不存在。
+> - **摘要失败冷却阶梯**（60→300→900s，持久化在 `state.db`）：mini 已有常驻网关和 `state.db`，但未实现这一持久化冷却阶梯。
 > - **微压缩 / 原生 Responses 压缩 / Codex 三条支线**：都不是本章主线。
 >
 > **这两处"语义不同"已经在差距清单 A+B 批（`f59d4f8`）抄平了**（保留原始差异描述以备查）：
@@ -580,7 +582,7 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > **归属别章**（消费者还不存在）：
 > - **多 profile**（一 profile 一个库 + `profile_name` 列 + 回填闸门 + IDOR 范围）→ 第 7 章。
 >   代价写明：**支持多 profile 时必须补，否则静默串库**（不报错，只是用了别人的数据）。
-> - **跨进程压缩锁**（`compression_locks` / `session_turn_leases`）：mini 单进程。
+> - **跨进程压缩锁**（`compression_locks` / `session_turn_leases`）：mini 尚未实现跨进程锁；CLI 与网关可能同时访问同一个库。
 > - **网关的输入归属**（`observed` / `platform_message_id` / `effect_disposition` 与异常写入方仲裁）。
 >
 > **规模型**（抄了没意义）：
@@ -613,7 +615,6 @@ system_prompt.py    →  这些块"按什么顺序、归属哪一层"
 > 📌 **第 3 章故意跳过的三个东西，都是"等有真实需求再补"**：
 > - **子目录 AGENTS.md 逐步发现**（Hermes 的 `agent/subdirectory_hints.py`，236 行）：
 >   mini 只有单体 AGENTS.md。真实需求是"大仓库里单文件会膨胀"。
-> - **存盘提示词校验**（`_stored_prompt_matches_runtime`）：
->   `--resume` 时无法判断存的那份还对不对，现在只会继续用旧的。
+> - **存盘提示词校验**：第 6 章已补 `--resume` 时的字节比较与漂移告警；仍未实现上游完整校验策略。
 > - **技能索引**：Hermes 的 volatile 层以它打头，stable 层还有个"先占位后回填"的技巧
->   （用哪版帮助指引取决于它）。mini 没有技能系统 → 第 10 章再回来加。
+>   （用哪版帮助指引取决于它）。第 13 章已补技能索引，13b 补内置/用户两级来源。

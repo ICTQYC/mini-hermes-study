@@ -26,7 +26,7 @@
 
 三条通道驱动的都是**同一个 `AIAgent` 内核**。它们的差别只在**线格式**与各自**暴露哪一组功能**。
 
-三个术语，本篇第一次出现就在这里定下（原文没给定义，下列是照原文能指认的机制补的一句）：
+四个术语，本篇第一次出现就在这里定下（原文没给定义，下列是照原文能指认的机制补的一句）：
 
 - 「ACP」= Agent Client Protocol：Zed Industries 牵头的一套编辑器↔智能体协议，让 IDE 把 Hermes 当成"会干活的后端"接进来 —— 会话创建、提示词、工具调用、权限请求都是它的报文类型，由 `acp_adapter/` 实现。
 - 「TUI 网关」= `tui_gateway/server.py` 定义的那套 JSON-RPC 协议；Hermes 自己的 Ink TUI（`hermes --tui`）和桌面仪表盘的 PTY 桥讲的正是它。
@@ -77,11 +77,11 @@ terminal.resize         clipboard.paste         image.attach
 
 ### 在 `prompt.submit` 上回写历史（rewind）
 
-一次 rewind / 编辑 / 重新生成，本质就是一次 `prompt.submit`：它在跑新的一轮之前**丢掉已存记录的一部分**。因为这是一次**对会话持久行的破坏性重写**，网关只在客户端**明说意图**时才照做：
+一次 rewind / 编辑 / 重新生成，本质就是一次 `prompt.submit`：它在跑新的一轮之前**丢掉已存记录的一部分**。因为这是一次对当前会话历史的破坏性重写（源码保留被移除行的审计记录），网关只在客户端**明说意图**时才照做：
 
 | 参数 | 含义 |
 |---|---|
-| `truncate_before_user_ordinal` | 从哪一轮用户回合切开（**从 0 开始**的序号）。从该回合起往后全部丢弃。纯展示用的时间线行（`display_kind`）不计数。必须是真正的整数 —— JSON 布尔值会被拒，错误码 `4004`。 |
+| `truncate_before_user_ordinal` | 从哪一轮用户回合切开（**从 0 开始**的序号）。从该回合起往后退出当前活历史；源码会软归档被移除的行，见源码讲解 §六。纯展示用的时间线行（`display_kind`）不计数。必须是真正的整数 —— JSON 布尔值会被拒，错误码 `4004`。 |
 | `truncate_before_row_id` | 目标用户回合的整数 SQLite 行 ID（`messages.id` / `row_id`），从它切开。**首选的持久地址**。序号与行 ID 同时给出时，网关会校验两者一致（不一致返回 `4030`）。未知 / 过期的行 ID 会被拒（`4018`）—— **不会**回退到序号。 |
 | `confirm_truncate` | 只要发了序号、消息 ID 或行 ID 就**必须**带。它声明这次提交确实是一次 rewind，而不是一次恰好带了残留参数的普通发送。只发它、不带目标 → 拒，错误码 `4004`。 |
 | `confirm_empty_truncate` | 当这次截断会把记录清空（序号 `0`）时**额外必须**带。 |
@@ -198,7 +198,7 @@ OpenAI 兼容 API **刻意**把 `GET /v1/models` 保持得极小：它是前端�
 
 ## 4. Which one should I use? —— 该选哪一个
 
-- **你在写 IDE 插件，且这个 IDE 已经会说 ACP** → ACP。IDE 侧零协议工作量。
+- **你在写 IDE 插件，且这个 IDE 已经会说 ACP** → ACP。可复用 IDE 已有的 ACP 实现，仍需处理能力协商和接入配置。
 - **你在写自定义的桌面 / Web / TUI 宿主，想要 Hermes 的每一项功能**（斜杠命令、审批、澄清、多智能体、会话分叉） → TUI 网关 JSON-RPC。
 - **你想要任何 OpenAI 兼容前端、语言无关的 HTTP 客户端，或 curl 驱动的自动化** → API 服务器。
 - **你想要不启子进程的 Python 进程内嵌入** → 直接 `import run_agent.AIAgent`。见 [Agent Loop](https://hermes-agent.nousresearch.com/docs/developer-guide/agent-loop)。

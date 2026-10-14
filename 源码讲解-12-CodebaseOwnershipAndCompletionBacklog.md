@@ -122,7 +122,7 @@
 >     # that must not touch the byte-stable system prompt).
 > ```
 
-**要害**：这三条不是"优化"，是**边界**。第 1 条让"一次完成"在视觉上仍是它自己（批只是给"多条"才加头）；第 2 条让**另一个活会话永远无法收养别人的事件**（`another live session cannot adopt them`）；第 3 条是**缓存前缀不变式**——批文本要么进对话历史/用户回合，要么按 `TimelineNotification` 走 display，**不写系统提示词**，因此缓存前缀不变。
+**要害**：这三条不是"优化"，是**边界**。第 1 条让"一次完成"在视觉上仍是它自己（批只是给"多条"才加头）；第 2 条让**另一个活会话永远无法收养别人的事件**（`another live session cannot adopt them`）；第 3 条是**缓存前缀不变式**——批文本要么进对话历史/用户回合，要么按 `TimelineNotification` 走 display，**不写系统提示词**，因此不因这批通知改写系统提示词；其余请求内容和 provider TTL 仍影响缓存命中。
 
 ### 0.5 出错（失败与成功同批 · 全消费不开回合 · 无主即丢弃）
 
@@ -194,9 +194,9 @@
 | 3 | 通知压队（生产者闸门） | `_move_to_finished` 里 `if was_running and session.notify_on_complete:` ⇒ 入 `completion_queue`（`tools/process_registry.py:1382-1398`；队列 `:546-547`） | ❌ 无。`terminal` 没有 `background` 参数（schema 只有 `command` / `timeout`），没有进程可"完成" | ⏭ 不抄（mini 无生产者） |
 | 4 | CLI 三件套（idle 排出 / post-turn 排出 / 最终解包） | `hermes_cli/cli_process_notifications.py:22-43`（drain）+ `:45-63`（unwrap，`:51-54` 是渲染点）；调用点 `cli.py:3467` / `cli.py:3602-3603` | ❌ 无。mini CLI 唯一汇报口是 `cli.py:152 _on_text` ← `run_agent.py:370-371`，**没有"通知回合"入口** | ⏭ 不抄（mini 无生产者） |
 | 5 | 消费抑制（两集合 + 三入口 + 两处判断 · poll 不消费） | 两集合 `_completion_consumed` / `_poll_observed`（`tools/process_registry.py:554-563`）；三入口 wait/log/kill（`:1797-1799` / `:1763-1764` / `:1871-1887`，`kill` 的 `consume_output` docstring `:1845-1852`）；drain 跳过 `:1538-1547`+`:1601-1604`、渲染复查 `process_registry_notifications.py:20-22`；`poll` 故意不消费 `:1726-1731` | ❌ 无。依赖进程注册表；且"已消费"的前提是**有人能消费**（`process_manage` 不存在） | ⏭ 不抄（mini 无生产者） |
-| 6 | 归属判定（会话键 + 压缩 lineage） | `_session_owns_notification_event`（`tui_gateway/session_notifications.py:94-103`）+ `_notification_event_requires_owner`（`:106-108`）+ `_notif_resolve_event_key` 压缩轮转解析（`:38-46`）；跨 profile fail-closed `:80-91` | ❌ 无。需要多会话/多消费者模型；mini 单进程单会话（网关会话键在 `gateway/run_turn.py:75-84` 是**作用域**，不是通知归属） | ⏭ 不抄（mini 无生产者） |
+| 6 | 归属判定（会话键 + 压缩 lineage） | `_session_owns_notification_event`（`tui_gateway/session_notifications.py:94-103`）+ `_notification_event_requires_owner`（`:106-108`）+ `_notif_resolve_event_key` 压缩轮转解析（`:38-46`）；跨 profile fail-closed `:80-91` | ❌ 无。需要多会话/多消费者模型；mini 已有多会话网关，但没有后台进程通知的共享队列（网关会话键在 `gateway/run_turn.py:75-84` 是**作用域**，不是通知归属） | ⏭ 不抄（mini 无生产者） |
 | 7 | 全消费的批不开回合 | `render()` 返回 `None`（`tools/process_registry_notifications.py:26-27`）⇒ `if text is None: _notif_release_turn(session)`（`tui_gateway/session_notifications.py:518-519`） | ❌ 无。同上，无批可"全消费" | ⏭ 不抄（mini 无生产者） |
-| 8 | TUI 快照分组 + 结构化 requeue | 轮询器掏空成 ready 快照（`session_notifications.py:663-673`）；`_notif_handle_ready` 逐事件判归属、遇非 completion 先 flush（`:533-544`）；忙会话 requeue **原事件**（`:508-513`） | ❌ 无。mini 无 TUI/桌面消费者；网关回合边界只有 `gateway/run_turn.py` 的同步串行 | ⏭ 不抄（mini 无生产者） |
+| 8 | TUI 快照分组 + 结构化 requeue | 轮询器掏空成 ready 快照（`session_notifications.py:663-673`）；`_notif_handle_ready` 逐事件判归属、遇非 completion 先 flush（`:533-544`）；忙会话 requeue **原事件**（`:508-513`） | ❌ 无。mini 无 TUI/桌面消费者；网关同会话串行、不同会话可在线程中并发；没有后台完成事件通知通道 | ⏭ 不抄（mini 无生产者） |
 | 9 | post-turn 安全网（TUI） | `tui_gateway/prompt_turn.py:434-452`：同一 `drain_notifications`（`skip_poll_observed=False`）+ `_notif_handle_ready(..., owned=True)` | ❌ 无。同 #8 | ⏭ 不抄（mini 无生产者） |
 | 10 | 网关**自有**的路由键短窗批（0.1s） | `gateway/run_notifications.py`：窗默认 0.1s（`:1527`）、按路由键分组入队（`:1521-1543`）、合并渲染（`:1420-1448`，最多展示 10 条）。文档逐字：本次改动**不**替代它 | ❌ 无。mini 网关出站唯一出口是 `gateway/delivery.py:47-63`（`Delivery.deliver` → `adapter.send()`），没有通知批 | ⏭ 不抄（**抄形状不抄窗**：与 #2 的无窗口设计相反） |
 | 11 | headless / ACP 自主通知循环 | 文档**负向声明**：`this change does not create a new autonomous notification loop for an API request, ACP client, or one-shot CLI`（`completion-backlog-delivery.md:31-32`）；代码侧**只有反证**、无逐字否定 | ❌ 无。不存在的机制无从抄 | ⏭ 不抄（负向声明） |
@@ -229,7 +229,7 @@
 
 1. **改动留在自己的子系统内** —— 判据是"**耦合边界**"：一个需要改核心文件的插件，说明它越过了自己的边界，是**设计坏味道**（design smell）；正确方向是**把通用的插件接口加宽**，而不是往核心里塞特例。
 2. **每个碰过的源码目录，都跑它对应的镜像测试目录** —— 判据是"**目录镜像**"：改 `plugins/platforms/telegram/` 就要 `tests/plugins/platforms/` 绿，而不是只跑你恰好想到的那个测试文件。
-3. **两个子系统都涉及时，更窄的那个拥有改动** —— 判据是"**代价**"：优先在**适配器或插件**里修，而不是在 agent core 里加分支；因为核心是**窄腰**（narrow waist），**在那里每加一样东西，每次 API 调用都要付一次账**。
+3. **两个子系统都涉及时，更窄的那个拥有改动** —— 判据是"**代价**"：优先在**适配器或插件**里修，而不是在 agent core 里加分支；因为核心是**窄腰**（narrow waist），**在那里每加一样东西，会扩大共享核心的影响范围；具体调用开销取决于执行路径**。
 
 所以这一篇的"机制"其实是**三条约定的判据**：边界越界 ⇒ 加宽接口；目录改过 ⇒ 跑镜像；核心与边缘冲突 ⇒ 边缘（更窄）拥有。
 
@@ -251,17 +251,18 @@
 - **一张 11 行映射表**（`README.md:286-298`），每行是 `你改了 | 必须跑`。它**不是照搬**真实版的镜像层次，而是**按 mini 的实际布局反推**（README 逐字：`下表由各测试文件实际 import 的模块反推，不是凭印象列的`）。例：`hermes_state_errors.py` · `hermes_state_fts.py` · `hermes_state_repair.py` · `hermes_cli/sessions_cmd.py` ⇒ `tests/test_state_db_recovery.py`（+ `test_session_storage.py`）；`tools/` · `tools/registry.py` · `toolsets.py` ⇒ `tests/test_tools_runtime.py`。
 - **三条约定在 mini 的对应物**（`README.md:300-307`）：①改动留在子系统内 = mini 的**两道闸门**（`tools/` 下工具靠 AST 自动发现 + `toolsets.py:53-70` 的 `TOOLSETS` 白名单——不登记就永远看不见）；②跑镜像测试 = mini **没有镜像层次**（`tests/` 是**平铺**的 11 个 `test_*.py`），只能用上面那张表，拿不准就全套跑（双解释器）；③更窄的拥有改动 = 现成例子 `gateway/run_turn.py:75-84`（回合作用域绑在**这条消息所属的** profile 上——更窄处，而不是网关启动时的 `self.home`）。
 
-★ **为什么落 README 而不是 `mini-hermes/AGENTS.md`**：本章落地**原计划**是加在 `mini-hermes/AGENTS.md`（因为真实版这份表的落点就是 `AGENTS.md`）。但仓库根的 `AGENTS.md`（100 行）是**受保护的 agent 指令文件**，本轮落地的**审批未获同意**，故改落**可写的** `README.md`。这不是将就——README 本来就是 mini 已用的"章节 ↔ 文件"映射载体（`README.md:22` 起），归属表放这里与既有体例**同源**。
+归属映射最初落在 `mini-hermes/README.md`，当前根 `AGENTS.md` 也已包含这套协作约定。
+读者使用 README 导航，续工时同时遵守 AGENTS.md；新增子系统应同步两处对应映射。
 
 **④ 与真实版的差别**：
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 载体形态 | **镜像目录 + 一篇地图**：`tests/` 镜像源码树（`tests/tools/`、`tests/plugins/<type>/`…，真实 `tests/` 共 4527 文件），地图文档 `codebase-ownership.md`（17 行表） | **平铺 + 一张表**：`tests/` 只有一个目录、11 个 `test_*.py` 平铺；表在 `README.md:286-298`（11 行） |
+| 载体形态 | **镜像目录 + 一篇地图**：`tests/` 镜像源码树（`tests/tools/`、`tests/plugins/<type>/`…，真实 `tests/` 共 4527 个跟踪文件），地图文档 `codebase-ownership.md`（17 行表） | **平铺 + 一张表**：`tests/` 只有一个目录、11 个 `test_*.py` 平铺；表在 `README.md:286-298`（11 行） |
 | 约定 2（跑测试） | "跑**镜像**测试目录"（`AGENTS.md:346` `Placement mirrors the source tree`） | ⏭ **落不了地**：没有镜像层次 ⇒ 用显式映射表替代（`README.md:305`） |
 | 约定 1（留在子系统内） | 靠"插件不得改核心"的**设计坏味道**判断 | ✅ **部分可落地（形态不同）**：mini 是 `tools/` + `toolsets.py` **两道真实闸门**（`toolsets.py:53-70`），但没有插件系统 ⇒ 真实版那个具体场景不存在 |
 | 约定 3（更窄的拥有） | "窄腰"论（`AGENTS.md` 评审准则） | ✅ **可落地为一条原则**：已有现成例子 `gateway/run_turn.py:75-84`，只是缺一个正式的名字 |
-| 落点文件 | 仓库根 `AGENTS.md`（评审准则 `:31`）+ 镜像测试规则 `:346` | **README.md**（`:279` 起）；`mini-hermes/AGENTS.md` **不存在**，根 `AGENTS.md` 是受保护文件（未获审批） |
+| 落点文件 | 仓库根 `AGENTS.md`（评审准则 `:31`）+ 镜像测试规则 `:346` | **README.md**（`:279` 起）；`mini-hermes/AGENTS.md` **不存在**，根 `AGENTS.md` 当前也已包含归属映射 |
 
 ---
 
@@ -339,7 +340,7 @@
 | `_completion_consumed` | `wait()` / `read_log()`（只读到底）/ `kill_process(consume_output=True)` | **真消费**：调用方手里已经有输出 | drain 跳过 + **TUI/渲染复查**都认 |
 | `_poll_observed` | 仅 `poll()` | **只读观测**：仅够 CLI 同回合去重 | 只被 CLI 的 `drain_notifications` 读；**网关/TUI 轮询器刻意忽略** |
 
-关键在 `poll` **故意不消费**（真实 `tools/process_registry.py:1726-1731`）：`poll()` 是**只读**的状态检查，若它把会话记进 `_completion_consumed`，就等于「查一眼状态 = 认领了结果」——**会误杀 watcher 的自主投递回合**（把本该自动送达的完成通知抑制掉）。所以 `poll` 只记 `_poll_observed`（吃住 CLI 的「同一回合内已经内联看到结果、别再插一条 `[SYSTEM: …]`」），而 `_drain_should_skip` 对 CLI 传默认 `skip_poll_observed=True`、对 TUI 传 `False`（`prompt_turn.py:442`）——**同一批事件，两个消费者的跳过语义不同**，这不是不一致，是各自场景的要求。两集合都是**模块级生命期**的，只在会话**彻底不再被追踪**时才清（`:2186-2190`：`self._completion_consumed &= tracked`）。
+关键在 `poll` **故意不消费**（真实 `tools/process_registry.py:1726-1731`）：`poll()` 是**只读**的状态检查，若它把会话记进 `_completion_consumed`，就等于「查一眼状态 = 认领了结果」——**会误杀 watcher 的自主投递回合**（把本该自动送达的完成通知抑制掉）。所以 `poll` 只记 `_poll_observed`（吃住 CLI 的「同一回合内已经内联看到结果、别再插一条 `[SYSTEM: …]`」），而 `_drain_should_skip` 对 CLI 传默认 `skip_poll_observed=True`、对 TUI 传 `False`（`prompt_turn.py:442`）——**同一批事件，两个消费者的跳过语义不同**，这不是不一致，是各自场景的要求。两集合属于注册表实例；常驻注册表使它们长期存活，只在会话**彻底不再被追踪**时才清（`:2186-2190`：`self._completion_consumed &= tracked`）。
 
 **归属判定则完全不看注册表，只看「会话键 + UI 起点 + 压缩 lineage」。** 一条 completion 要被投递，必须先证明「**本会话确凿地拥有它**」——这是一个 **fail-closed** 的正证明：`_session_owns_notification_event`（`tui_gateway/session_notifications.py:94-103`）先查 `session` 是否已 `_finalized`（是→`False`），再比 `origin_ui_session_id == sid`，最后才比 `session_key`——注意最后一句用的是 `_notif_resolve_event_key(evt_key, session)` 把**被压缩轮转的父键**解析到「续接尖端」（`:38-46`，走 `db.resolve_resume_session_id`）。**判据是会话键与压缩 lineage，不是进程注册表**：注册表提供的是「消费没消费」（`is_completion_consumed` `:1434-1436`），归属提供的是「该不该给你」。两者是正交的两问，缺一不可。
 
@@ -367,7 +368,7 @@
 **③ mini 的实现（现状）**：⏭ **不抄——mini 既没有注册表，也没有消费者**。这一整节的两根支柱在 mini 里都不存在：
 
 - **没有「消费」这一半**：消费抑制要挂在 `wait/log/kill/poll` 这些**显式入口**上，而这些入口属于 `process_manage` 与进程注册表——mini **全仓 grep `process_manage|process_registry` 零命中**（唯一命中是 `tools/terminal.py:17` 那句「故意不做」的注释）。既然没有「谁在消费」，也就无所谓 `_completion_consumed` / `_poll_observed` 的分工。
-- **没有「归属」这一半**：归属的前提是**多会话 / 多消费者**共用一条队列，而 mini 是**单进程单会话**——CLI 是同步串行 REPL（`mini-hermes/cli.py` 的 `repl`：`input()` → `agent.run_conversation()`），唯一汇报口是 `cli.py::_on_text`（`mini-hermes/cli.py:153` 的 `print(text)`），由 `mini-hermes/run_agent.py:493` 的**唯一一处** `self.text_callback(final_response)` 调用。**没有第二张脸能来抢事件**，就**没有「谁说了算」这个问题**；`origin_ui_session_id`、压缩 lineage 解析、跨 profile 归属这些判据统统无对象可判。
+- **没有「归属」这一半**：归属的前提是**多会话 / 多消费者**共用一条队列，而 mini 的 CLI 是串行交互，而网关已支持多会话；这里仍缺共享后台完成队列——CLI 是同步串行 REPL（`mini-hermes/cli.py` 的 `repl`：`input()` → `agent.run_conversation()`），唯一汇报口是 `cli.py::_on_text`（`mini-hermes/cli.py:153` 的 `print(text)`），由 `mini-hermes/run_agent.py:493` 的**唯一一处** `self.text_callback(final_response)` 调用。缺的是共享完成队列及其通知消费者，而不是缺少多个网关会话；`origin_ui_session_id`、压缩 lineage 解析、跨 profile 归属这些判据统统无对象可判。
 - 顺带，连**「通知回合」这个概念**在 mini 里都不存在（没有 `cli_process_notifications.py` / `session_notifications.py` / `prompt_turn.py` 的等价物），`_notif_release_turn` / 「全消费的批不开回合」也就没有落点。
 
 **一句话**：本节两条机制（消费抑制、归属判定）都是**为「多个消费者抢同一条队列」这件事服务的**；mini 里这件事**不存在**，所以不是「做得浅」，是**没有要解决的问题**。硬抄会得到一对**永远不触发**的集合与谓词——又是一个「为不存在的场景抽基础设施」的例子（mini 自己的纪律原话见 `tools/terminal.py:20`）。
@@ -379,14 +380,14 @@
 | 身份保留 | `ProcessNotificationBatch` 冻结 `(event, text)`，`render` 时才复查消费（`tools/process_registry_notifications.py:14-36`） | ⏭ 不抄（无批对象、无「保留到派发」的时点） |
 | 消费抑制两时点 | drain 跳过（`tools/process_registry.py:1538-1547`，调用点 `:1601-1604`）+ 渲染复查（`_live` `:20-22`） | ⏭ 不抄（无进程注册表，无 drain/render 两时点） |
 | 两集合分工 + poll 不消费 | `_completion_consumed` / `_poll_observed`（`:554-563`）；`poll` 只记 `_poll_observed`（`:1726-1731`） | ⏭ 不抄（无 `wait/log/kill/poll` 入口） |
-| 归属判定（fail-closed 正证明） | `_session_owns_notification_event`：sid + `origin_ui_session_id` + 压缩 lineage（`tui_gateway/session_notifications.py:94-103`）；无主丢弃不收养（`:449-474`） | ⏭ 不抄（单进程单会话，无第二消费者） |
+| 归属判定（fail-closed 正证明） | `_session_owns_notification_event`：sid + `origin_ui_session_id` + 压缩 lineage（`tui_gateway/session_notifications.py:94-103`）；无主丢弃不收养（`:449-474`） | ⏭ 不抄（mini 缺少后台完成通知生产者与对应消费者） |
 | 全消费的批不开回合 | `render` 返回 `None` → `_notif_release_turn`（`session_notifications.py:518-519`） | ⏭ 不抄（无「回合名额」概念） |
 
 ---
 
 ## §四 为什么不落系统提示词
 
-**① Hermes 怎么做的**：批与它的投递状态**都不**进系统提示词（`Neither a batch nor its delivery status is persisted into the system prompt`）。这不是为了省 token，而是一条**缓存不变式**——**每会话的系统提示词必须字节稳定**。它是"缓存前缀"：提供商侧按请求开头**逐字节**比对，系统提示词里一旦多出一行"第 3 个后台进程完成了"，整段缓存前缀当场作废，该会话**后续每一轮**都要重新付费、从头算一遍。文档结尾那句原话把口径钉死：*"It measures turn admission at the notification boundary, not model token savings."*（上游 doc 第 52 行）——这条设计量的是**通知边界上的回合准入**，不是模型层省下的 token。所以"不落提示词"是**正确性**要求（缓存前缀不许被逐回合事实污染），不是**优化**。
+**① Hermes 怎么做的**：批与它的投递状态**都不**进系统提示词（`Neither a batch nor its delivery status is persisted into the system prompt`）。这不是为了省 token，而是一条**缓存不变式**——**每会话的系统提示词必须字节稳定**。它是"缓存前缀"：提供商侧按请求开头**逐字节**比对，系统提示词里一旦多出一行"第 3 个后台进程完成了"，整段缓存前缀当场作废，变化点之后的旧前缀无法沿用；新前缀建立缓存后，后续请求仍可能命中，不会因此永久全量计费。文档结尾那句原话把口径钉死：*"It measures turn admission at the notification boundary, not model token savings."*（上游 doc 第 52 行）——这条设计量的是**通知边界上的回合准入**，不是模型层省下的 token。所以"不落提示词"是**正确性**要求（缓存前缀不许被逐回合事实污染），不是**优化**。
 
 于是批的投递走**另一条路**：作为**回合输入**进模型。CLI 侧，批对象先放进 `_pending_input` 队列，**直到 REPL 取出它才 `render()`**，再包成 `TimelineNotification` 当作**用户回合输入**进入会话（`hermes_cli/cli_process_notifications.py:22-43` 排出 → `:45-63` 解包；调用点 `cli.py:3467`（idle）/ `cli.py:3603`（post-turn））。TUI 侧经 `_notif_submit` → `_run_prompt_submit`（`tui_gateway/session_notifications.py:158-162`）提交。它要么进对话历史 / 用户回合，要么按 `TimelineNotification` 走 display，**从不写进系统提示词**。
 
@@ -410,11 +411,11 @@
 
 **③ mini 的实现（现状）**：mini 侧**没有**完成回执这套投递（无生产者，见 §五③），但这条**不变式本身**在 mini 是**已落地**的，而且从第 3 / 10 章起就在守：
 
-- 系统提示词**装配一次、缓存在 agent 上**——`agent/system_prompt.py:292` 的 `build_system_prompt` 命中 `_cached_system_prompt` 直接返回（`:307-310`），只在压缩后才重建；其 docstring 逐字："**缓存是这一章的立章之本，不能省**……后果是'同一会话内系统提示词字节不稳定'——**这个 bug 没有症状，只有账单**。"
+- 系统提示词**装配一次、缓存在 agent 上**——`agent/system_prompt.py:292` 的 `build_system_prompt` 命中 `_cached_system_prompt` 直接返回（`:307-310`），在压缩、技能重载、引擎上下文更新等明确边界重建；其 docstring 逐字："**缓存是这一章的立章之本，不能省**……后果是'同一会话内系统提示词字节不稳定'——**这个 bug 没有症状，只有账单**。"
 - "逐回合的话"在 mini 也走**请求副本、不动历史**——`run_agent.py:564-569` 的 `ephemeral_system_prompt` 只拼到**本次 API 调用**的"有效系统消息"末尾，`messages` 本身不动（注释逐字：`messages stays untouched`）；`_build_api_messages` 返回的副本"**就是发给提供商的那份请求**……**动它就是在动缓存**"。
 - 契约测试 `tests/test_prompt_assembly.py:12` 第 2 组就叫"**字节稳定性 ★**"（同一会话反复构建字节完全相同、重建后仍相同、记忆写入**不**立即进提示词）。
 
-也就是说：真实的"批不落提示词"这条规矩，其**载体**（提示词字节稳定 + 逐回合事实走模型输入）在 mini **已经存在**，只是 mini 现在还没有"批"这种东西来骑它。
+也就是说：真实的"批不落提示词"这条规矩，其**基础系统提示词缓存已经存在；但 mini 的 `ephemeral_system_prompt` 会修改本次请求的系统消息，不能当成上游“把动态通知放到用户输入”的完全等价实现，只是 mini 现在还没有"批"这种东西来骑它。
 
 **④ 与真实版的差别**：
 
@@ -428,7 +429,7 @@
 
 ## §五 五个消费者的归属与入口
 
-**① Hermes 怎么做的**：同一条"完成回执"，在 Hermes 里有**五个投递面**，各管一段：Classic CLI、TUI/Desktop 轮询器、post-turn 安全网、消息网关、无头/非交互。它们**共享同一套渲染**（`ProcessNotificationBatch` / `group_process_notifications` / `format_process_notification`），但**归属入口各不相同**——这正是本节的题面。
+**① Hermes 怎么做的**：同一条"完成回执"，在 Hermes 里有**五个投递面**，各管一段：Classic CLI、TUI/Desktop 轮询器、post-turn 安全网、消息网关、无头/非交互。它们**CLI 与 TUI 共享批渲染器，消息网关另有自己的 `_format_coalesced_process_completions`，但**归属入口各不相同**——这正是本节的题面。
 
 **为什么必须共享一个渲染器**：批的**形状**（单条保原文、多条加 `[IMPORTANT: N background processes completed…]` 头、`_live()` 在渲染时复查消费）是一条**跨消费者的契约**。若每个消费者各写一份渲染，同一批在 CLI 与桌面会渲染成**不同文本**，`preserve failures and actionable results` 这条纪律立刻出现漂移（"CLI 保住了失败项、桌面没有"）；更硬的是，**消费抑制的复查点就在渲染里**（`render()` → `_live()` → `is_completion_consumed`），各写一份就是各造一个**可能忘记复查**的抑制点。所以渲染器只有一个，消费者只负责"把已就绪的结构化事件**按归属认领、排空、投给这个渲染器**"。
 
@@ -463,7 +464,7 @@
         handle(ready, None)
 ```
 
-**要害**：这段钉死了"**就绪快照**"这个词的物理含义——先阻塞 `get(timeout=0.5)` 拿到**至少一个**事件，再 `get_nowait` 把此刻队列里**已经就绪**的其余事件一次掏空成 `ready`。**它没有等待窗口**：掏到什么就是什么，掏的过程中新到的事件留到下一轮。所以"批"的边界就是**这一次快照的边界**，不是"0.1 秒内到齐的"。这既是"无窗口合并"能成立的证据，也是与网关那套（真有一个 0.1s 窗）的分水岭——共享渲染器、不共享排空策略。
+**要害**：这段钉死了"**就绪快照**"这个词的物理含义——先阻塞 `get(timeout=0.5)` 拿到**至少一个**事件，再 `get_nowait` 把此刻队列里**已经就绪**的其余事件一次掏空成 `ready`。**它没有等待窗口**：掏到什么就是什么，以 `qsize()` 取数时的轮询次数限制读取；并发消费者及新事件可能影响实际快照，它不是严格原子的时间截面。所以"批"的边界就是**这一次快照的边界**，不是"0.1 秒内到齐的"。这既是"无窗口合并"能成立的证据，也是与网关那套（真有一个 0.1s 窗）的分水岭——共享渲染器、不共享排空策略。
 
 **③ mini 的实现（现状）**：mini 侧这**五个消费者一个都不存在**。mini 的汇报面只有两条，且都不是"完成回执"：
 
@@ -505,11 +506,11 @@ mini **没有** `cli_process_notifications.py` / `session_notifications.py` / `p
 
 它断言**五条**（在返回的 dict 里）：`wire_turns`（起了几个回合）、`payload_order`（每个负载落在第几个回合，单调不减）、`delegation_delivered_once`（委派恰好投递一次）、`all_payloads_preserved`（每个负载都出现过）、`single_exact`（单条时文本精确相等）。
 
-**固定装置（fixture）与真账本**：合成的 watch 与委派信封是**内联的固定装置**，但**委派认领用的是真临时 SQLite 账本**——`ad._persist_dispatch(delegation)` / `ad._persist_completion(delegation, {...})`（`:109-110`）真写进账本，`claim` 走真事务 `with ad._transaction() as conn:`（`:157-159`）。所以"委派恰好投递一次"是在**真账本**上读出来的，不是内存桩。
+**测试样本（fixture）与真账本**：合成的 watch 与委派信封是**内联的测试样本**，但**委派认领用的是真临时 SQLite 账本**——`ad._persist_dispatch(delegation)` / `ad._persist_completion(delegation, {...})`（`:109-110`）真写进账本，`claim` 走真事务 `with ad._transaction() as conn:`（`:157-159`）。所以"委派恰好投递一次"是在**真账本**上读出来的，不是内存桩。
 
 **两条"如实标注"的未确认项**（取证笔记明写"不要写成结论"）：
 
-- ★ **"合成 watch 与委派信封是标注的固定装置（labeled fixtures）"里的 "labeled" 在源码里没有对应的独立标签字段。** 源码可见的只有**内联的硬编码字典**（watch 与 delegation），没有给 fixture 打 label 的字段。"合成 watch / 委派信封是固定装置"这一点**与源码一致**；"labeled"这个词**未在源码落到实处**。
+- ★ **合成 watch 与委派信封属于标注的测试样本（labeled fixtures）**。标注可以写在样本文本中，不必另建 label 字段；探针里的 `goal: Fixture delegation` 已表达这种性质。不能把没有独立字段当作未落实。
 - ★ **"批用例包含失败与成功同批"：** `sys.exit(7 …)`（**非零退出码**）**逐字存在**（`:90`），但"**失败项与成功项确实落在同一回合**"这一点，测试文件**没有单独断言**——它只断言了 `wire_turns` / `all_payloads_preserved` 等；失败项是否与成功项同批需依赖 probe 的 `texts` 内容判断。**未运行，不下定论**。
 
 **② 读 Hermes 的代码**：`evals/completion_backlog_probe.py:1-6`（模块 docstring，逐字；用法与边界都在这里）：
@@ -536,7 +537,7 @@ ownership, consumption, queue draining, batching, or formatting.
 |---|---|---|
 | 验证探针 | `evals/completion_backlog_probe.py`（真子进程 + loopback sink，3 面 × 5 场景 = 15 次） | ⏭ 不抄（mini 无生产者）：无探针 |
 | 验什么 | I/O 的合并 / 归属 / 消费 / 排空 / 渲染；**不**验模型推理 / 原生渲染器 / 托管平台 | ——（无可验对象） |
-| 固定装置 | 合成 watch / 委派信封（★ "labeled" 源码无独立标签字段）；委派用**真 SQLite 账本** | ⏭ 不抄：无 watch / 委派 / 账本 |
+| 测试样本 | 合成 watch / 委派信封（★ "labeled" 源码无独立标签字段）；委派用**真 SQLite 账本** | ⏭ 不抄：无 watch / 委派 / 账本 |
 | "真跑"的形式 | 探针跑 15 次 + 断言 5 条 | 本章**无新代码** ⇒ 真跑 = 跑一遍全套件作"未破坏"收据（1,309 / 1,305） |
 
 ---
@@ -559,7 +560,7 @@ ownership, consumption, queue draining, batching, or formatting.
 
 **顺带修掉的陈旧数字**：README 里"全套件：792 条断言"改成 `README.md:322-323` 的 **1,309 条断言 / 0 失败（3.13.14）· 1,305 / 0 失败（3.9.6）**，并注明差额 4 条的成因（3.9 的 SQLite 拒 `DROP messages_fts_data`，第 8 组那条"真删 FTS 影子表"造不出来）。
 
-**★ 为什么落在 README 而不是根 `AGENTS.md`**：根 `AGENTS.md`（100 行，仓库根=上一级）是**受保护的 agent 指令文件**，写它的审批提示**超时未回应**（超时不算同意），工具明确禁止重试。于是改落**不受保护**的 `mini-hermes/README.md`——职能同样成立，README 本就是本项目的"地图"文档（它已有"章节 ↔ 文件"映射与"发布前自检"块）。若希望这段进 `AGENTS.md`，要在下一次审批提示里点同意。
+**当前载体**：本章最初在 README 登记映射，根 `AGENTS.md` 现也包含对应规则。这里记录历史落地位置，不能再说该映射尚未进入 AGENTS.md。
 
 **② 为什么不做 B 篇：mini 连生产者都没有**
 
@@ -623,7 +624,7 @@ mini 自己的纪律也指向同一个结论：
 | **A1** | 在 `mini-hermes/README.md` 加一节「**改动 → 该跑哪些测试**」映射表 | `codebase-ownership.md:8/33`：约定 2「跑镜像测试目录」（`tests/` 镜像源码树） | `README.md:279`（节标题）+ `:286-298`（**11 行映射表**，由各测试文件实际 import 的模块反推） | ✅ 已做（`653b627`） |
 | **A2** | 三条约定在 mini 的对应物 | `codebase-ownership.md:8`（地图）+ `:32/33/34`（三条约定） | `README.md:300-307`：① 两道闸门（`tools/` AST 自动发现 + `toolsets.py:53-70` 白名单）· ② 平铺布局只能落成那张表 · ③ 现成例子 `gateway/run_turn.py:75-84`（作用域绑更窄处） | ✅ 已做（`653b627`） |
 
-> 附注：清单原方案 A1 是写进 `mini-hermes/AGENTS.md`，但根 `AGENTS.md` 是**受保护的 agent 指令文件**、审批超时未获同意，改落不受保护的 `README.md`（职能同样成立）。这一节另顺带修掉 README 陈旧的全套件数字（`792` → `README.md:322-323` 的 `1,309/1,305`）。
+> 附注：本章历史落地在 README；根 AGENTS.md 当前也有归属映射。下面测试数字为本章交付时的记录，最新数字见 README。
 
 ### B 批（不抄，8 条）
 
@@ -633,7 +634,7 @@ mini 自己的纪律也指向同一个结论：
 | **B2** | 无窗口切批 `group_process_notifications`（只合并连续 completion；watch/委派是屏障） | `tools/process_registry_notifications.py:39-51` | 同上；且 mini **没有 watch/委派**这两种"屏障"概念（`watch_` 零命中、无 `delegate_task`） |
 | **B3** | CLI 三件套（idle/post-turn 排出 · 压缩感知归属 · 最终输入解包） | `hermes_cli/cli_process_notifications.py:22-63`；调用点 `cli.py:3467`（idle）/ `cli.py:3603`（post-turn） | mini 的 CLI 唯一汇报口是 `cli.py:152 _on_text` ← `run_agent.py:370-371`，**没有"通知回合"这个入口**；REPL 是同步串行（回合间无队列、无"回合后排出"） |
 | **B4** | 消费抑制（三入口 add + 两集合 `_completion_consumed`/`_poll_observed`，drain 与 render 两处抑制） | `tools/process_registry.py:554-563`（两集合）、`:1797`（wait 消费）/ `:1763-1764`（log）/ `:1871-1887`（kill）、`:1538-1547,1601-1604`（两处抑制）；`poll` 故意不消费 `:1726-1731` | 依赖进程注册表；且"**已消费**"的前提是**有人能消费**——mini 没有 `process_manage`（无 wait/log/kill/poll），没有可消费的入口 |
-| **B5** | 归属判定（会话键 + `origin_ui_session_id` + 压缩 lineage；unowned 直接丢弃不收养） | `tui_gateway/session_notifications.py:94-108`（正证明）/ `:449-474`（判不过即丢，不收养孤儿）；跨 profile `:80-91` | 需要**多会话/多消费者**模型；mini 单进程单会话，无 TUI/桌面轮询器，没有"另一个 live session 可能认领我的事件"这种处境 |
+| **B5** | 归属判定（会话键 + `origin_ui_session_id` + 压缩 lineage；unowned 直接丢弃不收养） | `tui_gateway/session_notifications.py:94-108`（正证明）/ `:449-474`（判不过即丢，不收养孤儿）；跨 profile `:80-91` | 需要**多会话/多消费者**模型；mini 已有多会话网关，但没有后台进程通知的共享队列，无 TUI/桌面轮询器，没有"另一个 live session 可能认领我的事件"这种处境 |
 | **B6** | 全消费的批不启动回合 | `tools/process_registry_notifications.py:26-27`（`render` 返回 `None`）→ `tui_gateway/session_notifications.py:518-519`（`if text is None: _notif_release_turn(session)`） | 同上：依赖"批 + 消费标记 + 回合占用"三件基座，mini 全无 |
 | **B7** | 网关**自有**的路由键短窗批（0.1s 窗） | `gateway/run_notifications.py:1527`（窗口默认值 `0.1`）· `:1420-1448`（`_format_coalesced_process_completions`）· `:1521-1543`（入队）· `:1456-1493`（flush）；路由键 `:70-71` | **抄形状不抄窗**：这是**另一套**机制（带 0.1s 窗，与本章"无窗口"设计相反），上游文档 `:28-30` 明确"本次改动**不**替代它"；mini 网关的通知面只有 `gateway/delivery.py:47-63` 的 `deliver`（无本地短窗批） |
 | **B8** | headless/ACP 的自主通知循环 | 文档**负向声明**「this change does not create a new autonomous notification loop…」（`completion-backlog-delivery.md:31-32`）；代码侧**只有反证**，无逐字否定 | 不存在的机制无从抄；全仓 `git grep "autonomous notification loop"` **只命中文档本身**，无从给出正向 `文件:行号`（见附录 C ②） |
@@ -766,7 +767,7 @@ mini 自己的纪律也指向同一个结论：
 | **⑧ CLI drain 三件套（idle/post-turn 排出 · 压缩感知归属 · 最终解包）** | `hermes_cli/cli_process_notifications.py:22-63`（归属 `:5-20`）；调用点 `cli.py:3467/3603` | ——（B3 不抄：CLI 唯一汇报口 `cli.py:152 _on_text` ← `run_agent.py:370-371`，无"通知回合"入口）| 消费者与归属 |
 | **⑨ TUI/桌面轮询器：就绪快照分组** | `tui_gateway/session_notifications.py:663-673`（快照）+ `:533-544`（分组）| ——（B 批不抄：mini 无 TUI/桌面）| 消费者与归属 |
 | **⑩ post-turn TUI 安全网** | `tui_gateway/prompt_turn.py:434-452` | ——（同⑨）| 消费者与归属 |
-| **⑪ 归属判定（会话键 + `origin_ui_session_id` + 压缩 lineage；unowned 丢弃不收养）** | `tui_gateway/session_notifications.py:94-108/106-108/449-474`；跨 profile `:80-91`；键解析 `:38-46` | ——（B5 不抄：需多会话多消费者；mini 单进程单会话）| 消费者与归属 |
+| **⑪ 归属判定（会话键 + `origin_ui_session_id` + 压缩 lineage；unowned 丢弃不收养）** | `tui_gateway/session_notifications.py:94-108/106-108/449-474`；跨 profile `:80-91`；键解析 `:38-46` | ——（B5 不抄：需多会话多消费者；mini 已有多会话网关，但没有后台进程通知的共享队列）| 消费者与归属 |
 | **⑫ 消费抑制（两集合 + 三入口 + 两时点）** | 两集合 `tools/process_registry.py:554-563`；wait `:1797`·log `:1763-1764`·kill `:1871-1887`；drain 跳过 `:1538-1547/1601-1604`；render 复查 `process_registry_notifications.py:20-22`；`poll` 不消费 `:1726-1731`；清理 `:2186-2190` | ——（B4 不抄：无进程注册表、无 `process_manage`，"已消费"无人可消费）| 第二部分 |
 | **⑬ 全消费的批不启动回合** | `process_registry_notifications.py:26-27` + `session_notifications.py:518-519` | ——（B6 不抄：同⑫）| 第二部分 |
 | **⑭ 网关自有路由键短窗批（0.1s 窗，本次**不替代**）** | `gateway/run_notifications.py:1527/70-71/1420-1448/1521-1543/1456-1493` | ——（B7 **抄形状不抄窗**：另一套机制；mini 出站唯一 `gateway/delivery.py:47-63`）| 消费者与归属 / 第二部分 |

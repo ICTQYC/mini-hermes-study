@@ -4,6 +4,8 @@
 
 > mini 当前维护说明见对应《源码讲解》的“发布前维护”节；原文翻译与历史实测不代替当前实现契约。
 
+> 缓存边界：选择改变消息时，只能确定首个变化处之后需要重新计算；更早的公共前缀仍可能命中缓存。默认钩子的身份检查仍有执行成本，“零开销”特指不调用钩子、不克隆其参数。
+
 [TOC]
 
 ---
@@ -12,7 +14,7 @@
 
 > 📌 译注（补充，2026-10-13）
 
-上下文引擎插件回答的是"**当上下文逼近 token 上限时，用什么策略来管理它**"—— 内置的 `ContextCompressor` 走的是有损摘要，而插件引擎可以换成另一套策略（例如构建知识 DAG、做无损上下文管理的 LCM 引擎）。本章给出这套插件的完整接口契约：必须实现的 `ContextEngine` 抽象基类（ABC）方法（`name` / `update_from_response` / `should_compress` / `compress`）、必须自行维护的若干 token 状态类属性、一组默认空操作的**可选钩子**（含两个用于每回合"选择 / 观测"的 `select_context()` 与 `on_turn_complete()`），以及引擎如何暴露自己的工具。随后讲清组织面：插件住在 `plugins/context_engine/<name>/`、如何经由目录发现或通用插件系统注册（**同一时刻只允许一个引擎活动**）、生命周期各阶段的调用次序、如何用 `config.yaml` 的 `context.engine` 选中它。最后两节收尾在工程细节上：如何写 ABC 契约测试，以及压缩在**池化守护线程**上运行所要求的线程安全前提。
+上下文引擎插件回答的是"**当上下文逼近 token 上限时，用什么策略来管理它**"—— 内置的 `ContextCompressor` 走的是有损摘要，而插件引擎可以换成另一套策略（例如构建知识有向无环图（DAG）、做无损上下文管理的 LCM 引擎）。本章给出这套插件的完整接口契约：必须实现的 `ContextEngine` 抽象基类（ABC）方法（`name` / `update_from_response` / `should_compress` / `compress`）、必须自行维护的若干 token 状态类属性、一组默认空操作的**可选钩子**（含两个用于每回合"选择 / 观测"的 `select_context()` 与 `on_turn_complete()`），以及引擎如何暴露自己的工具。随后讲清组织面：插件住在 `plugins/context_engine/<name>/`、如何经由目录发现或通用插件系统注册（**同一时刻只允许一个引擎活动**）、生命周期各阶段的调用次序、如何用 `config.yaml` 的 `context.engine` 选中它。最后两节收尾在工程细节上：如何写 ABC 契约测试，以及压缩在**池化守护线程**上运行所要求的线程安全前提。
 
 ---
 
@@ -142,7 +144,7 @@ def on_turn_complete(self, messages, usage=None, **kwargs):
 
 契约：
 
-- **默认空操作、失败放行（fail-open）。** 两者默认都 `return None`。缺一个钩子、抛一个异常、或返回一个无效值，都会让请求保持原样 —— 所以一个出故障的引擎**绝不**比不装引擎更糟。宿主还会对继承自 ABC 的默认实现做身份检查并完全跳过它，因此未实现该钩子的引擎（包括内置压缩器）在每次请求上**零**额外开销。
+- **默认空操作、失败放行（fail-open）。** 两者默认都 `return None`。缺一个钩子、抛一个异常、或返回一个无效值，都会让请求保持原样 —— 所以这保证异常时回到原请求；仍无法约束钩子耗时和自行产生的外部副作用。宿主还会对继承自 ABC 的默认实现做身份检查并完全跳过它，因此未实现该钩子的引擎（包括内置压缩器）在每次请求上**零**额外开销。
 - **`select_context()` 仅限请求（request-only）。** 返回的列表只替换**单次** provider 调用的消息；持久化的历史**永不**被写入。返回 `None`、`[]`、非列表、或含非字典元素的列表，都会失败放行为未修改的请求。
 - **次序 / 缓存稳定。** 该钩子在提示词缓存控制（prompt cache-control）**之前**、以及在每一个请求清洗器（sanitizer）之前运行，于是 (a) 一份替换仍要经过与任何请求相同的校验，(b) 默认空操作让请求保持逐字节一致 —— 对未实现的引擎来说，提示词缓存行为不变。一个替换了列表的引擎只改变自己的缓存前缀。按每次 provider 请求求值（重试时会重跑）。
 - **`on_turn_complete()`** 只做回合后观测；把 `messages` 当作只读。**覆盖度是尽力而为的：** 它从标准的回合收尾接缝（finalization seam）触发。回环里某些异常的提前返回路径（例如一次内容策略拦截、或一次 provider 的终态失败）会持久化并返回，而不经过收尾，因此它们当前**不会**发出这个钩子 —— 请把它当作对已完成回合的尽力而为观测，而不是对每一次提前退出的保证回调。把所有终态路径统一到一个收尾接缝之下，是一项单独的后续工作。
@@ -150,8 +152,8 @@ def on_turn_complete(self, messages, usage=None, **kwargs):
 ### 何时用这些钩子、何时不要用（When to use these hooks — and when NOT to）
 
 - **只有当你的引擎必须*替换*每请求上下文时才实现 `select_context()`** —— 检索增强的选择、主题/分支路由、角色切换。它是唯一能换掉"哪些消息进入一次请求"的动词：`pre_llm_call` 插件钩子按**成文设计**是**只注入（inject-only）**的（它追加到用户消息上，绝不重写列表，以保住提示词缓存前缀）。如果你不需要替换，就不要实现它。
-- **如果你的插件只需要回合后观测 / 摄取**（索引、内存同步、分析），就实现一个**内存提供者（memory provider）**（`sync_turn()` —— 见[内存提供者插件](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin)），而不是上下文引擎。上下文引擎取得会话压缩策略的**所有权**；内存提供者观测回合却什么都不拥有。`on_turn_complete()` 作为观测侧镜像存在，是为了那些*已经*需要 `select_context()` 的引擎 —— 让同一个组件能从它刚刚路由过的那一回合中学习 —— 而不是一个通用的回合回调。
-- **一次真实的 `select_context()` 对提示词缓存的影响。** 一个非空操作的选择，在它改变选择的那几个回合里，自然会改变提示词缓存前缀 —— 那次请求的前缀不再匹配 provider 已缓存的前缀，于是那几个回合会**重写**缓存而非**读取**缓存。引擎应当在**什么都没变时返回稳定的选择**（同一对象或一个等值列表），只在路由决策确实不同时才重塑上下文；一个每回合都重洗的选择会静默地放弃每一次缓存复用。
+- **如果你的插件只需要回合后观测 / 摄取**（索引、内存同步、分析），就实现一个**记忆提供者（memory provider）**（`sync_turn()` —— 见[记忆提供者插件](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin)），而不是上下文引擎。上下文引擎取得会话压缩策略的**所有权**；记忆提供者观测回合却什么都不拥有。`on_turn_complete()` 作为观测侧镜像存在，是为了那些*已经*需要 `select_context()` 的引擎 —— 让同一个组件能从它刚刚路由过的那一回合中学习 —— 而不是一个通用的回合回调。
+- **一次真实的 `select_context()` 对提示词缓存的影响。** 一个非空操作的选择，在它改变选择的那几个回合里，自然会改变提示词缓存前缀 —— 那次请求的前缀不再匹配 provider 已缓存的前缀，于是那几个回合会从变化处重新计算；更早的公共前缀仍可能命中缓存。引擎应当在**什么都没变时返回稳定的选择**（同一对象或一个等值列表），只在路由决策确实不同时才重塑上下文；一个每回合都重洗的选择会减少变化处之后的缓存复用。
 
 ---
 
@@ -256,7 +258,7 @@ def test_compress_returns_valid_messages():
 
 ## 10. Thread safety —— 线程安全
 
-当 `compression.context_timeout_seconds > 0`（默认值）时，Hermes 会把整趟压缩过程 —— 包括你的引擎的 `compress()` 与边界回调，以及任何内存提供者的 `on_pre_compress` / `on_session_switch` —— 放在一个带宿主侧超时的池化守护线程上运行。因此你的引擎必须假定：
+当 `compression.context_timeout_seconds > 0`（默认值）时，Hermes 会把整趟压缩过程 —— 包括你的引擎的 `compress()` 与边界回调，以及任何记忆提供者的 `on_pre_compress` / `on_session_switch` —— 放在一个带宿主侧超时的池化守护线程上运行。因此你的引擎必须假定：
 
 - 调用可能到达任意一个池化线程。不要依赖线程亲和性（thread affinity），也不要依赖与对话线程共享的 `threading.local` 状态。
 - 你收到的消息列表是一份私有的深度快照；就地修改它是允许的（历史遗留契约），但只有在这趟压缩提交（commit）之后，修改才变得可见。宿主超时之后，你仍在跑的活儿会被丢弃 —— 绝不要在提交之外发布到外部/持久化状态。
@@ -267,7 +269,7 @@ def test_compress_returns_valid_messages():
 ## 11. See also —— 另见
 
 - [上下文压缩与缓存（Context Compression and Caching）](https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching) —— 内置压缩器是怎么工作的
-- [内存提供者插件（Memory Provider Plugins）](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin) —— 与之类似的、单选（single-select）的内存插件系统
+- [记忆提供者插件（Memory Provider Plugins）](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin) —— 与之类似的、单选（single-select）的内存插件系统
 - [插件（Plugins）](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins) —— 通用插件系统总览
 
 ---
@@ -310,7 +312,7 @@ def test_compress_returns_valid_messages():
 | guided compression | 引导式压缩 | §3 |
 | inject-only | 只注入（inject-only） | §4 |
 | `pre_llm_call` | `pre_llm_call`（原样，不译） | §4 |
-| memory provider | 内存提供者 | §4 |
+| memory provider | 记忆提供者 | §4 |
 | `sync_turn()` | `sync_turn()`（原样，不译） | §4 |
 | finalization seam | 收尾接缝（finalization seam） | §4 |
 | best-effort | 尽力而为 | §4 |
@@ -390,8 +392,8 @@ def test_compress_returns_valid_messages():
 
 **① §1 的 YAML 示例在同一个 `context:` 映射里写了两个 `engine:` 键。**
 
-- 原文第 19–21 行逐字：`  engine: "compressor"    # default built-in` / `  # engine: "lcm"           # activates a plugin engine named "lcm"`。
-- YAML 语义里同一映射的重复键是**后键覆盖前键**，一个配置文件不可能同时设成 `compressor` 与 `lcm`。
+- 原文第 19–21 行逐字：`  engine: "compressor"    # default built-in` / `  engine: "lcm"           # activates a plugin engine named "lcm"`。
+- 重复 YAML 键的处理依赖解析器，可能拒绝，也可能后键覆盖前键，一个配置文件不可能同时设成 `compressor` 与 `lcm`。
 - 源码 `context` 块只有**一个** `engine` 键：`hermes_cli/config_defaults.py:1208` 逐字 `"engine": "compressor",`；读取处 `agent/agent_init.py:1767` 逐字 `_engine_name = _ctx_cfg.get("engine", "compressor") or "compressor"`。
 - **结论**：示例应读作"两种取值二选一"，逐字照抄会得到一份歧义（无效）的配置。
 

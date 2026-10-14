@@ -3,8 +3,8 @@
 > **直接读。** 每节结构一样：**mini 版怎么做的 → 真实 Hermes 怎么做的 → 差在哪 / 为什么。**
 > 所有结论都带 `文件:行号` 来源。行号会漂，**按方法名 grep 更可靠**。
 >
-> 📌 **本文描述的是「第 3 章末」的代码状态**，对应标签 `ch03-prompt-assembly`
-> （`git checkout ch03-prompt-assembly`）。行号指的是那个版本；
+> 📌 **本文描述的是「第 3 章末」的代码状态**，历史正文锚 `338c78f`
+> （`git show 338c78f:mini-hermes/<文件>`）。行号指的是那个版本；
 > 本文里的行数声明也都是那一刻量的（当时 `run_agent.py` 906 行、
 > `prompt_builder.py` 936 行、`system_prompt.py` 404 行、`cli.py` 236 行）。
 >

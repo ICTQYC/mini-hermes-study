@@ -10,7 +10,7 @@
 >
 > 读完一节你应该能回答三问：**Hermes 原来长什么样 / mini 做没做 / 没做为什么。**
 > 差异表的列序固定为 `| 真实 Hermes | mini 版 | 性质 | 值得改 |`，
-> 且 **「mini 版」一列记的是【当前代码】**（不是交付时的状态）。
+> mini 说明以本章实现提交 `858d1f2` 为基础，后续网关族更新另有 ★ 标注；当前修复以“发布前维护”和对应扩展章节为准。现有章标签已移到统一维护提交。
 
 [TOC]
 
@@ -85,7 +85,7 @@ tests/test_gateway.py   693 → 903（+210：组 14）
    ↓  ⑦扩     gateway/hooks.py                               生命周期事件
 ```
 
-**关键角色只有三个**：**适配器**（只会翻译与发消息）、**runner**（唯一能决定"说不"的地方）、
+**关键角色只有三个**：**适配器**（只会翻译与发消息）、**runner**（统一执行网关授权与回合调度；适配器也有守卫）、
 **存储**（第 6 章的库，负责"两轮之间还活着"）。
 
 ### 0.2 什么时候：一条消息的时序
@@ -162,7 +162,7 @@ tests/test_gateway.py   693 → 903（+210：组 14）
 
 ---
 
-## §〇 差异表（17 条 · 「mini 版」列 = 当前代码）
+## §〇 差异表（17 条 · 本章快照与标明的后续更新）
 
 | # | 真实 Hermes | mini 版 | 性质 | 值得改 |
 |---|---|---|---|---|
@@ -414,7 +414,7 @@ mini 都是单条文案 + 全命令可见（差异表 #8 已注明）。
 
 **④ mini 为什么没做成这样**：本节**做成了**。
 一处**有意的不一致**要写清楚：`mini-hermes/cli.py`（第 2~6 章的产物）的命令分发**仍是 if 链** ——
-它是已冻结章节的交付物，回头改它要重跑那一章的验证。**两处并存的代价**是：
+这是前期 CLI 实现的写法；修改时应跑对应测试，章节冻结不妨碍修复。**两处并存的代价**是：
 同一个概念在仓库里有两种写法（新读者会问"该照哪个抄"）。答案写在 `hermes_cli/commands.py`
 的模块 docstring 里：**新代码照表写**。
 
@@ -489,8 +489,7 @@ agent 要跑一条危险命令
   → 用户的下一条消息 /approve 命中 runner 的 _resolve_approval → 放行
 ```
 
-**为什么不能像 CLI 那样阻塞着问**：网关**没有 TTY**。真实版为此有整套
-`approval` 表 + `delivery_obligations`（"这条确认消息必须被送达"是一笔要记账的债）。
+**为什么不能像 CLI 那样阻塞着问**：网关**没有 TTY**。真实版有专门的审批交互流程；`delivery_obligations` 是出站交付记账机制，不能据此推断存在通用的 `approval` 数据库表。
 mini 用 `Event` + 超时（超时按**拒绝**处理，不是放行）。
 
 **④ mini 为什么没做成这样**：主频道投递需要"主频道"配置 + cron 这类后台产出的消费者；
@@ -617,7 +616,7 @@ s6 finish→125 / launchd `KeepAlive.SuccessfulExit=false`）—— mini 不装�
 三条要点：
 
 1. **home 用 contextvar，不用 `os.environ`** —— 并发跑的两个回合各自看到自己的 home；
-2. **密钥用作用域，不写 `os.environ`** —— 于是**子进程永远不继承**跨 profile 的密钥；
+2. **密钥用作用域，不写 `os.environ`** —— 于是**子进程不会因这个作用域管理器改写环境而继承**其他 profile 的密钥；
 3. **终端作用域要"整套安装"**，不能沿用上一轮留下的 `TERMINAL_*`（first-writer-wins 泄漏，#68559）。
 
 配套的 fail-closed（`agent/secret_scope.py:27/:52`）：只有 `set_multiplex_active(True)` 之后，
@@ -638,7 +637,7 @@ s6 finish→125 / launchd `KeepAlive.SuccessfulExit=false`）—— mini 不装�
   `served_profile_child_env(home)`（给子进程：**摘掉** `MINI_HOME`/各种 `*_API_KEY`，再钉上目标 home）；
 - `hermes_cli/profiles.py`（**249 行**）：`profiles_to_serve(multiplex)`，默认 profile **永远排第一**；
 - `gateway/run.py::_db()` 用 `get_mini_home()` 而不是 `self.home`：
-  **作用域绑好之后，"替谁干活"这件事就不用传参了 —— 于是也没法传错**。
+  **作用域绑好之后，"替谁干活"这件事就不用传参了 —— 但仍须确保进入了正确的作用域，漏绑定或绑错 home 仍会串库**。
 
 **A→B→A 证明**（真实版 AGENTS.md 明确要求的验证方式，一个临时 home 证明不了作用域）：
 `tests/test_gateway.py::test_profile_scope_aba` —— A 作用域下 home 与密钥都是 A、B 下是 B、
@@ -672,7 +671,7 @@ docker/ssh 这类后端，就必须补上这一层，否则会出现与 `#68559`
 
 ## §十 单实例与运行时状态（mini 侧的形状）
 
-这一节没有真实版的直接对应物（真实版的单实例靠适配器 **token 锁**：同一个 bot token
+这一节说明 mini 在 home 层实现单实例的具体形状（真实版也有进程运行锁与身份记录，并对适配器增加 **token 锁**：同一个 bot token
 被两个 profile 抢时抛 `{scope}_lock`）。mini 只有一个适配器、没有 token，
 所以单实例落在 **home 级**：一个 home 同时只允许一个网关进程。
 
@@ -680,8 +679,8 @@ docker/ssh 这类后端，就必须补上这一层，否则会出现与 `#68559`
 |---|---|
 | 启动检查 | `live_gateway_pid_for_home(home)` 有活的外部 pid → 写 `startup_failed` + `conflict_with` + **返回 78** |
 | 正常启动 | 写 `gateway.pid`（pid + 启动指纹 + home + cmdline）与 `gateway_state.json`（`running`） |
-| 收尾 | 结束会话 → 摘 pid 文件 → 状态 `stopped` |
-| 重启 | 已结束的会话**不会**被"找回"（`latest_session_id_for_key` 排除 `ended_at`），于是开新会话 |
+| 收尾 | 本章最初结束会话；扩展 7.1 改为保留持续对话，只释放资源并标记关停状态 |
+| 重启 | 已结束的会话不会被找回；扩展 7.1 起正常关停不再结束持续对话，下一次可恢复原会话 |
 
 **`session_key` 落库**是本章对第 6 章 schema 的唯一改动（`hermes_state_common.py` 加一列 + 一个索引，
 走第 6 章的**声明式加列**机制 —— 老库自动补上，不写迁移）。真实版 `sessions` 表里
@@ -799,7 +798,7 @@ docker/ssh 这类后端，就必须补上这一层，否则会出现与 `#68559`
 | 14 profile 入口层（侧线） | `create` 建什么/播种什么 · id 字母表（**`~` 必须被拒**）· 重名 · `--clone` 带配置**不带记忆** · 解析**不静默回落** · 两 profile **物理分家**（A→B→A）· 真 CLI 子进程 |
 
 **全套**（7 个测试文件 × 2 解释器）：**710 通过 / 0 失败**（该章交付时点；★ 第 8 章后 **789 通过 / 0 失败**）
-（压缩 152 · 网关 99 · 打包 18 · 提示词 155 · 存储 107 · 工具 89 · 循环 54）。
+（压缩 152 · 网关 135 · 打包 18 · 提示词 155 · 存储 107 · 工具 89 · 循环 54）。
 
 **反向验证 9 项，9/9 干净变红**（"干净"= 目标用例变 ✗ 且不是整个套件崩）：
 
@@ -840,7 +839,7 @@ docker/ssh 这类后端，就必须补上这一层，否则会出现与 `#68559`
 you> 用一句话说明你现在是通过哪个平台在跟我说话。
   你现在是通过 mini-hermes 的 console（终端命令行）平台在跟我说话。
 you> 我刚才问了你什么？一句话回答。
-  你问我「你刚才问了我什么」，让我一句话回答。      ← 历史从库里重建（第 7 章时是 per-turn 新建 agent，对话仍连续；★ 第 8 章起改成缓存 agent）
+  你问我「你刚才问了我什么」，让我一句话回答。      ← 这条回复复述当前问题，不能单独证明前一轮历史已恢复；恢复契约由专项测试验证
 you> /status
   会话键 main:console:dm:console-1 · 会话 id 20261008_123808_7b174d · 消息数 4 · agent 空闲 · 排队 0
 you> /sessions
@@ -852,7 +851,7 @@ you> 新会话里回我一个字：好
 ```
 
 收据：退出码 0 · 会话行 2 条（`end_reason` = `reset` / `gateway_stop`）· 消息行 6 条 ·
-用量 `6065/24`、`3030/1`（in/out）· `messages_fts` 行数 = `messages` 行数（索引同步）·
+用量 `6065/24`、`3030/1`（in/out）· `messages_fts` 行数 = `messages` 行数（外部内容表的 COUNT 不能独立证明索引同步）·
 钩子触发顺序完整：`gateway:startup, gateway:tick, session:start, agent:end, agent:end,
 command:status, command:sessions, command:new, session:end, session:start, agent:end, session:end` ·
 pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
@@ -870,7 +869,7 @@ pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
 | 5 | **主频道投递 / 跨平台投递** | 需要"主频道"配置 + cron 消费者；registry 只有一个适配器 | 有后台产出（cron/心跳）时必补 |
 | 6 | **`delivery_obligations`（投递债记账）** | 需要一张待办表 + 消费者 | **网关崩在"确认消息已发、回答未到"之间 → 那笔确认无声消失**（进程内状态） |
 | 7 | **网关侧会话维护（85% 兜底压缩）** | ① mini 的压缩在 agent 内部（第 5 章）② ★ **第 8 章已补**：agent 缓存（LRU/TTL/三条不许淘汰） | 长会话 + 网关的兜底保护缺失（真实版这道防线服务的是"两轮之间长起来的会话"）；缓存那半已在第 8 章对齐 |
-| 8 | **跨进程压缩锁**（`compression_locks` / `session_turn_leases`） | mini 单进程 | 支持多进程/多实例时必补，否则两个进程会同时压同一个会话 |
+| 8 | **跨进程压缩锁**（`compression_locks` / `session_turn_leases`） | 尚无跨进程压缩协调 | CLI 与网关同时压缩同一会话时需协调，否则两个进程会同时压同一个会话 |
 | 9 | **终端作用域（`TERMINAL_*` 整套安装/复位）** | mini 的 terminal 工具无后台后端概念 | 加 docker/ssh 后端时必补，否则出现 `#68559` 同形状的"第一个 profile 赢了"泄漏 |
 | 10 | **反向映射 `profile_from_session_key_namespace()`** | 没有消费者（缺只读诊断面） | 诊断"这个会话属于哪个 profile"时要补（约 10 行） |
 | 11 | **`command:*` 通配钩子事件** | 只有一个消费者形态 | 要"审计所有命令"时补 |
@@ -916,7 +915,7 @@ pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
 | 债 | 来自 | 处置 |
 |---|---|---|
 | **多 profile 多库** | 第 6 章差距清单 #1（"支持多 profile 时必须补，否则静默串库"） | ✅ **本章还了**：`profile_runtime_scope` + `_db()` 走 `get_mini_home()` + `profiles_to_serve` + A→B→A 测试。仍缺终端作用域（§十四 #9） |
-| **跨进程压缩锁** | 第 5/6 章 | ⬜ 未做（mini 单进程）→ §十四 #8 |
+| **跨进程压缩锁** | 第 5/6 章 | ⬜ 未做（当前也没有数据库层跨进程压缩租约）→ §十四 #8 |
 | **网关的输入归属**（`observed` / `platform_message_id` / 异常写入方仲裁） | 第 6 章差距清单 #6 | ⚠️ **部分**：本章有了"第 1/2 级守卫 + 授权"，但**没有**把"这条消息是谁写的"记进库（真实版的 `observed` 列用于"压缩期间来了新消息"的仲裁）。代价：将来做压缩轮转仲裁时必补 |
 
 ## 本章提交
@@ -924,7 +923,7 @@ pid 文件已摘掉 · 状态 `stopped` · `live_gateway_pid_for_home` = None。
 ```text
 9015f61   第 7 章开工：中文精译-07-GatewayInternals.md（636 行）+ README 进度表
 858d1f2   第 7 章：网关实现 + 源码讲解 + 侧线（多 profile 入口层）
-          ← 标签 ch07-gateway 指这里（本章文档后续修改会让标签往后移）
+          ← 本章原始交付入口；现有 ch07-gateway 标签已移到统一维护提交
 ```
 
 **本章的产出清单**（对照上游同名文档的 297 行）：
