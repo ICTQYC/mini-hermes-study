@@ -44,7 +44,7 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 RESET = "\033[0m"
 
-BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（第 4 章：Tools Runtime）{RESET}
+BANNER = f"""{BOLD}mini-hermes{RESET} {DIM}· 一个从零手写的 agent（逐章复刻 Hermes 官方 developer-guide）{RESET}
 {DIM}命令：/exit 退出 · /new 开新会话 · /sessions 看历史会话 · /search 词 全文检索 · /prompt 看三层提示词 · /todo 看任务清单 · /tools 看已注册工具 · /budget 看迭代预算 · Ctrl-C 中断当前 turn{RESET}
 """
 
