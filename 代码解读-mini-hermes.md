@@ -1065,7 +1065,7 @@ if threading.current_thread() is not threading.main_thread():
 ## 附：本项目的四类自检
 
 ```bash
-cd "$HOME/Desktop/study/hermes学习/mini-hermes"
+cd "<仓库目录>/mini-hermes"
 
 python3 tests/test_loop_mechanisms.py       # 54 条：loop 的机制（不联网）
 python3 tests/test_packaging.py             #  7 条：零依赖 / 无硬编码路径 / 密钥链

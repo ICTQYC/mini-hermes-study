@@ -65,7 +65,10 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 # ══════════════════════════════════════════════════════════════════ 构造假历史
 
 # 测试进程把 MINI_HOME 钉到临时目录：任何意外的 home 访问都落在这里，**不碰真实 home**。
-_TMP_HOME = tempfile.mkdtemp(prefix="mini-ch10-")
+
+# 所有夹具目录归本脚本所有，入口 finally 清理整个根目录。
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="mini-clean-test_micro_compaction-")
+_TMP_HOME = tempfile.mkdtemp(prefix="mini-ch10-", dir=_TEMP_ROOT.name)
 _HOME_TOKEN = hermes_constants.set_mini_home_override(_TMP_HOME)
 
 
@@ -586,7 +589,7 @@ def test_config_reads_from_mini_home() -> None:
     """配置从 `$MINI_HOME/config.json` 读（不是真实 home）。"""
     import json as _json
     from pathlib import Path
-    tmp = tempfile.mkdtemp(prefix="mini-ch10-cfg-")
+    tmp = tempfile.mkdtemp(prefix="mini-ch10-cfg-", dir=_TEMP_ROOT.name)
     (Path(tmp) / "config.json").write_text(_json.dumps({
         "compression": {"micro_compact": True, "micro_compact_every_n_turns": 4,
                         "micro_compact_defrag_threshold_tokens": 8000}}), encoding="utf-8")
@@ -844,21 +847,24 @@ GROUPS = [
 
 
 if __name__ == "__main__":
-    print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}\n")
-    defined = {n for n in globals() if n.startswith("test_")}
-    registered = {f.__name__ for _, _, fns in GROUPS for f in fns}
-    missing = defined - registered
-    if missing:
-        print(f"⚠️ 有测试函数没登记进 GROUPS（写了但不会跑）：{sorted(missing)}")
-        sys.exit(2)
+    try:
+        print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}\n")
+        defined = {n for n in globals() if n.startswith("test_")}
+        registered = {f.__name__ for _, _, fns in GROUPS for f in fns}
+        missing = defined - registered
+        if missing:
+            print(f"⚠️ 有测试函数没登记进 GROUPS（写了但不会跑）：{sorted(missing)}")
+            sys.exit(2)
 
-    for title, promise, fns in GROUPS:
-        print(f"══ {title} ══ {promise}")
-        for fn in fns:
-            fn()
-        print(f"   → {len(PASS)} 累计 / {len(FAIL)} 失败\n")
+        for title, promise, fns in GROUPS:
+            print(f"══ {title} ══ {promise}")
+            for fn in fns:
+                fn()
+            print(f"   → {len(PASS)} 累计 / {len(FAIL)} 失败\n")
 
-    print(f"{len(PASS)} 通过 / {len(FAIL)} 失败　（{len(GROUPS)} 组）")
-    if FAIL:
-        print("失败项：" + "; ".join(FAIL))
-    sys.exit(1 if FAIL else 0)
+        print(f"{len(PASS)} 通过 / {len(FAIL)} 失败　（{len(GROUPS)} 组）")
+        if FAIL:
+            print("失败项：" + "; ".join(FAIL))
+        sys.exit(1 if FAIL else 0)
+    finally:
+        _TEMP_ROOT.cleanup()

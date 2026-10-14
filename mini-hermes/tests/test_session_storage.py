@@ -46,6 +46,9 @@ from hermes_state_common import CHECKPOINT_EVERY_N_WRITES, SCHEMA_SQL, SCHEMA_VE
 from hermes_state_schema import SchemaTooNewError, parse_schema_columns  # noqa: E402
 from hermes_state_search import has_cjk, sanitize_fts5_query  # noqa: E402
 
+# 所有夹具目录归本脚本所有，入口 finally 清理整个根目录。
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="mini-clean-test_session_storage-")
+
 PASS, FAIL = [], []
 
 
@@ -58,7 +61,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 def temp_home():
     """把 `MINI_HOME` 指到临时目录（并在结束时还原）。"""
     old = os.environ.get("MINI_HOME")
-    home = tempfile.mkdtemp(prefix="mini_ch06_")
+    home = tempfile.mkdtemp(prefix="mini_ch06_", dir=_TEMP_ROOT.name)
     os.environ["MINI_HOME"] = home
     try:
         yield Path(home)
@@ -72,7 +75,7 @@ def temp_home():
 @contextmanager
 def fresh_db():
     """一个干净的库（显式路径，不经过 MINI_HOME）。"""
-    d = Path(tempfile.mkdtemp(prefix="mini_db_"))
+    d = Path(tempfile.mkdtemp(prefix="mini_db_", dir=_TEMP_ROOT.name))
     db = hermes_state.SessionDB(d / "state.db")
     try:
         yield db
@@ -111,7 +114,7 @@ def test_schema_created() -> None:
 
 # ══════════════════════════════════════════════════════════ 2. 幂等打开
 def test_reopen_is_idempotent() -> None:
-    d = Path(tempfile.mkdtemp(prefix="mini_db_"))
+    d = Path(tempfile.mkdtemp(prefix="mini_db_", dir=_TEMP_ROOT.name))
     p = d / "state.db"
     db1 = hermes_state.SessionDB(p)
     db1.create_session("s1", "cli", model="m")
@@ -148,7 +151,7 @@ def test_schema_sql_is_single_source_of_truth() -> None:
 
 # ══════════════════════════════════════════════════════════ 4. 声明式加列
 def test_reconcile_adds_missing_columns() -> None:
-    d = Path(tempfile.mkdtemp(prefix="mini_db_"))
+    d = Path(tempfile.mkdtemp(prefix="mini_db_", dir=_TEMP_ROOT.name))
     p = d / "state.db"
     # 造一个"老库"：sessions 表只有两列，schema_version 已就位
     raw = sqlite3.connect(str(p))
@@ -186,7 +189,7 @@ def test_reconcile_adds_missing_columns() -> None:
 
 # ══════════════════════════════════════════════════════════ 5. 版本门控（新库拒绝）
 def test_schema_too_new_is_refused() -> None:
-    d = Path(tempfile.mkdtemp(prefix="mini_db_"))
+    d = Path(tempfile.mkdtemp(prefix="mini_db_", dir=_TEMP_ROOT.name))
     p = d / "state.db"
     db = hermes_state.SessionDB(p)
     db._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION + 5,))
@@ -388,7 +391,7 @@ def test_sanitize() -> None:
 
 # ══════════════════════════════════════════════════════════ 12. 写入礼节
 def test_write_etiquette() -> None:
-    d = Path(tempfile.mkdtemp(prefix="mini_db_"))
+    d = Path(tempfile.mkdtemp(prefix="mini_db_", dir=_TEMP_ROOT.name))
     p = d / "state.db"
     a = hermes_state.SessionDB(p)
     a.create_session("s1", "cli")
@@ -427,7 +430,7 @@ def test_write_etiquette() -> None:
     check("抖动**是随机的**（两次取值不同）", len({round(x, 6) for x in fast}) > 1)
 
     # checkpoint：每 50 次成功写入触发一次
-    d2 = Path(tempfile.mkdtemp(prefix="mini_db_"))
+    d2 = Path(tempfile.mkdtemp(prefix="mini_db_", dir=_TEMP_ROOT.name))
     c = hermes_state.SessionDB(d2 / "state.db")
     calls: list = []
     c._try_wal_checkpoint = lambda: calls.append(1)    # type: ignore[method-assign]
@@ -511,4 +514,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _TEMP_ROOT.cleanup()

@@ -5,6 +5,8 @@
 > **对照实现**：`mini-hermes/`（全项目 **11,908 行**代码 / **5,956 行**测试）
 > **本章新增**：`session_state.py` / `run_startup.py` / `run_busy.py` / `agent_cache.py` / `run_watchers.py`（5 个新文件）
 
+> 收尾维护：缓存演示清理本次临时目录，并在退出时恢复临时替换的 Path.read_text；读取次数打印实测值。完整收据见[发布前修复记录](发布前修复记录.md)。
+
 [TOC]
 
 ## 发布前维护 · 缓存与生命周期

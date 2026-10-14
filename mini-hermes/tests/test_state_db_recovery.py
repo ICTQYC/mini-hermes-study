@@ -63,7 +63,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ★★ MINI_HOME 必须在 import 任何 mini 模块**之前**设好 —— 这样"库路径跟随 MINI_HOME"
 #    这件事从第一个 import 起就是真的，而不是靠某一处函数兜着。
-_HOME = tempfile.mkdtemp(prefix="mini_ch11_")
+
+# 所有夹具目录归本脚本所有，入口 finally 清理整个根目录。
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="mini-clean-test_state_db_recovery-")
+_HOME = tempfile.mkdtemp(prefix="mini_ch11_", dir=_TEMP_ROOT.name)
 os.environ["MINI_HOME"] = _HOME
 
 import hermes_constants  # noqa: E402
@@ -772,7 +775,7 @@ def test_legacy_db_without_state_meta_is_diagnosed_not_confused() -> None:
     import os, sqlite3, tempfile
     from hermes_state_repair import inspect_state_db
 
-    home = tempfile.mkdtemp(prefix="mini_ch11_legacy_")
+    home = tempfile.mkdtemp(prefix="mini_ch11_legacy_", dir=_TEMP_ROOT.name)
     os.environ["MINI_HOME"] = home
     import importlib
     import hermes_constants
@@ -892,4 +895,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _TEMP_ROOT.cleanup()

@@ -57,7 +57,10 @@ logging.disable(logging.WARNING)
 # ★ 必须在 import 之前把 MINI_HOME 指到临时目录：
 #   否则测试会去读用户真实的 ~/.mini-hermes/SOUL.md / MEMORY.md，
 #   测试结果就依赖"跑测试的这个人家里有什么文件"了。
-_TEST_HOME = tempfile.mkdtemp(prefix="mini_test_home_")
+
+# 所有夹具目录归本脚本所有，入口 finally 清理整个根目录。
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="mini-clean-test_prompt_assembly-")
+_TEST_HOME = tempfile.mkdtemp(prefix="mini_test_home_", dir=_TEMP_ROOT.name)
 os.environ["MINI_HOME"] = _TEST_HOME
 
 from agent import prompt_builder as pb  # noqa: E402
@@ -105,7 +108,7 @@ def clear_home() -> None:
 
 def tmp_project(files: dict[str, str] | None = None, git: bool = False) -> str:
     """造一个临时"项目目录"（默认不是 git 仓库 → 没有工作区快照）。"""
-    d = tempfile.mkdtemp(prefix="mini_proj_")
+    d = tempfile.mkdtemp(prefix="mini_proj_", dir=_TEMP_ROOT.name)
     if git:
         os.system(f"git -C {d} init -q >/dev/null 2>&1")
     for name, body in (files or {}).items():
@@ -735,7 +738,7 @@ def test_install_tree_fallback_suppressed() -> None:
     """
     clear_home()
     install_root = Path(__file__).resolve().parent.parent  # mini-hermes/
-    outside = Path(tempfile.mkdtemp(prefix="mini_outside_"))
+    outside = Path(tempfile.mkdtemp(prefix="mini_outside_", dir=_TEMP_ROOT.name))
 
     check("安装树路径被识别出来", pb._is_install_tree(install_root) is True)
     check("安装树外的目录不被误判", pb._is_install_tree(outside) is False)
@@ -1071,7 +1074,7 @@ def test_exit_message_reports_real_path() -> None:
     )
 
     # ② 真有内容 → 报出来的路径必须能直接拿去打开
-    d = Path(tempfile.mkdtemp(prefix="mini_exit_"))
+    d = Path(tempfile.mkdtemp(prefix="mini_exit_", dir=_TEMP_ROOT.name))
     db_file = d / "state.db"
     db_file.write_bytes(b"")                 # 内容不重要，要的是"这个文件真的在"
     msg = session_saved_message(db_file, 7)
@@ -1082,7 +1085,7 @@ def test_exit_message_reports_real_path() -> None:
     check("而且那个文件真的在", Path(shown).exists())
 
     # ③ 端到端：真起一次 CLI，只喂 /exit —— 零成本，不调 API
-    home = tempfile.mkdtemp(prefix="mini_exit_home_")
+    home = tempfile.mkdtemp(prefix="mini_exit_home_", dir=_TEMP_ROOT.name)
     launcher = Path(__file__).resolve().parent.parent / "mini"
     # ★ 子进程必须**自给自足**：否则它会顺着密钥链读到开发机的 `~/.hermes/.env`；
     #   在没配密钥的机器上 CLI 会以「[配置错误] … 缺少密钥」直接退出（rc=2），
@@ -1288,4 +1291,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _TEMP_ROOT.cleanup()

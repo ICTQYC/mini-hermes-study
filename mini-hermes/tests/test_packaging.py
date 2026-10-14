@@ -2,7 +2,7 @@
 
 跑法：python3 tests/test_packaging.py
 
-检查六件事：
+检查七件事：
   1. 真的零第三方依赖（不是嘴上说说 —— 逐文件 AST 扫 import，再查模块来源）
   2. 没有写死某台机器的绝对路径（/Users/某人、/home/某人）
      + 启动脚本不硬编码解释器路径（别人机器上 /usr/local/bin/python3 不存在）
@@ -12,6 +12,7 @@
   5. 用户可见的字符串里没有写死 `~/.mini-hermes`（`MINI_HOME` 是可重定向的）
   6. ★ **命令行旗标契约**：README / 注释里宣传的 `mini --旗标` 必须真的存在，
      且每个真实参数都在 README 里出现过
+  7. 旧测试与演示脚本即使失败退出，也不留下本次创建的临时目录
 
 第 1 条尤其重要：一旦某个未来章节偷偷引入了第三方库，
 这个测试会立刻红 —— 而 README 和 requirements.txt 还在说"零依赖"，
@@ -172,7 +173,13 @@ def test_no_hardcoded_paths() -> None:
 def test_env_discovery() -> None:
     from hermes_cli import runtime_provider as rp
 
-    cands = [str(p) for p in rp.env_file_candidates()]
+    # Validate the default path independently of a caller's custom MINI_HOME.
+    saved_home = os.environ.pop("MINI_HOME", None)
+    try:
+        cands = [str(p) for p in rp.env_file_candidates()]
+    finally:
+        if saved_home is not None:
+            os.environ["MINI_HOME"] = saved_home
     check(
         "密钥文件会去 ~/.mini-hermes/.env 找（别人没有 Hermes 也能用）",
         any(".mini-hermes" in c for c in cands),
@@ -403,6 +410,67 @@ def test_advertised_flags_exist() -> None:
               not missing, f"-h 里没有：{missing}")
 
 
+def test_script_temporary_directories_are_cleaned() -> None:
+    """Inspect actual filesystem leftovers after early failure, not cleanup source text."""
+    scripts = (
+        "tests/test_session_storage.py", "tests/test_prompt_assembly.py",
+        "tests/test_micro_compaction.py", "tests/test_state_db_recovery.py",
+        "demos/ch10_real_run.py", "demos/ch10_summary_model_compare.py",
+        "demos/ch11_real_run.py", "demos/why_cache_the_agent.py",
+    )
+    runner = r'''
+import json, runpy, sys, tempfile
+from pathlib import Path
+target = str(Path(sys.argv[1]).resolve())
+made = []
+original = tempfile.mkdtemp
+def tracked(*args, **kwargs):
+    path = original(*args, **kwargs)
+    made.append(path)
+    return path
+tempfile.mkdtemp = tracked
+if Path(target).name in ("ch10_real_run.py", "ch10_summary_model_compare.py"):
+    # Permit setup to run even without credentials; the trace aborts before any API call.
+    import hermes_cli.runtime_provider as runtime_provider
+    runtime_provider.resolve_provider = lambda *args, **kwargs: {
+        "provider": "fake", "model": "fake-model", "api_key": "fake",
+        "base_url": "http://127.0.0.1", "api_mode": "chat_completions"}
+def fail_early(frame, event, arg):
+    if event == "line" and frame.f_code.co_filename == target and made:
+        sys.settrace(None)
+        raise RuntimeError("intentional cleanup probe")
+    return fail_early
+sys.settrace(fail_early)
+try:
+    runpy.run_path(target, run_name="__main__")
+except BaseException:
+    pass
+finally:
+    sys.settrace(None)
+print("CLEANUP_PROBE=" + json.dumps({"created": len(made)}))
+'''
+    import json
+    for script in scripts:
+        with tempfile.TemporaryDirectory(prefix="mini-cleanup-probe-") as area:
+            home, tmp = Path(area) / "home", Path(area) / "tmp"
+            home.mkdir()
+            tmp.mkdir()
+            env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home),
+                   "TMPDIR": str(tmp), "MINI_HOME": str(home / "mini"),
+                   "PYTHONDONTWRITEBYTECODE": "1"}
+            result = subprocess.run(
+                [sys.executable, "-S", "-c", runner, str(PROJECT_ROOT / script)],
+                cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=60)
+            receipt = next((line for line in result.stdout.splitlines()
+                            if line.startswith("CLEANUP_PROBE=")), "")
+            observed = json.loads(receipt.split("=", 1)[1]) if receipt else {}
+            check("临时目录探针实际执行：" + script,
+                  result.returncode == 0 and observed.get("created", 0) > 0,
+                  (result.stderr or result.stdout)[-300:])
+            remaining = sorted(p.name for p in tmp.iterdir())
+            check("失败退出后不留临时目录：" + script, not remaining, repr(remaining))
+
+
 if __name__ == "__main__":
     print(f"解释器：{sys.executable}  Python {sys.version.split()[0]}")
     print(f"项目根：{PROJECT_ROOT}\n")
@@ -412,6 +480,7 @@ if __name__ == "__main__":
     test_launcher_via_symlink()
     test_no_hardcoded_home_in_messages()
     test_advertised_flags_exist()
+    test_script_temporary_directories_are_cleaned()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))
