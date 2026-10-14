@@ -25,6 +25,8 @@
 from __future__ import annotations
 
 import http.client
+import contextvars
+import inspect
 import json
 import logging
 import queue
@@ -134,6 +136,14 @@ class _TwoTimeoutHTTPSConnection(http.client.HTTPSConnection):
 #    加一个新 agent 级工具 = 往这张表加一行，不是往函数里加一个分支。
 #
 # key 必须和 tools/todo.py 的 AGENT_LEVEL_TOOLS 完全对齐 —— 有测试盯着。
+
+
+class _TwoTimeoutHTTPConnection(http.client.HTTPConnection):
+    """本地 HTTP 端点同样分开连接和读取超时。"""
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self.host, self.port), timeout=CONNECT_TIMEOUT)
+        self.sock.settimeout(READ_TIMEOUT)
 
 
 def _execute_todo_list(agent: "AIAgent", args: Dict[str, Any]) -> str:
@@ -400,7 +410,14 @@ class AIAgent:
         self._api_call_count = 0
 
         # 2. 用户消息进历史
+        iterations_before = self.budget.used
+        if conversation_history is None and self.session_db is not None:
+            conversation_history = self.session_db.get_messages_as_conversation(
+                self.session_id, include_ancestors=True)
         messages: List[Dict[str, Any]] = list(conversation_history or [])
+        # 只补未完成的末轮；历史中间的非法角色序列仍然由严格校验拦住。
+        self._validate_alternation(messages)
+        self._close_incomplete_turn(messages, "（上一轮没有完整答复；未返回结果的操作状态未知。）")
         messages.append({"role": "user", "content": user_message})
         self._persist_message(messages[-1])
 
@@ -427,8 +444,8 @@ class AIAgent:
         self._ensure_system_prompt(messages, built)
 
         # 3.5 从历史重建 agent 私有状态
-        #     ★ 为什么需要这一步：网关（Telegram/Discord）**每条消息都新建一个 AIAgent**，
-        #     所以内存里的 todo 清单必然每次都丢。丢不要紧——它可以从历史重建。
+        #     ★ 缓存被淘汰或网关进程重启后会新建 AIAgent，内存里的 todo 因而会丢。
+        #     历史中的工具结果提供可恢复状态，而不是依赖 agent 对象永久存活。
         #     这是"状态放哪"这个问题的一个漂亮答案：放内存（快、简单），
         #     但把"可恢复"这个责任交给历史。
         self._hydrate_todo_store(messages)
@@ -438,13 +455,17 @@ class AIAgent:
         try:
             result = self._run_conversation_turn(messages, task_id)
             final_response = result["final_response"]
-        except AgentInterrupted:
+        except (AgentInterrupted, KeyboardInterrupt):
+            self._interrupt.set()
             final_response = "(已被用户中断)"
             result = {"interrupted": True}
         except Exception as exc:  # noqa: BLE001
             final_response = f"[agent 异常] {type(exc).__name__}: {exc}"
             result = {"error": str(exc)}
             self._log_exception(exc)
+
+        if result.get("interrupted") or result.get("error") or result.get("budget_exhausted"):
+            self._close_incomplete_turn(messages, final_response)
 
         # 3.6 ★ 第 10 章：每回合收尾后的**微压缩**。
         #     真实版在 `finalize_turn` 的 `_persist_step` 里调（`turn_finalizer.py:508`），
@@ -475,7 +496,9 @@ class AIAgent:
             "final_response": final_response,
             "messages": messages,
             "task_id": task_id,
-            "iterations_used": self.budget.used,
+            "iterations_used": self.budget.used - iterations_before,
+            "iterations_total": self.budget.used,
+            "api_calls": self._api_call_count,
             "usage": dict(self.usage),
             **result,
         }
@@ -483,6 +506,45 @@ class AIAgent:
     # ------------------------------------------------------------------ #
     # 核心：turn loop
     # ------------------------------------------------------------------ #
+
+    def _close_incomplete_turn(self, messages: List[Dict], note: str) -> None:
+        """给未完成末轮写事实性结尾，不假定缺失的工具结果代表没有副作用。"""
+        if not messages or messages[-1].get("role") == "system":
+            return
+        if messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
+            return
+        index = next((i for i in range(len(messages) - 1, -1, -1)
+                      if messages[i].get("role") != "tool"), -1)
+        call_message = messages[index] if index >= 0 else {}
+        if call_message.get("role") == "assistant":
+            tail = messages[index + 1:]
+            found = {m.get("tool_call_id") for m in tail if m.get("role") == "tool"}
+            for call in call_message.get("tool_calls") or []:
+                cid = call.get("id") or call.get("call_id") or ""
+                if cid not in found:
+                    message = {"role": "tool", "tool_call_id": cid,
+                               "content": model_tools.tool_error("该轮未完成，工具执行结果未知；请先核实副作用。")}
+                    messages.append(message)
+                    self._persist_message(message, tool_name=(call.get("function") or {}).get("name"))
+        message = {"role": "assistant", "content": note}
+        messages.append(message)
+        self._persist_message(message)
+
+    def reset_session(self, session_id: str) -> None:
+        """新会话重置所有私有状态，回调和存储句柄仍由同一个 CLI 持有。"""
+        from agent.system_prompt import invalidate_system_prompt
+        _fallback.restore_primary_runtime(self)
+        self.session_id = session_id
+        self.session_start = datetime.now()
+        self.budget = IterationBudget(self.max_turns)
+        self.todo = TodoStore()
+        self.usage = dict.fromkeys(self.usage, 0)
+        self.__dict__.pop("_compressor_obj", None)
+        self._budget_warning_injected = False
+        self._current_task_id = self._current_turn_id = None
+        self._api_call_count = 0
+        self._interrupt.clear()
+        invalidate_system_prompt(self)
 
     def _run_conversation_turn(self, messages: List[Dict], task_id: str) -> Dict[str, Any]:
         # 0. ★ 第 8 章 A7：**按轮次回退** —— 新一轮开始把运行时收回主 provider，并复位
@@ -832,7 +894,8 @@ class AIAgent:
             except BaseException as exc:  # noqa: BLE001 - 异常也要交回主线程
                 result_q.put(exc)
 
-        thread = threading.Thread(target=worker, daemon=True, name="mini-api-call")
+        context = contextvars.copy_context()
+        thread = threading.Thread(target=context.run, args=(worker,), daemon=True, name="mini-api-call")
         self._current_thread = thread
         thread.start()
 
@@ -994,8 +1057,9 @@ class AIAgent:
         pre = self._observers.has("pre_api_request")
         post = self._observers.has("post_api_request")
         error = self._observers.has("api_request_error")
+        # 请求计数是用量事实，与是否安装观察者无关；传输层重试仍属于同一次请求。
+        self._api_call_count += 1
         if pre or post or error:
-            self._api_call_count += 1
             api_request_id = f"{self._current_turn_id or 'turn'}:api:{self._api_call_count}"
         else:
             api_request_id = ""
@@ -1044,14 +1108,20 @@ class AIAgent:
             "Content-Length": str(len(body)),
         }
 
-        url = f"{cand['base_url']}/chat/completions"
-        parts = urllib.parse.urlsplit(url)
+        base = urllib.parse.urlsplit(cand["base_url"])
+        if base.scheme not in ("http", "https") or not base.hostname:
+            raise ValueError("模型端点必须是带主机名的 http:// 或 https:// URL")
+        parts = base._replace(path=base.path.rstrip("/") + "/chat/completions", fragment="")
+        url = urllib.parse.urlunsplit(parts)
+        connection = _TwoTimeoutHTTPSConnection if parts.scheme == "https" else _TwoTimeoutHTTPConnection
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        request_path = urllib.parse.urlunsplit(("", "", parts.path, parts.query, ""))
 
         last_error: Optional[Exception] = None
         for attempt in (1, 2):          # 连接类失败重试一次（可能是瞬时抖动）
-            conn = _TwoTimeoutHTTPSConnection(parts.hostname, parts.port or 443)
+            conn = connection(parts.hostname, port)
             try:
-                conn.request("POST", parts.path or "/", body=body, headers=headers)
+                conn.request("POST", request_path, body=body, headers=headers)
                 resp = conn.getresponse()
                 raw = resp.read().decode("utf-8", errors="replace")
                 if resp.status >= 400:
@@ -1127,12 +1197,10 @@ class AIAgent:
             results = [self._run_one_tool(p, task_id) for p in parsed]
         else:
             with ThreadPoolExecutor(max_workers=min(8, len(parsed))) as pool:
-                results = list(
-                    pool.map(
-                        lambda p: self._run_one_tool(p, task_id),
-                        parsed,
-                    )
-                )
+                # 每个任务独占 Context 副本；同一个 Context 不能被多个线程同时进入。
+                pending = [pool.submit(contextvars.copy_context().run, self._run_one_tool, p, task_id)
+                           for p in parsed]
+                results = [future.result() for future in pending]
 
         # 6. 按原始顺序回填
         for p, content in zip(parsed, results):
@@ -1665,15 +1733,23 @@ class AIAgent:
         """
         c = self._compressor()
         if not c.should_compress(messages):
-            used, src = c.current_tokens(messages)
-            self._emit_status(f"上下文 {used} token（{src}），未到阈值 {c.threshold_tokens}，不压缩")
+            if callable(getattr(c, "current_tokens", None)) and hasattr(c, "threshold_tokens"):
+                used, src = c.current_tokens(messages)
+                self._emit_status(f"上下文 {used} token（{src}），未到阈值 {c.threshold_tokens}，不压缩")
+            else:
+                self._emit_status(c.describe())
             return
         before_len = len(messages)
         # ★ **原地**替换（对应原文 §3.2 的 in-place compaction）：
         #   压缩不换会话 id、不改"这段对话的身份"，只把实时消息列表重写一遍。
         before = [dict(m) for m in messages]
-        messages[:] = c.compress(messages, call_llm=self._summary_llm,
-                                 call_llm_meta=self._summary_llm_meta)
+        optional = {"call_llm": self._summary_llm, "call_llm_meta": self._summary_llm_meta}
+        parameters = inspect.signature(c.compress).parameters
+        if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+            optional = {k: v for k, v in optional.items() if k in parameters and
+                        parameters[k].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                               inspect.Parameter.KEYWORD_ONLY)}
+        messages[:] = c.compress(messages, **optional)
         # ★ 第 6 章接线：压缩 = **原地压缩的落库形式** ——
         #   老世代整体归档（active=0/compacted=1），压缩后的上下文作为新世代插入。
         #   于是"同一条消息出现在两个世代里"是**正常现象**（真实版明文警告别当重复删）。

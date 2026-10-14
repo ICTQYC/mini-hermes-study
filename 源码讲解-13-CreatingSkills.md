@@ -1,5 +1,7 @@
 # 源码讲解 · 第 13 章：创建技能（Creating Skills）
 
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+
 > 上游：`官方文档-Developer-Guide/creating-skills.md`（438 行）· 中文精译见 `中文精译-13-CreatingSkills.md`（680 行）。
 > 真实侧行号锚 `f5d1926110`（v0.21.3）· mini 侧行号锚 `02c61d5`（mini 源码最后一次改动）。
 > ★ **引用归属约定**：mini 侧引用一律写成 `mini-hermes/<路径>:<行号>`；**未带 `mini-hermes/` 前缀的裸 `文件:行号` 一律指真实侧**（本章 mini 与真实侧有 12 个同名同路径文件，不加前缀无法判归属）。
@@ -362,7 +364,7 @@ mini 写了一个**零第三方依赖的子集解析器**（`mini-hermes/agent/s
 
 **③ mini 的实现（现状）**
 
-⬜ 没做。mini 是**单平台 CLI**，没有 OS 维度——`agent.platform`（`mini-hermes/run_agent.py:246`，默认 `"cli"`）指的是**界面平台**（cli / tui），不是宿主 OS，与 `platforms:` 语义无关。mini 里能"按条件开关一段东西"的现成机制是 `check_fn` 或 config 段开关，但两者都不需要 OS 判定，所以这条门在 mini 里**没有前提**。
+⬜ 没做。mini 是**单平台 CLI**，没有 OS 维度——`agent.platform`（`mini-hermes/run_agent.py:256`，默认 `"cli"`）指的是**界面平台**（cli / tui），不是宿主 OS，与 `platforms:` 语义无关。mini 里能"按条件开关一段东西"的现成机制是 `check_fn` 或 config 段开关，但两者都不需要 OS 判定，所以这条门在 mini 里**没有前提**。
 
 **④ 与真实版的差别**
 
@@ -921,7 +923,7 @@ nothing auto-creates (consent-first). Storage mirrors ``cron/jobs.py`` (atomic r
 
 **③ mini 的实现（现状）**：⏭ **不抄——但要讲清为什么 mini 根本不需要它**。这不是"扫描器太重所以省掉"，而是**扫描器的前提在 mini 里不存在**。
 
-扫描器的存在前提，逐字写在它自己的 docstring 里（`tools/skills_guard.py:2`）：*"regex static scan of **externally-sourced** skills plus a trust-aware install policy"*——它扫的是**从外部来源装进来的技能**。信任矩阵的第一列（`builtin`/`trusted`/`community`/`agent-created`）也不是"内容属性"，而是**来源属性**：`_resolve_trust_level` 吃的入参是 `source` 字符串（`:780-783`）。也就是说，整套机制回答的是一个**来源问题**："这个技能是从哪儿来的，值不值得信？"——而 mini **没有来源这个概念**。mini 没有 hub、没有 `search`/`install`/`tap`/`publish`；全仓的网络出口只有两处——模型调用（`mini-hermes/run_agent.py:1025` `_http_post`）与 `web_search` 工具（`mini-hermes/tools/web_search.py:181` `urllib.request.urlopen`）——**没有一处能下载技能**。技能只可能由**用户在本人机器上亲手写或亲手复制**进 `<MINI_HOME>/skills/<name>/SKILL.md`。**"技能从哪来"这个问题在 mini 里只有一个答案：用户自己写的**，所以四档信任塌成一档，矩阵的行数变成 1——没有矩阵可查，`--force` 也没有可覆盖的对象。
+扫描器的存在前提，逐字写在它自己的 docstring 里（`tools/skills_guard.py:2`）：*"regex static scan of **externally-sourced** skills plus a trust-aware install policy"*——它扫的是**从外部来源装进来的技能**。信任矩阵的第一列（`builtin`/`trusted`/`community`/`agent-created`）也不是"内容属性"，而是**来源属性**：`_resolve_trust_level` 吃的入参是 `source` 字符串（`:780-783`）。也就是说，整套机制回答的是一个**来源问题**："这个技能是从哪儿来的，值不值得信？"——而 mini **没有来源这个概念**。mini 没有 hub、没有 `search`/`install`/`tap`/`publish`；全仓的网络出口只有两处——模型调用（`mini-hermes/run_agent.py:1089` `_http_post`）与 `web_search` 工具（`mini-hermes/tools/web_search.py:181` `urllib.request.urlopen`）——**没有一处能下载技能**。技能只可能由**用户在本人机器上亲手写或亲手复制**进 `<MINI_HOME>/skills/<name>/SKILL.md`。**"技能从哪来"这个问题在 mini 里只有一个答案：用户自己写的**，所以四档信任塌成一档，矩阵的行数变成 1——没有矩阵可查，`--force` 也没有可覆盖的对象。
 
 更硬的一条：**mini 的技能系统是只读的**。实测 grep `agent/skill_utils.py` 与 `tools/skills.py`，`write_text` / `open(...,"w")` / `shutil` / `mkdir` / `install` / `urllib` / `requests` **零命中**；模块 docstring 的"没抄"清单里写着 *"安全扫描与四档信任（技能都是本地手写）"*（`mini-hermes/agent/skill_utils.py:11`）。也就是说 mini 里**没有任何代码路径能把内容写进技能库**——没有 `skill_manage` 那种写入面。于是"恶意技能"要出现，必须**由用户亲手把文件放到磁盘上**；而那一刻，**用户本人就是信任边界**，再装一道扫描器并不能多保护什么（用户放进来的东西，正是用户自己认可的东西）。
 

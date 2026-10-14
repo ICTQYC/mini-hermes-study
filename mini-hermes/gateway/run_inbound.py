@@ -48,6 +48,8 @@ class InboundMixin:
 
     def _handle_message_inner(self, event) -> Optional[Dict[str, Any]]:
         key = event.session_key
+        if self._stopping.is_set():
+            return {"action": "stopping"}
 
         # 2. 授权（默认拒绝）
         if not self.authz.is_authorized(event.source):
@@ -56,6 +58,7 @@ class InboundMixin:
             self.hooks.emit("command", command="(denied)", session_key=event.session_key)
             return {"action": "denied"}
 
+        self._events_by_key[key] = event
         resolved = resolve_command(event.text)
         key = event.session_key
 

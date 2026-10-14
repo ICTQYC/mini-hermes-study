@@ -519,8 +519,10 @@ def test_interrupt() -> None:
     check("中断让 turn 在 1s 内退出（不用等 3s 的 API）", dt < 1.5, f"{dt:.2f}s")
     check("中断后返回中断标记", res.get("interrupted") is True, str(res))
     check(
-        "半截响应没有被写进历史（历史里只有 system+user）",
-        [m["role"] for m in res["messages"]] == ["system", "user"],
+        "半截响应没有写进历史，只追加事实性的中断结尾",
+        [m["role"] for m in res["messages"]] == ["system", "user", "assistant"]
+        and res["messages"][-1]["content"] == "(已被用户中断)"
+        and not any("不该走到这里" in m.get("content", "") for m in res["messages"]),
         str([m["role"] for m in res["messages"]]),
     )
 

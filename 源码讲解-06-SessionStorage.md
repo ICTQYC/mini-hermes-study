@@ -1,5 +1,7 @@
 # 源码讲解 · 第 6 章：会话存储（Session Storage）
 
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+
 > 配套《中文精译-06-SessionStorage.md》。那篇讲**原理**（原文说了什么），
 > 这篇讲**差异**：mini 版和真实版差在哪、每处差价值不值得改，外加本章实现时抓出的真问题。
 >
@@ -336,13 +338,14 @@ sqlite3.OperationalError: no such column: parent_session_id
 **修法**：把 DDL 拆成两段，按真实版的顺序执行 ——
 
 ```
+⓪ 只读版本检查                      已有库先于 WAL 切换和任何 DDL
 ① executescript(SCHEMA_SQL)          建表（4 张实体表）
 ② _reconcile_columns()               补列
 ③ executescript(POST_RECONCILE_SQL)  索引 / FTS 虚拟表 / 触发器
 ④ 版本门控
 ```
 
-顺序写进了 `_ensure_schema()` 的 docstring，并用**测试**守住（反向验证时把顺序改回去，
+拒绝过新库的只读探针在 `SessionDB.__init__` 中先执行；`_ensure_schema()` 再防守一次。后续建表、补列、建索引的顺序仍写进 docstring，并用**测试**守住（反向验证时把顺序改回去，
 那一条会干净地变红并报出 `no such column: parent_session_id`）。
 
 ---

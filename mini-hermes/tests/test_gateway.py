@@ -958,6 +958,7 @@ def test_explicit_boundary_never_time_based():
             db._conn.commit()
             runner.shutdown()
             runner2, _, key2 = _runner(home)
+            db = runner2._db()                         # 收尾已关库；从磁盘重读验证未 touch
             # ★ 这条必须放在 route() **之前**：route() 命中复用时会 touch（刷新活动时间），
             #   那之后就看不出"关闭有没有刷过"了。
             check("（前提）关闭**没有**把 updated_at 刷新成'刚刚活动'"
@@ -1000,12 +1001,13 @@ def test_restart_recovery_marker_and_sweep():
             db.end_session(dead, "session_reset")
 
             runner.shutdown()
+            r2 = GatewayRunner(home=home, echo=False)
+            db = r2._db()                              # 验证持久状态，不使用已关闭的连接
             check("优雅关闭写了 .clean_shutdown 标记",
                   gw_status.clean_shutdown_marker(home).exists())
             check("★ 关闭**不结束**会话（进程退出不是对话边界）",
                   db.get_session(sid)["ended_at"] is None)
 
-            r2 = GatewayRunner(home=home, echo=False)
             rec2 = r2._recover_sessions()
             check("干净退出 → 跳过恢复（一个会话都不碰）",
                   rec2["clean_shutdown"] is True and rec2["resume_pending"] == [])
@@ -1025,7 +1027,8 @@ def test_restart_recovery_marker_and_sweep():
             check("连续重启计数 +1（供卡死升级用）",
                   gw_status.read_stuck_loop_counts(home) == {key: 1},
                   str(gw_status.read_stuck_loop_counts(home)))
-            runner.shutdown()
+            r2.shutdown()
+            r3.shutdown()
 
 
 def test_stuck_loop_escalation_and_completion_reset():

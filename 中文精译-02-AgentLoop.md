@@ -1,5 +1,7 @@
 # 中文精译 · 第 2 章：Agent 循环内部（Agent Loop Internals）
 
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+
 > 原文：`官方文档-Developer-Guide/agent-loop.md`
 > 源码对照：`~/.hermes/hermes-agent/`
 > 对应实现：`mini-hermes/run_agent.py`（本目录下）
@@ -429,7 +431,7 @@ if reasoning:
 
 - 中断后 turn 在 0.4s 内退出（而不是傻等 3s 的假 API）
 - 返回 `interrupted=True`
-- **历史里只有 `system` + `user` 两条**——半截响应确实没进去
+- 章节交付时历史只有 `system` + `user`；发布前修复后会追加明确的“已被用户中断”结尾，仍不写入未返回的模型响应。这样下一条用户消息和存盘恢复都能继续。
 
 > 💡 这一条是**用户体感**的分水岭。没有它，你按 Ctrl-C 想插一句话，
 > 得等模型把当前回答整个吐完（长回答 + 慢模型 = 几十秒）。
@@ -899,7 +901,7 @@ def consume(self) -> bool:
 
 ---
 
-# 附录 A：mini-hermes 的代码结构（和 Hermes 一一对应）
+## 附录 A：mini-hermes 的代码结构（和 Hermes 一一对应）
 
 ```text
 mini-hermes/                        （共 3174 行，零第三方依赖）
@@ -938,7 +940,7 @@ tools/registry.py  ←  tools/*.py  ←  model_tools.py  ←  run_agent.py  ← 
    （无依赖）        （自注册）      （分发中介）        （中枢）        （壳）
 ```
 
-# 附录 B：这一章砍掉了什么，砍掉会失去什么
+## 附录 B：这一章砍掉了什么，砍掉会失去什么
 
 | 砍掉的 | Hermes 里的实现 | 砍掉的代价 | 什么时候必须补回来 |
 |---|---|---|---|
@@ -956,11 +958,11 @@ tools/registry.py  ←  tools/*.py  ←  model_tools.py  ←  run_agent.py  ← 
 
 ---
 
-# 附录 C：这一章实际验证过的东西
+## 附录 C：这一章实际验证过的东西
 
-## C.1 真实跑通（DeepSeek，联网）
+### C.1 真实跑通（DeepSeek，联网）
 
-### 简单任务（1 次迭代）
+#### 简单任务（1 次迭代）
 
 ```bash
 cd "$HOME/Desktop/study/hermes学习/mini-hermes"
@@ -1012,7 +1014,7 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 2. **第 1 次迭代结束后回到循环顶部**（模型拿到工具结果，再问一次模型）
 3. 第 2 次迭代模型给出文本 → 没有 `tool_calls` → **循环退出**
 
-### 多步任务（4 次迭代，验证 agent 级工具 + 写文件 + 会话持久化）
+#### 多步任务（4 次迭代，验证 agent 级工具 + 写文件 + 会话持久化）
 
 ```bash
 cd "$HOME/Desktop/study/hermes学习/mini-hermes"
@@ -1086,7 +1088,7 @@ provider=deepseek model=deepseek-chat api_mode=chat_completions
 > 它可能真的写了，也可能只是在复述它刚调用的工具**声称**的结果——
 > 而那个工具本身可能失败了。**永远去看文件系统。**
 
-## C.2 机制自测（不联网，54/54 通过）
+### C.2 机制自测（不联网，54/54 通过）
 
 ```bash
 python3 tests/test_loop_mechanisms.py

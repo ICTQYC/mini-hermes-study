@@ -97,10 +97,20 @@ class SessionSchemaMixin:
     """给 `SessionDB` 用的建库 / 迁移部分。"""
 
     # ── 入口：连接建好后调一次 ──────────────────────────────────────────
+    def _check_schema_version(self, conn: sqlite3.Connection) -> None:
+        """只读检查已有版本；老库没有版本表时仍允许后续协调 schema。"""
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'").fetchone()
+        current = self._read_schema_version(conn.cursor()) if exists else None
+        if current is not None and current > SCHEMA_VERSION:
+            raise SchemaTooNewError(
+                f"库的 schema 版本是 {current}，而代码只认到 {SCHEMA_VERSION} —— "
+                "这通常意味着你用**旧代码**打开了**新库**。拒绝继续。")
+
     def _ensure_schema(self) -> None:
         """建库 / 补列 / 版本，**顺序不能换**（真实版 `hermes_state_schema.py:919-941`）：
 
         ```
+        ⓪ 只读版本检查                   已有库先于 WAL 切换；这里再次先于 DDL 检查
         ① executescript(SCHEMA_SQL)        建表（全是 IF NOT EXISTS → 幂等）
         ② _reconcile_columns()             补列（加列不用写迁移）
         ③ executescript(POST_RECONCILE_SQL) 建索引 / FTS / 触发器
@@ -112,6 +122,7 @@ class SessionSchemaMixin:
           （`no such column: parent_session_id`）—— 老用户直接起不来。
           真实版把这类 DDL 单独放一份、注释里写明原因（`:929-930`）。
         """
+        self._check_schema_version(self._conn)          # 必须先于任何 DDL
         cur = self._conn.cursor()
         # executescript 会先隐式提交，然后按顺序执行整份 DDL（全部 IF NOT EXISTS → 幂等）
         self._conn.executescript(SCHEMA_SQL)

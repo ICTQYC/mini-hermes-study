@@ -1,5 +1,7 @@
 # 源码讲解 · 第 7 章 · 扩展 7.2（旧称第 9 章）：多路复用网关（Multiplexing Gateway）
 
+> 维护说明：章节交付时的统计与实测输出保留原口径；当前发布前修复、套件数字与验证收据见《发布前修复记录.md》。mini 代码引用按维护后的实现核对。
+
 > **上游锚**：`f5d1926110`（Hermes `v0.21.3`）。本文所有 `文件:行号` 都对这个 commit。
 > **真实源码**：`~/.hermes/hermes-agent/`（`gateway/` 包 = **160 个 `.py` / 86,785 行**）
 > **对照实现**：`mini-hermes/`（全项目 **12,883 行**代码 / **6,355 行**测试）
@@ -260,7 +262,7 @@ multiplex, and the fail-closed secret scope the multiplexer arms buys it nothing
 | 10 | 密钥失败关闭 | mux 开 + 无作用域 → 抛 | 同 ✅ | 已对齐 | — |
 | 11 | 全局白名单 | 36 项 + 3 前缀（`secret_scope.py:98-130`） | **19 项精确名 + 0 前缀**（`secret_scope.py:36-52`）—— `MINI_*` 是凭据，**故意不给前缀** | ★ 缺层（会读到空值/误抛） | ✅ 已抄（`f34fdaa`·A9） |
 | 12 | home 覆盖 | 覆盖 → env → 默认 | 同 ✅ | 已对齐 | — |
-| 13 | `hermes_home_key()` | `hermes_constants.py:119`，给注册表稳定分键 | 无（`tools/registry.py` 的 check_fn 缓存**不分键**） | ★ 缺层（多 profile 结果互串） | ⬜ 没做（A10，~35 行） |
+| 13 | `hermes_home_key()` | `hermes_constants.py:119`，给注册表稳定分键 | 函数名未照抄，但缓存键已使用当前 home 的解析路径 | 形态不同；缓存隔离已落地 | ✅ 发布前修复补上分键 |
 | 14 | 进程级 home 出口 | `get_process_hermes_home()`（身份文件不受作用域影响） | 无 | 缺层 | ⬜ 没做（A10） |
 | 15 | 一次性告警 | `#18594`：声明了 profile 却在默认 home 上跑 | 无 | 缺层（低优先） | ⬜ 没做（~15 行） |
 | 16 | 配置 reload 策略 | mux 开 → 默认作用域下 reload + 写回裁决 | 无 reload 概念 | 规模差距 | ⬜ 不抄（照抄会与 mini 的一次性加载冲突） |
@@ -588,14 +590,14 @@ env 覆盖函数把「空白 ≠ False」这条防御写进了 docstring（逐�
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
 | 解析顺序 | 覆盖 → `HERMES_HOME` → 平台默认 | ✅ 有（覆盖 → `MINI_HOME` → `~/.mini-hermes`，同序） |
-| 按 home 分桶的注册表键 | `hermes_home_key()` | ⬜ 没做（A10，~20 行） |
+| 按 home 分桶的注册表键 | `hermes_home_key()` | 缓存按解析后的当前 home 分桶（独立函数名未照抄） |
 | 进程级 home | `get_process_hermes_home()` | ⬜ 没做（A10） |
 | 一次性告警 | `_warn_profile_fallback_once()`（`#18594`） | ⬜ 没做（`#15`，~15 行） |
 | override 分支建目录 | — | 只有 env/默认分支 `mkdir`，override 分支不建（`:43-45`） |
 
 差在哪、为什么现在这样：
 
-- `hermes_home_key()` 不是「辅助函数」，而是**按 home 分桶的注册表的唯一稳定键**。缺它的后果已经在 mini 里：`tools/registry.py` 的 `check_fn` 缓存**不按 profile 分键**（第 4 章注释里写着「真实版按 `hermes_home_key()` 分键」，实现里没有）→ 多 profile 下 A 的「终端可用」结论会被 B 复用。
+- `hermes_home_key()` 不是「辅助函数」，而是**按 home 分桶的注册表的唯一稳定键**。发布前复核确认了旧缓存会跨 profile 复用；现已在 `tools/registry.py` 使用 `(fn, str(get_mini_home().resolve()))` 分键，TTL 与成功宽限也使用同一个键。函数名未照抄，隔离语义已实现。
 - `get_process_hermes_home()`：mini 的 PID/锁/状态文件现在用 `get_mini_home()` 解析 —— 一旦作用域铺开（A5），**身份文件会跟着「当前作用域」跑**（把 A 的 PID 写进 B 的家）。这正是真实版那句注释防的事。
 - 一次性告警低优先：mini 目前没有「子进程 spawner 传 home」这条路径。
 
@@ -948,7 +950,7 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 | MCP 发现 | 按 profile home 分桶（#67605） | ⬜ 没做 —— mini 无 MCP |
 | `TERMINAL_*` | 按白名单保持全局 | ⬜ 没做 —— 无沙箱后端 |
 | 内置工具注册表 | 进程级；插件工具按 profile 叠 | **进程级**（mini 无插件系统） |
-| `check_fn` 缓存 | 按 `hermes_home_key()` 分键 | **不分键** ← 真隐患（缺口 #7，A10 解决） |
+| `check_fn` 缓存 | 按 `hermes_home_key()` 分键 | 按解析后的当前 home 分键（发布前修复已补） |
 | 监听 / relay / 进程锁 | 一进程一份 | 进程锁**有**（mini 有 PID 指纹） |
 
 用大白话把这张表念一遍：
@@ -956,12 +958,12 @@ mini 有两张适配器表：活动 profile 的 `self.adapters`（`gateway/run.p
 - **MCP 发现**：真实版曾经是"谁先建 agent 谁占坑"，现在按 profile home 分桶；mini 根本没有 MCP，这一格是空的。
 - **`TERMINAL_*`**：真实版把这些终端策略变量**保持全局**、只靠白名单管，所以多 profile 时会串味；mini 没有沙箱后端，也就没有这些变量。
 - **内置工具注册表**：真实版是**进程级**的，只有插件工具那一层按 profile 叠；mini 也**进程级**，而且**没有插件系统**可叠。
-- **`check_fn` 缓存**：真实版按 `hermes_home_key()` 分键；mini **不分键** —— 这才是真隐患（见 ④）。
+- **`check_fn` 缓存**：真实版按 `hermes_home_key()` 分键；mini 按当前 home 的解析路径分键，已补上同一个隔离边界。
 - **监听 / relay / 进程锁**：真实版一进程一份；mini 的**进程锁已经按 home 分**（用 PID 指纹判活），这一格是齐的。
 
 **④ 与真实版的差别**
 
-唯一的真问题是 **`check_fn` 缓存不分键**。它现在没爆，是因为 mini 的 `check_fn` 只查"这台机器有没有 `bash`/`grep`"这类**与 profile 无关**的事实。但 mini 第 4 章已经给了 `check_fn` 一个**带 state 的形态**（TTL + 抖动保护 + 失败宽限）—— 一旦将来出现"按 profile 变化的可用性"（比如"这个 profile 配了搜索 key"），**A 的结论会被 B 复用**。所以这一格迟早要跟 `hermes_home_key()` 对齐（A10，`hermes_home_key` 进缓存键，~10 行）。
+旧实现的 **`check_fn` 缓存不分键** 已经影响带搜索密钥的 profile，不能再假定探测只查 bash/grep。发布前修复补上了 home 分键，也把作用域复制到 API worker 和每个并行工具任务。回归测试分别验证缓存 A→B→A，以及次级 profile 两个同名技能调用都读取自己的正文。
 
 ---
 

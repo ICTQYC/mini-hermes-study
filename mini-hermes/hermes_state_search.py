@@ -261,7 +261,7 @@ class SessionSearchMixin:
             params += _like_params(tok)
         where, params = self._apply_filters(conds, params, prefix="m.", **kw)
         # 片段：用 instr 找到命中点，往前 40 字符起截 120 字符（真实版 `_LIKE_SNIPPET_SQL`，`:47`）
-        params.append(tokens[0])
+        params.insert(0, tokens[0])
         params += [int(kw["limit"]), int(kw["offset"])]
         sql = f"""
             SELECT m.id, m.session_id, m.role, m.timestamp, s.title, s.source,

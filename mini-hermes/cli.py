@@ -27,12 +27,11 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import hermes_state
-from agent.system_prompt import invalidate_system_prompt, prompt_preview
+from agent.system_prompt import prompt_preview
 from hermes_cli.runtime_provider import resolve_provider
 from hermes_constants import display_path
 from run_agent import AIAgent
@@ -258,7 +257,7 @@ class MiniCLI:
             self.session_id,
             input_tokens=usage.get("prompt_tokens") or 0,
             output_tokens=usage.get("completion_tokens") or 0,
-            api_calls=result.get("iterations_used") or 0,
+            api_calls=result.get("api_calls", result.get("iterations_used")) or 0,
         )
         prompt = getattr(self.agent, "_cached_system_prompt", None)
         if prompt:
@@ -308,16 +307,11 @@ class MiniCLI:
                 self._resumed_from = None
                 # 新会话 = 新的一行（此刻还是空壳，模型等后面补）—— 与启动时同一套动作。
                 self.db.create_session(self.session_id, "cli")
-                self.agent.budget = self.agent.budget.__class__(self.agent.max_turns)
+                self.agent.reset_session(self.session_id)
                 # ★ 新会话 = 提示词重建的时机之一（对应 Hermes 的 invalidate_system_prompt）。
                 #   如果忘了这一步会怎样：新会话还在用旧会话的系统提示词，
                 #   里面写着旧的 Session ID、旧的时间戳、旧的工作区快照。
                 #   ——**这就是"缓存复用"过度之后的样子**：省了重建，但内容是错的。
-                self.agent.session_id = self.session_id
-                self.agent.session_start = datetime.now()
-                invalidate_system_prompt(self.agent)
-                # 预算也重置了，所以"预算告警已注入"的一次性标志要跟着清
-                self.agent._budget_warning_injected = False
                 print(f"{DIM}已开新会话 {self.session_id}{RESET}")
                 continue
             if user == "/prompt":

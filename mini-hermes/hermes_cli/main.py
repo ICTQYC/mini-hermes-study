@@ -95,10 +95,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    # ---- 子命令：不建 MiniCLI，直接跑 ----
-    if getattr(args, "command", None) in ("gateway", "profile", "sessions"):
-        return int(args.func(args))
-
     # ---- `-p/--profile`：**在一切取路径的代码之前**把它钉住 ----
     # ★ 两个顺序要求，都在这一小段里：
     #   ① 必须在构造 MiniCLI **之前**（MiniCLI 一构造就会解析 provider、建会话库）；
@@ -118,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         os.environ["MINI_HOME"] = str(home)
         print(f"ⓘ profile {args.profile!r} → home={display_path(home)}", file=sys.stderr)
+
+    # 子命令也依赖目标 home；先解析 -p，再分发，但仍不构造 MiniCLI。
+    if getattr(args, "command", None) in ("gateway", "profile", "sessions"):
+        return int(args.func(args))
 
     # ---- 只读的查询类参数：**在构造 MiniCLI 之前**处理 ----
     # 它们问的是"这套代码里有什么""我的网络通不通"，与密钥无关。
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             print(result["final_response"])
         # ⚠️ 退出码必须反映失败 —— 否则脚本调用方分不清"答完了"和"炸了"。
         #    （之前那个 bug：turn 里抛异常、一个字不打印、退出码还是 0。）
-        if result.get("error"):
+        if result.get("error") or result.get("budget_exhausted"):
             return 1
         if result.get("interrupted"):
             return 130

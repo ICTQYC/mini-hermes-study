@@ -28,12 +28,10 @@ Hermes 找「模块体里的 `registry.register(...)` 语句」，
 mini 找「带 `@register_tool` 装饰器的函数定义」。
 装饰器版本少写一遍函数名，所以 mini 选它。
 
-**② 没有 profile 分键**
+**② profile 分键**
 
 Hermes 的 check_fn 缓存按 `hermes_home_key()` 分键，因为它一个进程服务多个 profile。
-mini 是单 profile 的，所以缓存直接以「函数对象」为 key。
-**这是有意的简化**，代价是：如果 mini 以后支持多 profile，
-一个 profile 的探测结果会被另一个复用——那时必须补上分键。
+mini 同样以「函数对象 + 当前 home」分键；TTL 和抖动保护都不能跨 profile 复用。
 """
 from __future__ import annotations
 
@@ -93,8 +91,8 @@ CHECK_FN_TTL_SECONDS = 30.0
 # 见 check_fn_cached()。
 CHECK_FN_FAILURE_GRACE_SECONDS = 60.0
 
-_cache: Dict[Callable, Tuple[float, bool]] = {}
-_last_good: Dict[Callable, float] = {}
+_cache: Dict[Tuple[Callable, str], Tuple[float, bool]] = {}
+_last_good: Dict[Tuple[Callable, str], float] = {}
 _no_cache: Set[Callable] = set()
 _cache_lock = threading.Lock()
 
@@ -137,24 +135,26 @@ def check_fn_cached(fn: Callable) -> bool:
     now = time.monotonic()
     if fn in _no_cache:
         return run_check_fn_uncached(fn)
+    from hermes_constants import get_mini_home
+    key = (fn, str(get_mini_home().resolve()))
     with _cache_lock:
-        cached = _cache.get(fn)
+        cached = _cache.get(key)
         if cached is not None and now - cached[0] < CHECK_FN_TTL_SECONDS:
             return cached[1]
 
     value = run_check_fn_uncached(fn)
     with _cache_lock:
         if value:
-            _last_good[fn] = now
-            _cache[fn] = (now, True)
+            _last_good[key] = now
+            _cache[key] = (now, True)
             return True
-        last = _last_good.get(fn)
+        last = _last_good.get(key)
         if last is not None and now - last < CHECK_FN_FAILURE_GRACE_SECONDS:
             # ★ 抖动保护：刚还能用，这次失败 → 当作瞬时故障，继续提供，
             #   但**不写缓存** —— 否则"假装还能用"会持续 30 秒。
             #   正确组合是"继续乐观 + 立刻重新检查"。
             return True
-        _cache[fn] = (now, False)
+        _cache[key] = (now, False)
         return False
 
 

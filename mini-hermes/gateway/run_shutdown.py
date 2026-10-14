@@ -8,7 +8,12 @@ mini 没有事件循环，所以就叫 `_finalize_session`。
 """
 from __future__ import annotations
 
+import threading
+import time
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+from gateway.profile_scope import profile_runtime_scope
 
 
 class ShutdownMixin:
@@ -58,16 +63,35 @@ class ShutdownMixin:
         #   **这不是结束对话**：转写本在库里，放掉 agent 只是把 RAM 还回去
         #   （真实版同：缓存淘汰从来不写 `ended_at`）。
         self._stop_housekeeping()
-        self._agent_cache.clear()
+        self._stopping.set()
+        adapters = list(self.adapters.values()) + [a for group in self._profile_adapters.values()
+                                                  for a in group.values()]
+        # 审批等待也是回合的一部分；退出时先唤醒它们，按拒绝处理。
+        with self._approval_lock:
+            for pending in self._pending_approvals.values():
+                pending["holder"]["approved"] = False
+                pending["holder"]["event"].set()
 
         # ★ 只标记"被打断的那一轮"（正在跑的会话）→ 软恢复
         for key in list(self._running_agents):
             sid = self._session_ids.get(key)
             if sid:
                 try:
-                    self._router().mark_resume_pending(sid, "shutdown_timeout")
+                    home = Path(self._turn_homes.get(key, str(self.home)))
+                    with profile_runtime_scope(home):
+                        self._router().mark_resume_pending(sid, "shutdown_timeout")
                 except Exception as exc:
                     self._turn_errors.append(f"mark_resume_pending: {exc!r}")
+            self._interrupt_running_agent(key)
+
+        tasks = [task for adapter in adapters
+                 for task in list(getattr(adapter, "_session_tasks", {}).values())]
+        deadline = time.monotonic() + self.shutdown_timeout
+        for task in tasks:
+            if task is not threading.current_thread() and task.is_alive():
+                task.join(max(0.0, deadline - time.monotonic()))
+        drained = not any(task.is_alive() for task in tasks)
+        self._agent_cache.clear()
 
         # ★ **不 touch**（第 8 章更正）：`updated_at` 表达的是"**用户活动**"，
         #   不是"进程活动"。原来这里给每个会话 touch 一下，后果是：
@@ -77,11 +101,20 @@ class ShutdownMixin:
         #   它只对**正在跑**的会话打一个 `resume_pending`（上面那段）。
         self._session_ids.clear()
 
-        for adapter in self.adapters.values():
+        for adapter in adapters:
             try:
                 adapter.disconnect()
             except Exception as exc:
                 self._turn_errors.append(f"disconnect: {exc!r}")
+        if drained:
+            for db in self._dbs.values():
+                db.close()
+            self._dbs.clear()
+            self._routers.clear()
+            if self._multiplex_before_start is not None:
+                from agent.secret_scope import set_multiplex_active
+                set_multiplex_active(self._multiplex_before_start)
+                self._multiplex_before_start = None
 
         from gateway import status as gw_status
         try:
@@ -93,7 +126,7 @@ class ShutdownMixin:
             # ★ 第 8 章：**优雅关闭的末尾**写下"干净退出"标记 ——
             #   下次启动据此跳过崩溃恢复（否则每次 `restart` 都会被当成被打断的）。
             #   只在退出码 0 时写：启动失败（78）不是"干净退出"。
-            if exit_code == 0:
+            if exit_code == 0 and drained:
                 gw_status.mark_clean_shutdown(self.home)
             # ★ 只删**自己写的**身份文件（真实版 `live_gateway_pid_for_home` 的
             #   "Never unlinks home's identity files" 是给读方定的规矩：

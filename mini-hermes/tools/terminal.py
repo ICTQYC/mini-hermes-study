@@ -110,6 +110,9 @@ def terminal_tool(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
 
     out = (proc.stdout or "").strip()
     err = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return tool_error(f"命令退出码 {proc.returncode}：{_truncate(err or out, 160)}",
+                          exit_code=proc.returncode, stdout=_truncate(out), stderr=_truncate(err))
     # ★ JSON 字符串，不是人看的文本。exit_code 单独给一个字段，
     #   这样"命令失败了"和"命令没有输出"能区分开 —— 纯文本形式区分不了。
     return tool_result(

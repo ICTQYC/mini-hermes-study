@@ -130,11 +130,23 @@ class SessionDB(SessionSessionsMixin, SessionMessagesMixin, SessionFtsMixin,
         self._db_corrupt, self._db_corrupt_reason = False, ""
         # `close()` 之后拒绝重开（真实版 `_reopen_after_close_locked` `:888/900`）
         self._closed = False
+        if not read_only and self.db_path.is_file():
+            # 写连接会切换 WAL，故版本门控先通过独立只读连接完成。
+            probe = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True,
+                                    timeout=SQLITE_TIMEOUT_S)
+            try:
+                self._check_schema_version(probe)
+            finally:
+                probe.close()
         if not read_only:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect()
-        if not read_only:
-            self._ensure_schema()
+        try:
+            if not read_only:
+                self._ensure_schema()
+        except BaseException:
+            self._conn.close()
+            raise
         # ★ 开库时**读一次**降级标记 ⇒ 置内存标志（A2）。
         #   读的是 `state_meta` 里的持久标记，不是"上次进程的内存" —— 所以跨重启可见。
         self._fts_stale = self._read_fts_stale_marker()
@@ -164,7 +176,7 @@ class SessionDB(SessionSessionsMixin, SessionMessagesMixin, SessionFtsMixin,
         """
         if self.read_only:
             conn = sqlite3.connect(
-                f"file:{self.db_path}?mode=ro", uri=True,
+                self.db_path.resolve().as_uri() + "?mode=ro", uri=True,
                 check_same_thread=False, timeout=SQLITE_TIMEOUT_S, isolation_level=None,
             )
         else:

@@ -22,9 +22,10 @@ from gateway import status as gw_status
 
 
 def _homes(multiplex: bool = False) -> List[Path]:
+    from hermes_constants import get_mini_home
     from hermes_cli.profiles import profiles_to_serve
 
-    return profiles_to_serve(multiplex)
+    return profiles_to_serve(True) if multiplex else [get_mini_home()]
 
 
 def cmd_run(args) -> int:
@@ -41,13 +42,13 @@ def cmd_run(args) -> int:
 
 def cmd_status(args) -> int:
     from gateway.multiplex_mode import default_gateway_multiplexes
-    from hermes_cli.profiles import default_home
+    from hermes_constants import get_mini_home
 
     # ★ 三态里的"未设置"时**不猜**：先看活网关记下的 served_profiles，再看显式开关
     #   （真实版 `default_gateway_multiplexes` 的纪律）。只看命令行旗标的话，
     #   "网关自己在多路复用"这件事在 status 里看不见。
     if args.multiplex is None:
-        multiplex = bool(args.all or default_gateway_multiplexes(default_home()))
+        multiplex = bool(args.all or default_gateway_multiplexes(get_mini_home()))
     else:
         multiplex = bool(args.multiplex or args.all)
     found = False

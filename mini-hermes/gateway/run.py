@@ -14,12 +14,13 @@
 from __future__ import annotations
 
 import os
+import signal
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agent.secret_scope import set_multiplex_active
+from agent.secret_scope import multiplex_active, set_multiplex_active
 from gateway import status as gw_status
 from gateway.adapters.console import ConsoleAdapter
 from gateway.agent_cache import AgentCache
@@ -105,7 +106,11 @@ class GatewayRunner(AdaptersMixin, InboundMixin, TurnMixin, ShutdownMixin, Start
         self._busy_rejections: List[tuple] = []
         self._tool_events: List[str] = []
         self._ticks: int = 0
-        self._pending_approval: Optional[Dict[str, Any]] = None
+        self._pending_approvals: Dict[str, Dict[str, Any]] = {}
+        self._approval_lock = threading.Lock()
+        self._stopping = threading.Event()
+        self._multiplex_before_start: Optional[bool] = None
+        self.shutdown_timeout = 5.0
 
         self.pid: Optional[int] = None
         self._pid = None
@@ -224,6 +229,7 @@ class GatewayRunner(AdaptersMixin, InboundMixin, TurnMixin, ShutdownMixin, Start
         self._multiplex_status_fields = multiplex_status_fields(self.multiplex_decision)
         log_multiplex_decision(self.multiplex_decision)
         # 密钥读取的 fail-closed 开关按**裁决结果**打开（真实版在 __init__ 里做同一件事）
+        self._multiplex_before_start = multiplex_active()
         set_multiplex_active(self.multiplex)
 
         self.pid = os.getpid()
@@ -294,15 +300,26 @@ class GatewayRunner(AdaptersMixin, InboundMixin, TurnMixin, ShutdownMixin, Start
         code = self.start()
         if code != 0:
             return code
+        old_sigterm = None
+        if threading.current_thread() is threading.main_thread():
+            old_sigterm = signal.getsignal(signal.SIGTERM)
+            def stop(signum, frame):
+                self._stopping.set()
+                raise KeyboardInterrupt()             # 让阻塞的 stdin 跳到同一个 finally
+            signal.signal(signal.SIGTERM, stop)
         try:
             self.maintenance_tick()                    # 启动即一次 tick
             for adapter in self.adapters.values():
                 if hasattr(adapter, "serve_forever"):
                     adapter.serve_forever()
         except KeyboardInterrupt:
-            self._banner("收到 Ctrl-C，准备退出。")
+            self._banner("收到停止请求，准备退出。")
         finally:
-            self.shutdown()
+            try:
+                self.shutdown()
+            finally:
+                if old_sigterm is not None:
+                    signal.signal(signal.SIGTERM, old_sigterm)
         return 0
 
     def maintenance_tick(self) -> None:

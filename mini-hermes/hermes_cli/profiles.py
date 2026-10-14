@@ -156,7 +156,12 @@ def resolve_profile_home(name: Optional[str]) -> Path:
     """
     if name is None or name in ("", "default"):
         return default_home()
+    validate_profile_name(name)
     home = profile_home(name)
+    try:
+        home.resolve().relative_to(profiles_root().resolve())
+    except ValueError:
+        raise ProfileError("profile 目录不能通过符号链接逃出 profiles 根目录") from None
     if not home.exists():
         existing = list_profiles()
         hint = ("、".join(existing) if existing else "（还没有任何 profile）")
@@ -205,6 +210,7 @@ def list_profiles() -> List[str]:
 
 
 def profile_home(name: str) -> Path:
+    validate_profile_name(name)
     return profiles_root() / name
 
 

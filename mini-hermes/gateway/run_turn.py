@@ -5,10 +5,8 @@
 1. **绑 profile 作用域**（`profile_runtime_scope`）：进程是常驻的，
    而 `os.environ`/全局量里装的是启动 profile 的值。不绑 = 次级 profile 的回合
    用默认 profile 的密钥与 home 跑（**不报错**）。
-2. **每条消息新建 AIAgent，但历史从库里取**：真实版就是这么做的
-   （`run_agent.py` 的注释里 mini 第 2 章已记过这条）。好处是 agent 无状态、
-   天然适配"一个进程服务 N 个会话"；代价是每轮要有一次历史重建，
-   所以**历史的正确性完全落在存储层**（第 6 章的债，在这里被还上）。
+2. **agent 可以缓存，但历史每轮从库里取**：AIAgent 未收到显式历史时读取活世代。
+   缓存节省提示词重建，不能代替会话路由或历史加载。
 """
 from __future__ import annotations
 
@@ -70,7 +68,6 @@ class TurnMixin:
         from run_agent import AIAgent
 
         key = event.session_key
-        sid = self._session_ids.get(key) or self._open_session(event)
 
         # ★ 作用域绑定：整个回合（含所有工具调用、子进程）都在**这条消息所属的** profile 上跑。
         #   A5 修正（第 9 章）：第 7/8 章这里写的是 `self.home`（**启动**那个 profile）——
@@ -82,14 +79,14 @@ class TurnMixin:
         #   （把回合作用域改回 `self.home`，测试照样全绿）。第 9 章的验收靠这一栏。
         self._turn_homes[event.session_key] = str(home)
         with profile_runtime_scope(home):
+            sid = self._open_session(event)              # 缓存命中也必须经过路由状态机
             db = self._db()
             spec = self._provider_spec()
 
             # ── 第 8 章：agent 从**缓存**取，不再每轮新建（真实版网关就是缓存 agent 的）──
             #   历史仍然由 agent 自己按 session_db + session_id 读（所以缓存里的
             #   agent 必须与 session_id 一致 —— 轮转时上面的 evict 保证这一点）。
-            #   （第 7 章这里多算了一行 `db.get_messages_as_conversation(...)`，
-            #     从来没人用 —— 死代码，第 8 章删掉。）
+            #   AIAgent 在追加本轮 user 之前，按 session_db/session_id 读取活世代。
             def _build() -> Any:
                 return AIAgent(
                     spec,
@@ -97,7 +94,7 @@ class TurnMixin:
                     text_callback=None,
                     tool_progress_callback=self._on_tool_progress,
                     status_callback=None,
-                    approval_callback=self._approval_callback,      # 网关里的"确认"是异步的
+                    approval_callback=None,                         # 每轮绑定当前来源事件
                     context_length=spec.get("context_length"),
                     session_db=db,
                     session_id=sid,
@@ -106,6 +103,7 @@ class TurnMixin:
                 )
 
             agent, created = self._agent_cache.get_or_create(key, sid, _build)
+            agent.approval_callback = lambda command: self._approval_callback(command, event=event)
             if created:
                 self._turn_errors.append(f"缓存未命中 → 新建 agent（{key}，会话 {sid}）")
             self._agent_cache.mark_busy(key, True)          # 跑着的：不许淘汰
@@ -123,20 +121,21 @@ class TurnMixin:
                 return {"action": "error", "error": repr(exc)}
             finally:
                 self._running_agents.pop(key, None)
+                self._agent_cache.mark_busy(key, False)     # 包括前置异常和被中断的回合
 
             # ★ "没落盘的不许淘汰"（真实版 `transcript_persistence_caught_up`）：
             #   **跑完**才解除保护；被打断的那一轮保留标记 —— 宁可多留一个 agent，
             #   也不丢一轮对话（TTL 清扫会跳过它；下一次成功跑完就清）。
-            if not result.get("interrupted"):
+            completed = not any(result.get(flag) for flag in ("interrupted", "error", "budget_exhausted"))
+            if completed:
                 self._agent_cache.mark_pending_flush(key, False)
-            self._agent_cache.mark_busy(key, False)
 
             self.hooks.emit("agent:end", session_key=key, session_id=sid,
                             response=result.get("final_response", ""))
             # ★ 第 8 章：**一轮真的跑完了**才清"待恢复"标记（真实版由网关在
             #   `run_conversation()` 返回真实响应之后调用 `clear_resume_pending()`）。
             #   "读到就清"会让"读了之后又崩"永远恢复不上。
-            if not result.get("interrupted"):
+            if completed:
                 self._router().clear_resume_pending(sid)
                 # ★ 第 8 章：这一轮**跑完了** → 清掉它自己的连续重启计数
                 #   （真实版 `_clear_restart_failure_count`）。跑完说明它不卡了。
@@ -145,7 +144,7 @@ class TurnMixin:
                 #    doesn't leak onto later messages in the same session."）
                 self._router().clear_fresh_reset(sid)
                 from gateway import status as gw_status
-                gw_status.clear_one_stuck_loop_count(self.home, key)
+                gw_status.clear_one_stuck_loop_count(home, key)
             self._reply(event, result.get("final_response", "") or "（空答复）",
                         target=self._explicit_target(event))
             self._sync_session_meta(sid, result)
@@ -160,8 +159,6 @@ class TurnMixin:
         不做映射，回填就是"静默写 0" —— 真跑时看列全是 0 才发现。
         """
         usage = result.get("usage") or {}
-        if not usage:
-            return
         in_tok = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
         out_tok = usage.get("output_tokens") or usage.get("completion_tokens") or 0
         try:
@@ -169,7 +166,7 @@ class TurnMixin:
                 session_id,
                 input_tokens=int(in_tok),
                 output_tokens=int(out_tok),
-                api_calls=int(result.get("iterations_used") or 0),
+                api_calls=int(result.get("api_calls", result.get("iterations_used")) or 0),
             )
         except Exception as exc:
             self._turn_errors.append(f"record_usage: {exc!r}")
@@ -177,7 +174,7 @@ class TurnMixin:
     # ------------------------------------------------------------------ #
     # 审批：网关里"确认"必须异步（人等不了终端提示）
     # ------------------------------------------------------------------ #
-    def _approval_callback(self, command: str) -> bool:
+    def _approval_callback(self, command: str, *, event: Any) -> bool:
         """agent 要求确认一条终端命令时，网关**发一条消息出去**，然后等 `/approve`。
 
         ★ 这就是"为什么一定有网关在前"的一个具体后果：
@@ -185,22 +182,35 @@ class TurnMixin:
         mini 用 `threading.Event` 等（真实版走 approval 表 + delivery_obligations）。
         """
         holder: Dict[str, Any] = {"event": threading.Event(), "approved": False}
-        self._pending_approval = {"command": command, "holder": holder}
-        self._reply_to_key(self._last_active_key,
-                           f"🔐 需要确认：`{command}`\n回复 `/approve` 或 `/deny`。")
-        ok = holder["event"].wait(timeout=self.approval_timeout)
-        self._pending_approval = None
-        if not ok:
-            self._reply_to_key(self._last_active_key, "⌛ 确认超时 → 按拒绝处理。")
-        return bool(ok and holder["approved"])
+        key = event.session_key
+        pending = {"command": command, "holder": holder, "owner": event.source.user_id}
+        with self._approval_lock:
+            if key in self._pending_approvals or self._stopping.is_set():
+                return False                       # 不覆盖同一会话已有的确认
+            self._pending_approvals[key] = pending
+        try:
+            self._reply(event, f"🔐 需要确认：`{command}`\n回复 `/approve` 或 `/deny`。",
+                        target=self._explicit_target(event))
+            ok = holder["event"].wait(timeout=self.approval_timeout)
+            if not ok:
+                self._reply(event, "⌛ 确认超时 → 按拒绝处理。", target=self._explicit_target(event))
+            return bool(ok and holder["approved"])
+        finally:
+            with self._approval_lock:
+                if self._pending_approvals.get(key) is pending:
+                    self._pending_approvals.pop(key, None)
 
     def _resolve_approval(self, event, *, approved: bool) -> Dict[str, Any]:
-        pend = getattr(self, "_pending_approval", None)
-        if not pend:
+        with self._approval_lock:
+            pend = self._pending_approvals.get(event.session_key)
+            accepted = bool(pend and pend["owner"] == event.source.user_id
+                            and not pend["holder"]["event"].is_set())
+            if accepted:
+                pend["holder"]["approved"] = approved
+                pend["holder"]["event"].set()
+        if not accepted:
             self._reply(event, "（没有待确认的命令）", target=self._explicit_target(event))
             return {"action": "approve_noop"}
-        pend["holder"]["approved"] = approved
-        pend["holder"]["event"].set()
         self._reply(event, "✅ 已批准" if approved else "🚫 已拒绝",
                     target=self._explicit_target(event))
         return {"action": "approved" if approved else "denied"}
