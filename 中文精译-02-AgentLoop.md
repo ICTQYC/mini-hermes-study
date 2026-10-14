@@ -701,6 +701,11 @@ CLI 观察状态前先调它。修完：
 加上一个 `approval_callback`（对应第 6 节的步骤 3）。
 流式相关的两个属于后面章节。
 
+> ★ mini 把上面表里的 `tool_start_callback` + `tool_complete_callback`（后者带 `result`）
+> 合成一个 `tool_progress_callback(name, args, phase[, status, summary])` —— `done` 阶段多带
+> `(status, summary)`：**成败 + 一行摘要**。补这两个字段的起因见《源码讲解-04》§十三：
+> 只有名字时，失败的工具在终端上和成功的长得一模一样。
+
 > 💡 **这张表是"壳/脑分离"能真正落地的原因。**
 > 核心根本不 `print` 任何东西——它只是**在正确的时机喊一声**，
 > 至于这声喊变成终端上的彩色文字、Telegram 上的消息、还是 IDE 里的进度条，

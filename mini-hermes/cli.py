@@ -29,7 +29,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import hermes_state
 from agent.system_prompt import invalidate_system_prompt, prompt_preview
@@ -180,7 +180,16 @@ class MiniCLI:
             return
         print(f"{YELLOW}{text}{RESET}")
 
-    def _on_tool_progress(self, name: str, args: Dict[str, Any], phase: str) -> None:
+    def _on_tool_progress(
+        self, name: str, args: Dict[str, Any], phase: str,
+        status: Optional[str] = None, summary: Optional[str] = None,
+    ) -> None:
+        """工具进度。★ `done` 阶段还带 `(status, summary)`（第 4 章修）：
+
+        以前只有名字 ⇒ 成功与失败**长得一样**（都打 `✓ 完成`），而失败原因只在模型的
+        消息里。现在按 `status` 分岔打 `✓ 完成（… · 结果 N 字符）` / `✗ 失败：<原因首行>`；
+        `phase="fallback"` 是**非工具事件**（主模型失败切换备用），同样在这张面上播报。
+        """
         if self.quiet:
             return
         if phase == "start":
@@ -191,7 +200,10 @@ class MiniCLI:
             self._pending_name = name
         elif phase == "done":
             dt = time.time() - getattr(self, "_turn_started", time.time())
-            print(f"{DIM}  ✓ {name} 完成（{dt:.2f}s）{RESET}")
+            if status == "error":
+                print(f"{RED}  ✗ {name} 失败（{dt:.2f}s）：{summary or ''}{RESET}")
+            else:
+                print(f"{DIM}  ✓ {name} 完成（{dt:.2f}s · {summary or ''}）{RESET}")
         elif phase == "denied":
             print(f"{RED}  ✗ {name} 被拒绝{RESET}")
         elif phase == "fallback":

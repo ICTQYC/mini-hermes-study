@@ -10,6 +10,7 @@
   5. 中断信号能让正在等 API 的 turn 干净退出
   6. 并发工具调用确实并发
   7. 状态从历史重建（网关每条消息新建 agent 也不丢）+ 伪造消息无法污染状态
+  8. 工具进度回调的 `done` 阶段带出 `(status, summary)` —— **失败看得见**（第 4 章修）
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import model_tools  # noqa: E402
+import run_agent  # noqa: E402
 from run_agent import AIAgent  # noqa: E402
 
 PASS, FAIL = [], []
@@ -550,6 +552,58 @@ def test_usage_is_per_turn_on_reused_agent() -> None:
           agent.usage["prompt_tokens"] == 100, str(agent.usage))
 
 
+# ---------------------------------------------------------------- 8 工具可见性
+def test_progress_callback_carries_status_and_summary() -> None:
+    """契约：进度回调的 `done` 阶段必须带出 `(status, summary)` —— 失败要**看得见**。
+
+    这条是从一次真实使用来的：`./mini -q "读 mini-hermes/README.md 前 5 行"` 里，
+    模型第一次把路径写错（cwd 已经是 `mini-hermes`），工具返回 `文件不存在：…`，
+    但终端上两次都打 `✓ read_file 完成（0.00s）` —— 用户分不清哪次失败、也不知道模型在重试什么。
+    根因：`done` 阶段只带得出名字（真实版另有一对 `tool_start_callback` / `tool_complete_callback`）。
+
+    守的承诺：
+      ① 成功 ⇒ `status="ok"` + 摘要「结果 N 字符」；
+      ② 失败 ⇒ `status="error"` + **错误首行**（不是空白、不是笼统的"失败"）；
+      ③ 摘要截断到 `run_agent.PROGRESS_SUMMARY_LIMIT`（一行；别把整个结果灌进终端）；
+      ④ `start` 仍是三参（形状没被顺手改宽）。
+    """
+    def boom() -> str:
+        raise RuntimeError("坏掉了" * 40)
+
+    model_tools.registry.register_tool(
+        "_test_boom", description="x", parameters={}, toolset="test")(boom)
+
+    agent = make_agent(max_turns=5)
+    events: list[tuple] = []
+    agent.tool_progress_callback = lambda *a: events.append(a)
+    agent._http_post = canned(tool_response(("_test_boom", "{}")), text_response("知道了"))
+    agent.run_conversation("试一个会失败的工具")
+
+    done = [e for e in events if e[2] == "done"]
+    check("`done` 带 5 个字段（name, args, phase, status, summary）",
+          len(done) == 1 and len(done[0]) == 5, str([len(e) for e in events]))
+    check("★ 失败 ⇒ status='error'（不再和成功长得一样）",
+          bool(done) and done[0][3] == "error", str(done[:1]))
+    check("★ 失败 ⇒ summary 是错误首行（以前只在模型消息里、用户看不到）",
+          bool(done) and "坏掉了" in done[0][4], str(done[:1]))
+    check("摘要截断到一行（≤ PROGRESS_SUMMARY_LIMIT）",
+          bool(done) and len(done[0][4]) <= run_agent.PROGRESS_SUMMARY_LIMIT,
+          str(len(done[0][4]) if done else None))
+    check("`start` 仍是三参（形状没被顺手改宽）",
+          bool(events) and events[0][2] == "start" and len(events[0]) == 3, str(events[:1]))
+
+    agent2 = make_agent(max_turns=5)
+    events2: list[tuple] = []
+    agent2.tool_progress_callback = lambda *a: events2.append(a)
+    agent2._http_post = canned(
+        tool_response(("todo_list", json.dumps({"todos": []}))), text_response("好"))
+    agent2.run_conversation("试一个成功工具")
+    done2 = [e for e in events2 if e[2] == "done"]
+    check("成功 ⇒ status='ok' + 摘要「结果 N 字符」",
+          bool(done2) and done2[0][3] == "ok" and done2[0][4].startswith("结果 "),
+          str(done2[:1]))
+
+
 if __name__ == "__main__":
     test_order_and_concurrency()
     test_alternation()
@@ -564,6 +618,7 @@ if __name__ == "__main__":
     test_budget_exhausted()
     test_interrupt()
     test_usage_is_per_turn_on_reused_agent()
+    test_progress_callback_carries_status_and_summary()
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     if FAIL:
         print("失败项：" + "; ".join(FAIL))

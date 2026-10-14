@@ -154,8 +154,16 @@ class GatewayRunner(AdaptersMixin, InboundMixin, TurnMixin, ShutdownMixin, Start
     # ------------------------------------------------------------------ #
     # 观察面小工具
     # ------------------------------------------------------------------ #
-    def _on_tool_progress(self, name: str, args: Dict[str, Any], phase: str) -> None:
-        self._tool_events.append(f"{phase}:{name}")
+    def _on_tool_progress(
+        self, name: str, args: Dict[str, Any], phase: str,
+        status: Optional[str] = None, summary: Optional[str] = None,
+    ) -> None:
+        """工具进度。★ 与 CLI 同形：`done` 多带 `(status, summary)`。
+
+        网关这边只记账（`_tool_events`），但**形状必须跟 CLI 一致** —— 同一条回调
+        被两个消费方用，形状不一致就会在切换消费方时静默丢信息。
+        """
+        self._tool_events.append(f"{phase}:{name}" + (f":{status}" if status else ""))
 
     def _key_for_source(self, source) -> str:
         """会话键的唯一产出点（注入给适配器用）。

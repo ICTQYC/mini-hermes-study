@@ -391,6 +391,17 @@ def test_docstring_promise_matches_implementation() -> None:
           ag._try_activate_fallback(reason="http_429", status=429) and ag.provider == "openai",
           ag.provider)
 
+    # ★ 回归：回退事件的 `phase` 必须是 `"fallback"`。
+    #   这里原来发的是 `"start"`，而界面侧判的是 `phase == "fallback"`
+    #   ⇒ 那条"主模型失败 → 切换备用"的提示**从来没打印过**，
+    #   还会被当成一次工具开始（污染 `_turn_started` 的计时）。
+    ag2 = _agent([dict(FALLBACK_ENTRY)])
+    events: list[tuple] = []
+    ag2.tool_progress_callback = lambda *a: events.append(a)
+    ag2._try_activate_fallback(reason="http_429", status=429)
+    check("回退事件用**自己的 phase**（不是借用 start/done）",
+          [e for e in events if e[0] == "fallback"] and events[0][2] == "fallback", str(events))
+
 
 def test_config_json_drives_the_chain_into_the_agent() -> None:
     """★ A9 → A7：链**从 config.json 进来**（`fallback_providers=None` 时的默认来源）。"""

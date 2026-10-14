@@ -182,6 +182,31 @@ def _tool_result_observer_fields(result: Any) -> tuple:
     return "ok", None, None
 
 
+#: 进度回调 `done` 阶段摘要的截断长度（一行，给终端看）。
+PROGRESS_SUMMARY_LIMIT = 80
+
+
+def summarize_tool_result(result: Any, status: str, error_message: Optional[str] = None) -> str:
+    """把工具结果压成**一行**给人看的摘要（进度回调 `done` 阶段用）。
+
+    ★ 为什么需要它：`done` 阶段以前只带得出名字 ⇒ 界面上"成功"和"失败"长得一模一样
+      （都打 `✓ 完成`），失败原因只进了模型的消息里、**用户看不到**。真实版对应的是一对回调
+      `tool_start_callback` + `tool_complete_callback(..., result)`（`agent/tool_executor.py:994`），
+      verbose 下还会打印结果全文（`:1106-1108`）；mini 不引第二套回调，改为在 `done` 上补
+      `(status, summary)` 这两个字段 —— 信息量对齐，形状不变。
+
+    判据与观察者**同源**（`_tool_result_observer_fields`）：成败只在结果里看得见。
+    成功给「结果 N 字符」，失败给错误首行；都截断到 `PROGRESS_SUMMARY_LIMIT`。
+    """
+    if status == "error":
+        text = (error_message or "工具执行失败").strip().replace("\n", " ")
+    else:
+        size = len(result) if isinstance(result, str) else len(
+            json.dumps(result, ensure_ascii=False, default=str))
+        text = f"结果 {size:,} 字符"
+    return text[:PROGRESS_SUMMARY_LIMIT]
+
+
 class AgentInterrupted(Exception):
     """用户主动打断（Ctrl-C / /stop）。"""
 
@@ -203,7 +228,11 @@ class AIAgent:
         text_callback: Optional[Callable[[str], None]] = None,
         thinking_callback: Optional[Callable[[bool], None]] = None,
         reasoning_callback: Optional[Callable[[str], None]] = None,
-        tool_progress_callback: Optional[Callable[[str, Dict[str, Any], str], None]] = None,
+        #   `tool_progress_callback(name, args, phase[, status, summary])`：
+        #   phase ∈ {start, done, denied, fallback}；**只有 `done` 会多带两个位置参数**
+        #   `(status, summary)`（status ∈ {ok, error}，summary 见 `summarize_tool_result`）。
+        #   ⇒ 旧的三参回调在 `done` 时会被多传两个参数（mini 的消费方都在仓内，已同步）。
+        tool_progress_callback: Optional[Callable[..., None]] = None,
         step_callback: Optional[Callable[[int], None]] = None,
         approval_callback: Optional[Callable[[str], bool]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
@@ -902,11 +931,15 @@ class AIAgent:
         if not _fallback.activate_fallback(self, reason=reason):
             return False
         if self.tool_progress_callback:
+            # ★ phase 必须是 `"fallback"`：这里原来发的是 `"start"`，而界面侧判的是
+            #   `phase == "fallback"` ⇒ 那条"主模型失败 → 切换备用"的提示**从来没打印过**
+            #   （还会被当成一次工具开始、污染 `_turn_started` 的计时）。
+            #   契约：**非工具事件用自己的 phase**，别借用 start/done。
             self.tool_progress_callback(
                 "fallback",
                 {"from": before_provider, "status": status if status is not None else reason,
                  "to": self.provider},
-                "start",
+                "fallback",
             )
         self._emit_status(
             f"⚠️ 主模型失败（{reason or 'unknown'}）→ 已切到备用 {self.provider}/{self.model}")
@@ -1167,13 +1200,17 @@ class AIAgent:
                 started=_tool_started)
             raise
 
-        if self.tool_progress_callback:
-            self.tool_progress_callback(name, args, "done")
         # ── 接缝 ⑦：post_tool_call（成功 / 被拒绝 / 失败三种结局用 `status` 区分）──
         # ★ 与真实侧同一分工（`model_tools.py:689-690`）：**status 是 None 时从结果推导**，
         #   否则用调用方显式给的那一个。
+        # ★ 推导**提前**到进度回调之前：`done` 阶段要把同一个 status 交给界面，
+        #   否则用户只看到一行 `✓ 完成`，分不清这次到底成没成。
         if _tool_status is None:
             _tool_status, _tool_error_type, _tool_error_message = _tool_result_observer_fields(content)
+        if self.tool_progress_callback:
+            self.tool_progress_callback(
+                name, args, "done", _tool_status,
+                summarize_tool_result(content, _tool_status, _tool_error_message))
         self._emit_post_tool_call(
             tool_call_id=tool_call_id, tool_name=name, args=args, status=_tool_status,
             result=content, error_type=_tool_error_type, error_message=_tool_error_message,
