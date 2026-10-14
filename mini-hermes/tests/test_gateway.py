@@ -49,19 +49,39 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     print(f"  {mark} {name}" + (f"　[{detail}]" if detail and not cond else ""))
 
 
+#: 测试用的**假**密钥（真值一律不进仓）。测试靠它自给自足，不读开发机的 `~/.hermes/.env`。
+_FAKE_KEY_ENV = "DEEPSEEK_API_KEY=test-key-not-real\n"
+
+
 @contextmanager
 def temp_home(prefix: str = "mh-gw-test-"):
-    """临时 MINI_HOME（**import 之后**也能生效：所有路径都解析在调用时）。"""
-    prev = os.environ.get("MINI_HOME")
+    """临时 MINI_HOME（**import 之后**也能生效：所有路径都解析在调用时）。
+
+    ★ 同时把 `MINI_ENV_FILE` 钉到一份**假的密钥文件**上（`_FAKE_KEY_ENV`）。
+    为什么必须钉：不钉时这些用例会顺着密钥查找链
+    （`MINI_ENV_FILE` → `$MINI_HOME/.env` → `~/.hermes/.env`）读到**开发机**的文件 ——
+    在没配密钥的机器（陌生人 clone、CI）上，`_provider_spec()` 解析出 `None`，
+    于是"会话忙 / 排队 / 生命周期 / 存储"整批用例以 `TypeError: 'NoneType' …` 红掉。
+    实测：干净 `HOME` 的克隆里 266 条红 20+；本机因为有密钥，一直是绿的
+    —— 这正是 `AGENTS.md` 那条不变量（**测试不许依赖运行环境的配置**）要拦的东西。
+    """
+    prev_home = os.environ.get("MINI_HOME")
+    prev_env_file = os.environ.get("MINI_ENV_FILE")
     home = Path(tempfile.mkdtemp(prefix=prefix))
+    # ★ 假密钥文件**不叫 `.env`**：否则它会混进 `$MINI_HOME/.env` 那条候选，
+    #   把"边界加载"那两条用例的精确列表断言（`used == [env_file]`）打红。
+    fake_env = home / "fake-key.env"
+    fake_env.write_text(_FAKE_KEY_ENV, encoding="utf-8")
     os.environ["MINI_HOME"] = str(home)
+    os.environ["MINI_ENV_FILE"] = str(fake_env)
     try:
         yield home
     finally:
-        if prev is None:
-            os.environ.pop("MINI_HOME", None)
-        else:
-            os.environ["MINI_HOME"] = prev
+        for key, prev in (("MINI_HOME", prev_home), ("MINI_ENV_FILE", prev_env_file)):
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
         shutil.rmtree(home, ignore_errors=True)
 
 

@@ -1084,9 +1084,14 @@ def test_exit_message_reports_real_path() -> None:
     # ③ 端到端：真起一次 CLI，只喂 /exit —— 零成本，不调 API
     home = tempfile.mkdtemp(prefix="mini_exit_home_")
     launcher = Path(__file__).resolve().parent.parent / "mini"
+    # ★ 子进程必须**自给自足**：否则它会顺着密钥链读到开发机的 `~/.hermes/.env`；
+    #   在没配密钥的机器上 CLI 会以「[配置错误] … 缺少密钥」直接退出（rc=2），
+    #   这句断言就永远看不到「未存盘」—— 一条"只在开发机绿"的测试。
+    fake_env = Path(home) / "fake.env"
+    fake_env.write_text("DEEPSEEK_API_KEY=test-key-not-real\n", encoding="utf-8")
     r = subprocess.run(
         [str(launcher)], input="/exit\n", capture_output=True, text=True, timeout=180,
-        env=dict(os.environ, MINI_HOME=home, PYTHONPATH=""),
+        env=dict(os.environ, MINI_HOME=home, PYTHONPATH="", MINI_ENV_FILE=str(fake_env)),
     )
     check("端到端：开了就退出 → 说「未存盘」", "未存盘" in r.stdout, r.stdout[-200:])
     check(
