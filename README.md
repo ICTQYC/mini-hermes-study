@@ -1,6 +1,6 @@
 # 手写一个能跑的 Agent：逐章精读 Hermes 并复刻一个迷你版
 
-**一句话**：逐章精读 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 官方 developer-guide 的每一篇，并把对应机制在一个零依赖的迷你版实现里手写一遍 —— 目前 **16 篇中文精译 + 16 篇源码讲解 + 一个 20,000 行的迷你 agent**。
+**一句话**：逐章精读 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 官方 developer-guide 的每一篇，并把对应机制在一个零依赖的迷你版实现里手写一遍 —— 目前 **17 篇中文精译 + 16 篇源码讲解 + 一个 1.8 万行的迷你 agent**。
 
 一个从零手写的、真正能跑的 agent，目的是搞懂 Hermes 怎么实现的。**抄的是架构决策，不是代码量。**
 
@@ -44,7 +44,7 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 ```
 
-用两个解释器各跑一遍，期望 **1,581 通过 / 0 失败**（3.13.14）与 **1,577 通过 / 0 失败**（3.9.6），共 **14 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
+用两个解释器各跑一遍，期望 **1,588 通过 / 0 失败**（3.13.14）与 **1,584 通过 / 0 失败**（3.9.6），共 **14 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
 
 跑之前先清 `__pycache__`：`.pyc` 的失效判据是 `(mtime, size)`，**两块长度相同的代码对调**会被判成新鲜缓存，实际跑的是旧字节码。
 
