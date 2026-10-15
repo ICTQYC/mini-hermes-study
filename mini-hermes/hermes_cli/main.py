@@ -80,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="跑网络体检（环境→DNS→逐地址连通性→分层计时→真实调用）后退出。不需要 API 密钥",
     )
+    parser.add_argument("--web", action="store_true", help="启动本地演示页面，默认离线运行")
+    parser.add_argument("--web-port", type=int, default=8765, help="演示页面端口（默认 8765）")
     # ★ 第 7 章：`gateway` 子命令（对应 `hermes gateway …`）。
     #   它**必须在构造 MiniCLI 之前**处理 —— 网关自己要建 agent，不需要先建一个。
     # ★ 第 11 章：`sessions` 子命令（对应 `hermes sessions repair`）—— 同理，
@@ -134,6 +136,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.doctor:
         return _run_doctor()
+
+    if args.web:
+        from hermes_cli.web import run_web
+        if not 0 <= args.web_port <= 65535:
+            parser.error("--web-port 必须在 0–65535 之间")
+        return run_web(args.provider, args.model, args.web_port, max(1, min(args.max_turns, 12)))
 
     try:
         app = MiniCLI(

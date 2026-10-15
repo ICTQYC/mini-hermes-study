@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2040%2040%22%3E%3Crect%20width%3D%2240%22%20height%3D%2240%22%20rx%3D%2210%22%20fill%3D%22%23ec7546%22%2F%3E%3Ctext%20x%3D%225%22%20y%3D%2228%22%20font-size%3D%2225%22%20font-family%3D%22serif%22%20font-weight%3D%22bold%22%20fill%3D%22%23101b2d%22%3Emh%3C%2Ftext%3E%3C%2Fsvg%3E">
+  <meta name="color-scheme" content="light"><title>mini-hermes · Agent 实验室</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="mini-hermes 首页"><span class="brand-icon">m<span>h</span></span><span>mini-hermes<small>AGENT LABORATORY</small></span></a>
+    <div class="nav-label">WORKSPACE</div><div class="nav-current"><span>◈</span> Agent 实验室 <span class="nav-dot"></span></div>
+    <div class="sidebar-heading"><span>本次运行的会话</span><button id="new-session" class="icon-button" title="新建会话" aria-label="新建会话">＋</button></div>
+    <div id="sessions" class="sessions"></div>
+    <div class="sidebar-bottom"><span class="green-dot"></span> 本地运行 · 零第三方依赖<small>看懂架构，也看见它如何运转。</small></div>
+  </aside>
+  <main>
+    <header class="topbar"><span class="breadcrumb">实验室 <span>/</span> 交互演示</span><span class="local-badge"><span class="green-dot"></span> LOCAL ONLY</span></header>
+    <div class="page-heading"><div><div class="eyebrow">FROM CONVERSATION TO ACTION</div><h1>看见 Agent 如何完成任务<span>。</span></h1><p>每一次请求、工具调用与结果，都有迹可循。</p></div><span class="outline-label">mini-hermes / 实时演示</span></div>
+    <section class="mode-bar" aria-label="选择运行模式">
+      <div class="mode-switch"><button id="mode-offline" class="selected" type="button">◉ 离线演示</button><button id="mode-live" type="button">◎ 真实模型</button></div>
+      <p id="mode-description">固定 provider + 真实 Agent 与工具，无需密钥或网络。</p>
+      <span id="mode-badge" class="pill">DEMO</span>
+    </section>
+    <div class="workbench">
+      <section class="conversation panel">
+        <div class="panel-heading"><div><span class="panel-symbol">↗</span><strong>对话</strong><span id="session-short" class="subtle">新会话</span></div><span id="run-status" class="status-pill">就绪</span></div>
+        <div id="messages" class="messages" aria-live="polite">
+          <div id="welcome" class="welcome"><div class="welcome-icon">✳</div><h2>从一个小任务开始</h2><p>发出指令，观察 Agent 调用工具、接收结果，<br>再将答案带回这里。</p>
+            <div class="presets"><button data-prompt="看看演示项目有哪些文件，并读一下 README。"><span>▤</span><div>浏览演示项目<small>列目录 → 读 README → 返回结果</small></div><span>↗</span></button>
+              <button data-prompt="读取示例代码，解释入口函数。"><span>⌘</span><div>读懂入口代码<small>读取文件，查看程序入口</small></div><span>↗</span></button>
+              <button data-prompt="试着读取一个不存在的文件，演示失败处理。"><span>◇</span><div>观察工具失败<small>真实错误如何回到 Agent</small></div><span>↗</span></button></div>
+            <div class="welcome-footnote">离线模式使用独立的临时示例项目。</div>
+          </div>
+        </div>
+        <form id="composer" class="composer"><label class="sr-only" for="prompt">输入任务</label><textarea id="prompt" rows="2" maxlength="6000" placeholder="输入一个任务，或选择上方的演示场景…"></textarea><div class="composer-bottom"><span id="composer-hint">Enter 发送 · Shift + Enter 换行</span><div><button id="stop" class="stop-button" type="button" hidden>■ 停止</button><button id="send" class="send-button" type="submit">发送任务 <span>↑</span></button></div></div></form>
+      </section>
+      <aside class="inspector">
+        <section class="panel runtime"><div class="panel-heading"><strong>运行状态</strong><span class="tiny-live">● LIVE</span></div>
+          <div class="runtime-body"><div class="model-label">当前模型 <span id="provider">OFFLINE</span></div><div id="model" class="model-name">scripted-offline</div>
+            <div class="metric-grid"><div><small>输入 tokens</small><strong id="input-tokens">—</strong></div><div><small>输出 tokens</small><strong id="output-tokens">—</strong></div><div><small>工具调用</small><strong id="tool-count">0</strong></div><div><small>回合耗时</small><strong id="duration">—</strong></div></div>
+            <div class="runtime-footer"><span>工作区</span><span id="workspace">sample-project</span></div><div class="runtime-footer"><span>上下文窗口</span><span id="context-window">—</span></div><p id="usage-note" class="usage-note">离线用量为演示估算；耗时为实际测量。</p>
+          </div></section>
+        <section class="panel trace-panel"><div class="panel-heading"><strong>执行轨迹</strong><span id="event-count" class="event-count">0 EVENTS</span></div><div id="trace" class="trace"><div class="trace-empty"><span>⌁</span><p>等待一次任务开始</p><small>模型请求和工具结果将实时出现在这里</small></div></div></section>
+      </aside>
+    </div>
+    <footer class="page-footer"><span><span class="orange-dot"></span> 读懂决策，再亲手实现。</span><span>Python 标准库 × 原生 Web</span></footer>
+    <div id="notice" class="notice" role="alert" hidden></div>
+  </main>
+  <dialog id="approval-dialog"><form method="dialog"><div class="eyebrow">TOOL APPROVAL</div><h2>此命令需要确认</h2><p>Agent 请求执行以下危险命令：</p><pre id="approval-command"></pre><div class="dialog-actions"><button id="deny-approval" value="deny">拒绝</button><button id="allow-approval" value="allow" class="send-button">允许执行</button></div></form></dialog>
+</body>
+</html>
