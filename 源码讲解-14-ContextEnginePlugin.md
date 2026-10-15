@@ -216,7 +216,7 @@ docstring 逐字：
 |---|---|---|
 | **抽象面（必须实现）** | **4** 个：`name` / `update_from_response` / `should_compress` / `compress`（`agent/context_engine.py:50-53,74-81,83-85,96-107`） | ✅ 已抄（`a6ed019`）：**3** 个（`name` / `should_compress` / `compress`，`mini-hermes/agent/context_engine.py:47-49,68-69,76-77`，其中 `name` 是第 14 章新补）；记账降为可选 |
 | **默认面（可选钩子）** | **15** 个带默认实现（`agent/context_engine.py:87-242`） | 已对齐**口径**、⬜ 没做（量级）：mini ABC 只有 4 个可选（`update_usage` / `tools` / `describe` / `update_model`，`mini-hermes/agent/context_engine.py:85-111`），其中 **2 个**与真实侧默认钩子对得上（`describe`↔`get_status`、`update_model`↔`update_model`）；`tools()` 只是**占位钩子**（真实侧的 `get_tool_schemas`/`handle_tool_call` 需要注入路径，mini 没建 ⇒ 归入「没做」）；另 **13 个**（生命周期 3 / 选择观测 2 / 引擎工具 2 / 预检 2 / 其余 4）在 mini 无消费者 |
-| **类属性即状态契约** | 6 个 token 字段 + 4 个参数（`agent/context_engine.py:55-72`，注释逐字 *"engines MUST maintain these; run_agent.py reads them directly."*） | ⬜ 没做（形态不同）：mini 不把这些放 ABC；实例提供时展示 token，未提供时调用 `describe()`（`mini-hermes/run_agent.py:1735-1738`） |
+| **类属性即状态契约** | 6 个 token 字段 + 4 个参数（`agent/context_engine.py:55-72`，注释逐字 *"engines MUST maintain these; run_agent.py reads them directly."*） | ⬜ 没做（形态不同）：mini 不把这些放 ABC；实例提供时展示 token，未提供时调用 `describe()`（`mini-hermes/run_agent.py:1741-1744`） |
 | **`name` 是必需项** | `@property` + `@abstractmethod`（`agent/context_engine.py:50-53`） | ✅ 已抄（`a6ed019`）：同为 `@property` + `@abstractmethod`（`mini-hermes/agent/context_engine.py:47-49`）；内置实现返回 `"compressor"`（`mini-hermes/agent/context_compressor.py:624-633`） |
 | **选择键** | `context.engine`，默认 `"compressor"`（`hermes_cli/config_defaults.py:1207-1208`） | ✅ 已抄（`a6ed019`）：同名同默认（`mini-hermes/hermes_cli/config.py:83-84,93`）+ 读取函数 `get_context_engine_name()`（`:340-353`） |
 | **零配置 = 不走发现** | `if _engine_name == "compressor": return None`（`agent/agent_init.py:1768-1769`） | ✅ 已抄（`a6ed019`）：`select_engine` 见默认名**直接 `default_factory()`**、不进扫描（`mini-hermes/agent/engine_registry.py:315-318`） |
@@ -225,12 +225,12 @@ docstring 逐字：
 | **注册入口** | `register_context_engine`（`hermes_cli/plugins.py:702-721`），「the (single)」+ 第二次注册拒绝 | ⏭ 不抄（理由）：mini 没有通用插件系统 / `ctx` / manager，抄了是没有消费者的死代码（清单 B1）；mini 只有「目录」这一条注册路径 |
 | **备用发现根** | `~/.hermes/plugins/`（注释逐字 `config_defaults.py:1206`） | ⏭ 不抄（理由）：第二个根会让「引擎装哪儿」有两个答案，且测试要钉两处；mini 硬约定「路径唯一来源」（`mini-hermes/hermes_cli/config.py:110-112` 逐字 *"别处不许硬编码"*） |
 | **唯一构造点 = 接缝** | `_build_context_engine`（`agent/agent_init.py:1829-1832`）绑定选中的实例 | ✅ 已抄（`a6ed019`）：`mini-hermes/run_agent.py::_compressor():1590-1627` 改**查表**；旧构造**逐字**搬进 `_build_default_compressor()`（`:1570-1588`），其余调用点**一行未改** |
-| **回落语义** | 未知名 → 内置 + warning 带名字（`agent/agent_init.py:1804-1807`） | ✅ 已抄（`a6ed019`）：`EngineSelection.warning` 非空、经 `_emit_engine_warning` 打印（`mini-hermes/run_agent.py:1620-1624`；警告文案 `mini-hermes/agent/engine_registry.py:329-333`） |
+| **回落语义** | 未知名 → 内置 + warning 带名字（`agent/agent_init.py:1804-1807`） | ✅ 已抄（`a6ed019`）：`EngineSelection.warning` 非空、经 `_emit_engine_warning` 打印（`mini-hermes/run_agent.py:1626-1630`；警告文案 `mini-hermes/agent/engine_registry.py:329-333`） |
 | **深拷贝单例防护** | `copy.deepcopy(_candidate)` 防子 agent 改父预算，拷不动 → 内置 + 准确消息（`agent/agent_init.py:1785-1802`，**#42449**） | ⏭ 不抄（理由）：mini 每次发现**真读盘、每次新实例**（`mini-hermes/agent/engine_registry.py:245-271`），没有共享单例可防 |
 | **每回合选择 / 观测钩子** | `select_context`（`agent/turn_request_assembly.py:142`）+ `on_turn_complete`（`agent/turn_finalizer.py:541`） | ⏭ 不抄（理由）：mini 的 agent loop **没有**「每请求替换上下文」「回合后摄入」的消费者（只超阈值压缩 + 每回合微压缩）；留到真有检索/主题路由时再加 |
 | **零成本钩子的手法** | `hook.__func__ is not ABC.method` **身份比较**（`agent/conversation_loop.py:1166-1178`） | ⏭ 不抄（**机制**在文中讲，见 §0.4 / §四）：mini 没有「钩子挂在热路径、非实现者必须零成本」这条性能约束的对象 |
 | **引擎工具注入** | `get_tool_schemas` / `handle_tool_call` + `_inject_context_engine_tools` 按 `enabled_toolsets` 门控、去重（`agent/agent_init.py:1948-1990`） | 已对齐**钩子形状**、⬜ 没做（注入路径）：mini ABC 有 `tools()` 占位（`mini-hermes/agent/context_engine.py:95-97`，默认 `[]`），但不建注入（无引擎带工具可测） |
-| **线程安全契约** | 池化 daemon 线程 / 深快照 / 只在 commit 发布 / 每会话一 pass（`agent/conversation_compression.py:1-9`） | ⏭ 不抄（理由）：mini 的压缩**同步、内联**跑在 `_preflight_compression`（`mini-hermes/run_agent.py:1724-1763`），无线程池；写这种契约会变成「没人验证的注释」（与 `mini-hermes/agent/context_compressor.py` 自记的「注释里点名不存在的开关」同一个病） |
+| **线程安全契约** | 池化 daemon 线程 / 深快照 / 只在 commit 发布 / 每会话一 pass（`agent/conversation_compression.py:1-9`） | ⏭ 不抄（理由）：mini 的压缩**同步、内联**跑在 `_preflight_compression`（`mini-hermes/run_agent.py:1730-1769`），无线程池；写这种契约会变成「没人验证的注释」（与 `mini-hermes/agent/context_compressor.py` 自记的「注释里点名不存在的开关」同一个病） |
 | **仓库是否内置独立引擎** | **否**：`plugins/context_engine/` 只有 `__init__.py`（93 行）、零子目录 | 已对齐（结构同）：`<MINI_HOME>/engines/` 由用户放目录；内置压缩器住 `mini-hermes/agent/context_compressor.py`，**不经**发现路径 |
 | **每模型阈值表** | `update_model` 重算 + 每模型阈值（最长子串匹配）+ 配置 percent 只快照一次（`agent/context_engine.py:225-242`） | ⏭ 不抄（理由）：mini 已支持主模型、回退模型与辅助路由，但尚未实现逐模型阈值配置表 |
 
@@ -278,7 +278,7 @@ def _select_context_engine(_agent_cfg):
 **③ mini 的实现（现状）**：✅ 已抄（`a6ed019`）。选择逻辑住在新建的
 `mini-hermes/agent/engine_registry.py`（335 行），只保留**一条**发现路径（`<MINI_HOME>/engines/<name>/`）
 + 一个选择函数 `select_engine()`（`:291-335`）；宿主那处**唯一构造点**改成查表，
-`mini-hermes/run_agent.py:1590-1627`：
+`mini-hermes/run_agent.py:1596-1633`：
 
 ```python
 def _compressor(self) -> "Any":
@@ -295,7 +295,7 @@ def _compressor(self) -> "Any":
     return c
 ```
 
-旧构造**逐字**搬进 `_build_default_compressor()`（`mini-hermes/run_agent.py:1570-1588`，参数与顺序一个没动）——
+旧构造**逐字**搬进 `_build_default_compressor()`（`mini-hermes/run_agent.py:1576-1594`，参数与顺序一个没动）——
 这就是「零配置 = 与改造前逐字节一致」（不变量 I4）的载体；`default_factory` 是**注入**的必填关键字，
 避免注册表反过来 `import ContextCompressor` 造成**第二个构造点**。其余调用点
 （`should_compress` / `compress` / `micro_compact`）**一行未改** —— 它们本来就是多态调用。
@@ -304,7 +304,7 @@ def _compressor(self) -> "Any":
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 选择入口 | `agent/agent_init.py:1761 _select_context_engine` | 同形，落在 `mini-hermes/run_agent.py:1590 _compressor()` + `mini-hermes/agent/engine_registry.py::select_engine():291` |
+| 选择入口 | `agent/agent_init.py:1761 _select_context_engine` | 同形，落在 `mini-hermes/run_agent.py:1596 _compressor()` + `mini-hermes/agent/engine_registry.py::select_engine():291` |
 | 解析链 | `context.engine` → 目录 → 通用插件系统 → 内置（4 个节点） | 只有 **3 个节点**：`context.engine` → 目录 → 内置（mini 无插件系统） |
 | 返回形态 | `None` 表示内置、否则返回实例 | 结构化 `EngineSelection(engine, requested, used, fell_back, warning)`（`mini-hermes/agent/engine_registry.py:124-144`）—— 让「回落」能被调用方**读出来并打印** |
 | 接缝数 | 构造点 + 生命周期 seam + 每回合钩子 | **1 处**（`_compressor()`）；生命周期/每回合钩子 mini 未接 |
@@ -483,7 +483,7 @@ compaction passes silent (routine background maintenance); warnings, errors and 
 不管引擎内部把这状态算在哪；接口稳定，实现随便换。
 
 **③ mini 的实现（现状）**：mini 的 ABC **不声明**这些类属性，状态展示是可选能力：
-`should_compress` 返回 `False` 时，宿主先确认实例有对应能力，再读两个字段，`mini-hermes/run_agent.py:1735-1738`：
+`should_compress` 返回 `False` 时，宿主先确认实例有对应能力，再读两个字段，`mini-hermes/run_agent.py:1741-1744`：
 
 ```python
 if not c.should_compress(messages):
@@ -505,7 +505,7 @@ mini 不要求所有引擎都有这些展示字段；缺少它们时使用 ABC �
 |---|---|---|
 | token 状态字段 | 6 个**类属性**，注释「engines MUST maintain these; run_agent.py reads them directly」（`agent/context_engine.py:55-61`） | ⬜ 没做（量级）：实例提供（`threshold_tokens` property，`mini-hermes/agent/context_compressor.py:526-546`），ABC 不声明 |
 | 压缩参数默认 | `threshold_percent=0.75` / `protect_first_n=3` / `protect_last_n=6` / `emit_…=True`（`:62-72`） | ⬜ 没做：mini 的阈值/保护参数从 `compression.*` 配置构造注入（《源码讲解-05》§三），ABC 无一字 |
-| 宿主读取方式 | 直接读引擎属性 | 宿主读实例（`mini-hermes/run_agent.py:1735-1738`）—— token 展示可选，最小引擎不需要额外属性 |
+| 宿主读取方式 | 直接读引擎属性 | 宿主读实例（`mini-hermes/run_agent.py:1741-1744`）—— token 展示可选，最小引擎不需要额外属性 |
 | 一处「文档漏了」 | 文档 §3 只列 6 个 token 字段，**漏了 4 个压缩参数**（附录 C 记一条） | —（mini 两处都没有，不适用） |
 
 ### 可选方法（默认面 15）
@@ -894,7 +894,7 @@ def _select_context_engine(_agent_cfg):
   ```
 
   三段式（`_section` 拿段 → 取值 → 非串/空白落默认），**绝不抛**；与 `get_configured_provider` / `get_compression_config` 同口径。docstring 明说这个默认值是"零配置 = 与改造前逐字节一致"（I4）的载体。
-- **挂接**：`mini-hermes/run_agent.py:1590-1627` 的 `_compressor()` 首次用到时调 `select_engine(get_context_engine_name(), default_factory=self._build_default_compressor)`；`_build_default_compressor`（`:1570-1588`）**逐字保留改造前的构造参数与顺序**。`__all__` 补了 `KEY_CONTEXT` / `KEY_CONTEXT_ENGINE` / `DEFAULT_CONTEXT_ENGINE` / `get_context_engine_name`（`mini-hermes/hermes_cli/config.py:361、365、369`）。
+- **挂接**：`mini-hermes/run_agent.py:1596-1633` 的 `_compressor()` 首次用到时调 `select_engine(get_context_engine_name(), default_factory=self._build_default_compressor)`；`_build_default_compressor`（`:1570-1588`）**逐字保留改造前的构造参数与顺序**。`__all__` 补了 `KEY_CONTEXT` / `KEY_CONTEXT_ENGINE` / `DEFAULT_CONTEXT_ENGINE` / `get_context_engine_name`（`mini-hermes/hermes_cli/config.py:361、365、369`）。
 - **"零配置不走发现"落在哪里**：`mini-hermes/agent/engine_registry.py:315-318` 的 `select_engine` 在 `requested == DEFAULT_ENGINE_NAME` 时**直接返回**默认工厂的结果、**不调 `discover_engines()`** —— 与真实侧 `if _engine_name == "compressor": return None` 完全同构（该文件 `:299` 的注释点明了它对应 `agent_init.py:1761-1808`）。
 
 **④ 与真实版的差别**
@@ -1013,7 +1013,7 @@ class TestContextEngineABC:
 
 **③ mini 的实现（现状）**：⏭ **不抄（无线程池；写了没人验）**。
 
-mini 的压缩是**同步、内联**跑的：`run_agent.py::_preflight_compression`（`mini-hermes/run_agent.py:1724`）在**调用线程上**直接调引擎并原地改写消息列表——
+mini 的压缩是**同步、内联**跑的：`run_agent.py::_preflight_compression`（`mini-hermes/run_agent.py:1730`）在**调用线程上**直接调引擎并原地改写消息列表——
 
 ```python
 # _preflight_compression 的关键调用；压缩仍同步执行。
@@ -1025,7 +1025,7 @@ parameters = inspect.signature(c.compress).parameters
 messages[:] = c.compress(messages, **optional)
 ```
 
-没有线程池、没有宿主超时、没有 commit fence：压缩配置没有 `compression.context_timeout_seconds`（`compression.context_timeout_seconds` 这个键在 mini 里根本不存在）。mini 里确实有线程（`mini-hermes/run_agent.py:898` 的 `threading.Thread(..., name="mini-api-call")`、`:1199` 的 `ThreadPoolExecutor` 跑并发工具调用），压缩不进入专用线程池；不同网关回合仍可能在各自调用线程使用各自引擎。
+没有线程池、没有宿主超时、没有 commit fence：压缩配置没有 `compression.context_timeout_seconds`（`compression.context_timeout_seconds` 这个键在 mini 里根本不存在）。mini 里确实有线程（`mini-hermes/run_agent.py:902` 的 `threading.Thread(..., name="mini-api-call")`、`:1199` 的 `ThreadPoolExecutor` 跑并发工具调用），压缩不进入专用线程池；不同网关回合仍可能在各自调用线程使用各自引擎。
 
 所以不抄的理由不是"太重"，而是**没有可验证对象**：给 `ContextEngine` 加"调用可能到达任意池化线程 / 你拿到的是一份私有深快照 / 状态只在 commit 上发布"这类契约，等于写下一段**没有任何代码去执行它**的注释——mini 没有池、没有超时丢弃、没有 commit，四条约束在 mini 里既不可能被违反也不可能被验证。这正是 `mini-hermes/agent/engine_registry.py:55-59` 那句"照抄就是没有消费者的死代码"的同一个判据。**如实标注为差异，不引依赖。**
 
@@ -1033,7 +1033,7 @@ messages[:] = c.compress(messages, **optional)
 
 | 面 | 真实 Hermes | mini 现状 |
 |---|---|---|
-| 压缩在哪跑 | 池化守护线程（`compression.context_timeout_seconds` 默认 `120` ⇒ 开）(`agent/conversation_compression.py:3`/`:707-731`) | 同步、内联在调用线程（`mini-hermes/run_agent.py:1724`，`c.compress(...)` 在 `:1752-1752`） |
+| 压缩在哪跑 | 池化守护线程（`compression.context_timeout_seconds` 默认 `120` ⇒ 开）(`agent/conversation_compression.py:3`/`:707-731`) | 同步、内联在调用线程（`mini-hermes/run_agent.py:1730`，`c.compress(...)` 在 `:1752-1752`） |
 | 超时 / 取消 | idle + total ceiling 双超时；超时后仍在跑的活儿**丢弃**（`:6-7`） | ⏭ 不抄（无超时；压缩跑完为止） |
 | 消息列表 | 私有**深度快照**，就地改对活会话不可见；只在 commit 时可见 | 直接**原地**改写调用方列表（`messages[:] = …`）；无快照、无 commit 概念 |
 | 并发 | 每会话一趟（durable lock），会话间并发 ⇒ 共享引擎必须线程安全（`:8`） | ⬜ 没有这个并发面：`_preflight_compression` 每 agent 一处；另一处并发（`:1096`）跑的是工具调用，不碰引擎 |

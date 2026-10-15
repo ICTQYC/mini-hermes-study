@@ -32,9 +32,9 @@
 ## 演示页面
 
 运行 `./mini-hermes/mini --web`，打开 `http://127.0.0.1:8765`，即可体验无需密钥的离线演示。
-页面实时展示对话、模型请求、工具结果和运行状态，也可切换现有后端配置的真实模型。详见 [Web 演示说明](WEB_DEMO.md)。
+选择章节可运行本章重点实验、查看实测证据和配套 Markdown；页面实时展示对话与调用轨迹。“模型设置”支持输入 DeepSeek API Key（仅服务内存），切换真实模型运行。详见 [Web 演示说明](WEB_DEMO.md)。
 
-![mini-hermes 本地演示页面](docs/assets/web-demo.png)
+![mini-hermes 本地演示页面](docs/assets/web-chapters.png)
 
 ## 快速开始
 
@@ -43,7 +43,7 @@
 ### 开箱即用清单
 
 **clone 下来直接就能跑的**：`./mini-hermes/mini --list-toolsets`、`./mini-hermes/mini --doctor`（**不需要密钥**）；
-测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,767 / 1,763 · 0 失败**。
+测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,839 / 1,835 · 0 失败**。
 
 **要自己准备的三样**（前两样按需）：
 
@@ -108,7 +108,7 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 ```
 
-用两个解释器各跑一遍，期望 **1,767 通过 / 0 失败**（3.13.14）与 **1,763 通过 / 0 失败**（3.9.6），共 **16 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
+用两个解释器各跑一遍，期望 **1,839 通过 / 0 失败**（3.13.14）与 **1,835 通过 / 0 失败**（3.9.6），共 **17 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
 
 跑之前先清 `__pycache__`：`.pyc` 的失效判据是 `(mtime, size)`，**两块长度相同的代码对调**会被判成新鲜缓存，实际跑的是旧字节码。
 
@@ -121,12 +121,12 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 板块 | 篇数 / 规模 |
 |---|---|
 | 中文精译（每章一篇，翻译为主，目标看懂原理） | **17 篇** · 11,599 行 |
-| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,974 行 |
+| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,982 行 |
 | 跟读文档（消息旅程 / 代码解读 / 测试怎么写） | 3 份 · 2,073 行 |
 | 收尾总览（46 篇图谱 / 差距总账 / 冻结清单 —— 全库的账） | 1 篇 · 466 行 |
-| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 150 行 |
-| `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 19,009 行 · 79 个文件 |
-| `mini-hermes/tests/`（16 个测试文件） | 12,586 行 |
+| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 158 行 |
+| `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 19,373 行 · 79 个文件 |
+| `mini-hermes/tests/`（17 个测试文件） | 12,725 行 |
 | `mini-hermes/demos/`（故障复现 + 真跑脚本） | 1,794 行 · 10 个 |
 
 **17 章清单**（精译 / 源码讲解行数为实测）：
@@ -142,14 +142,14 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 07 | Gateway Internals（网关内部） | [638](中文精译-07-GatewayInternals.md) | [937](源码讲解-07-GatewayInternals.md) |
 | 07b · 扩展 7.1 | Gateway Session Lifecycle（网关会话生命周期） | [903](中文精译-07b-GatewaySessionLifecycle.md) | [1376](源码讲解-07b-GatewaySessionLifecycle.md) |
 | 07c · 扩展 7.2 | Multiplexing Gateway（多路复用网关） | [472](中文精译-07c-MultiplexingGateway.md) | [1292](源码讲解-07c-MultiplexingGateway.md) |
-| 08 | Provider Runtime（服务商运行时） | [366](中文精译-08-ProviderRuntime.md) | [982](源码讲解-08-ProviderRuntime.md) |
+| 08 | Provider Runtime（服务商运行时） | [366](中文精译-08-ProviderRuntime.md) | [986](源码讲解-08-ProviderRuntime.md) |
 | 09 | Programmatic Integration（程序化集成） | [284](中文精译-09-ProgrammaticIntegration.md) | [788](源码讲解-09-ProgrammaticIntegration.md) |
 | 10 | Micro Compaction（微压缩） | [362](中文精译-10-MicroCompaction.md) | [847](源码讲解-10-MicroCompaction.md) |
 | 11 | State DB Recovery（state.db 抢修） | [172](中文精译-11-StateDbRecovery.md) | [977](源码讲解-11-StateDbRecovery.md) |
 | 12 | Codebase Ownership & Completion Backlog（归属与投递债） | [204](中文精译-12-CodebaseOwnershipAndCompletionBacklog.md) | [838](源码讲解-12-CodebaseOwnershipAndCompletionBacklog.md) |
 | 13 | Creating Skills（技能系统） | [684](中文精译-13-CreatingSkills.md) | [1176](源码讲解-13-CreatingSkills.md) |
 | 14 | Context Engine Plugin（上下文引擎插槽） | [420](中文精译-14-ContextEnginePlugin.md) | [1349](源码讲解-14-ContextEnginePlugin.md) |
-| 15 | Observer Hooks（观察者钩子） | [528](中文精译-15-ObserverHooks.md) | [1213](源码讲解-15-ObserverHooks.md) |
+| 15 | Observer Hooks（观察者钩子） | [528](中文精译-15-ObserverHooks.md) | [1217](源码讲解-15-ObserverHooks.md) |
 
 **三份跟读文档**（仓库根）：《Hermes消息完整旅程.md》（580 行，横切：一条消息穿过所有模块）·《代码解读-mini-hermes.md》（1,078 行，逐文件走读迷你版，历史正文锚 `db6229c` 提交（章节标签曾后移））·《测试怎么写.md》（415 行，测试的写法与反例）。第 1 章《中文精译-01-Architecture.md》（473 行）是纵切地图，排在上面章清单里，建议先读它。
 

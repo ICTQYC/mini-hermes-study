@@ -368,7 +368,7 @@
 **③ mini 的实现（现状）**：⏭ **不抄——mini 既没有注册表，也没有消费者**。这一整节的两根支柱在 mini 里都不存在：
 
 - **没有「消费」这一半**：消费抑制要挂在 `wait/log/kill/poll` 这些**显式入口**上，而这些入口属于 `process_manage` 与进程注册表——mini **全仓 grep `process_manage|process_registry` 零命中**（唯一命中是 `tools/terminal.py:17` 那句「故意不做」的注释）。既然没有「谁在消费」，也就无所谓 `_completion_consumed` / `_poll_observed` 的分工。
-- **没有「归属」这一半**：归属的前提是**多会话 / 多消费者**共用一条队列，而 mini 的 CLI 是串行交互，而网关已支持多会话；这里仍缺共享后台完成队列——CLI 是同步串行 REPL（`mini-hermes/cli.py` 的 `repl`：`input()` → `agent.run_conversation()`），唯一汇报口是 `cli.py::_on_text`（`mini-hermes/cli.py:153` 的 `print(text)`），由 `mini-hermes/run_agent.py:493` 的**唯一一处** `self.text_callback(final_response)` 调用。缺的是共享完成队列及其通知消费者，而不是缺少多个网关会话；`origin_ui_session_id`、压缩 lineage 解析、跨 profile 归属这些判据统统无对象可判。
+- **没有「归属」这一半**：归属的前提是**多会话 / 多消费者**共用一条队列，而 mini 的 CLI 是串行交互，而网关已支持多会话；这里仍缺共享后台完成队列——CLI 是同步串行 REPL（`mini-hermes/cli.py` 的 `repl`：`input()` → `agent.run_conversation()`），唯一汇报口是 `cli.py::_on_text`（`mini-hermes/cli.py:153` 的 `print(text)`），由 `mini-hermes/run_agent.py:497` 的**唯一一处** `self.text_callback(final_response)` 调用。缺的是共享完成队列及其通知消费者，而不是缺少多个网关会话；`origin_ui_session_id`、压缩 lineage 解析、跨 profile 归属这些判据统统无对象可判。
 - 顺带，连**「通知回合」这个概念**在 mini 里都不存在（没有 `cli_process_notifications.py` / `session_notifications.py` / `prompt_turn.py` 的等价物），`_notif_release_turn` / 「全消费的批不开回合」也就没有落点。
 
 **一句话**：本节两条机制（消费抑制、归属判定）都是**为「多个消费者抢同一条队列」这件事服务的**；mini 里这件事**不存在**，所以不是「做得浅」，是**没有要解决的问题**。硬抄会得到一对**永远不触发**的集合与谓词——又是一个「为不存在的场景抽基础设施」的例子（mini 自己的纪律原话见 `tools/terminal.py:20`）。

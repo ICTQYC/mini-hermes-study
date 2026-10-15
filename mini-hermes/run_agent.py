@@ -266,7 +266,11 @@ class AIAgent:
         #   而是"**强行加载**"的开关：cron 任务需要"跳过 cwd 指令但保留人格"。
         load_soul_identity: bool = False,
         context_length: Optional[int] = None,
+        thinking: Optional[Dict[str, str]] = None,
     ):
+        if thinking is not None and thinking not in ({"type": "enabled"}, {"type": "disabled"}):
+            raise ValueError("thinking 必须指定 enabled 或 disabled")
+        self.thinking = dict(thinking) if thinking is not None else None
         spec = provider_spec or {}
         self.api_mode = api_mode or spec.get("api_mode", "chat_completions")
         self.base_url = (base_url or spec.get("base_url", "")).rstrip("/")
@@ -1101,6 +1105,8 @@ class AIAgent:
             "tool_choice": "auto",
             "temperature": 0.3,
         }
+        if self.thinking is not None:
+            payload["thinking"] = dict(self.thinking)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers = {
             "Content-Type": "application/json",

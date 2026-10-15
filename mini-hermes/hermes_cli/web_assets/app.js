@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const state = {token: "", sessions: [], session: null, mode: "offline", busy: false, events: 0,
-  tools: 0, started: 0, usage: false, stopped: false, approval: null};
+  chapters: [], chapter: "02", config: {}, tools: 0, started: 0, usage: false, stopped: false, approval: null};
 const labels = {pre_llm_call: "Agent 请求模型", post_llm_call: "模型返回决策", pre_api_request: "发送模型请求",
   post_api_request: "收到模型响应", api_request_error: "模型请求失败", pre_tool_call: "开始执行工具", post_tool_call: "工具执行完成"};
 function node(tag, className, text) {
@@ -28,6 +28,7 @@ function setBusy(value, status) {
   state.busy = value;
   $("send").disabled = value; $("prompt").disabled = value;
   $("mode-offline").disabled = value; $("mode-live").disabled = value;
+  $("chapter-select").disabled = value; $("run-lesson").disabled = value; $("model-settings").disabled = value;
   $("new-session").disabled = value; $("stop").hidden = !value;
   $("run-status").textContent = status || (value ? "运行中" : "就绪");
   $("run-status").classList.toggle("busy", value);
@@ -38,8 +39,8 @@ function modeUI(mode) {
   $("mode-offline").classList.toggle("selected", mode === "offline");
   $("mode-live").classList.toggle("selected", mode === "live");
   $("mode-description").textContent = mode === "offline"
-    ? "固定 provider + 真实 Agent 与工具，无需密钥或网络。"
-    : "使用后端模型配置；工具按现有权限读写当前工作区。";
+    ? "隔离机制实验；循环章节使用固定 provider，无需密钥或网络。"
+    : "真实模型解释本章实测证据；工具可读写服务当前工作区。";
   $("mode-badge").textContent = mode === "offline" ? "DEMO" : "LIVE";
   $("usage-note").textContent = mode === "offline" ? "离线用量为演示估算；耗时为实际测量。" : "用量来自模型响应；未返回时显示 —。";
   $("model").textContent = mode === "offline" ? "scripted-offline" : "等待后端解析模型";
@@ -48,7 +49,7 @@ function modeUI(mode) {
 }
 function resetTrace() {
   state.events = 0; state.tools = 0; state.usage = false;
-  $("trace").replaceChildren(); $("event-count").textContent = "0 EVENTS";
+  $("trace").replaceChildren(); $("evidence").replaceChildren(); $("event-count").textContent = "0 EVENTS";
   $("tool-count").textContent = "0";
   for (const id of ["input-tokens", "output-tokens", "duration", "context-window"]) $(id).textContent = "—";
 }
@@ -82,6 +83,14 @@ function renderMessages(session) {
   $("messages").replaceChildren();
   if (!session.messages.length) {
     const start = welcome.cloneNode(true);
+    const lesson = state.chapters.find(c => c.id === session.chapter);
+    if (lesson) {
+      start.querySelector("h2").textContent = lesson.title;
+      start.querySelector("p").textContent = lesson.focus;
+      const presets = start.querySelector(".presets"); presets.replaceChildren();
+      const button = node("button", "", "运行本章场景 ↗"); button.dataset.prompt = lesson.prompt; presets.append(button);
+      start.querySelector(".welcome-footnote").textContent = lesson.kind === "guide" ? "文档与源码导览，不代表新增了独立子系统。" : "实测结果会显示在上方；可展开轨迹核对原始数据。";
+    }
     if (session.mode === "live") {
       start.querySelector(".welcome-footnote").textContent = "真实模式使用启动服务时的工作区与现有工具权限。";
       start.querySelectorAll("[data-prompt]").forEach(button => {
@@ -106,7 +115,7 @@ async function watchRunning(id) {
 }
 function selectSession(session) {
   if (state.busy) return;
-  state.session = session; modeUI(session.mode); resetTrace();
+  state.session = session; state.chapter = session.chapter; modeUI(session.mode); resetTrace(); lessonUI(session.evidence || []);
   $("session-short").textContent = session.id.slice(0, 8);
   renderMessages(session);
   if (session.model) $("model").textContent = session.model;
@@ -116,7 +125,7 @@ function selectSession(session) {
 }
 async function createSession(mode = state.mode) {
   if (state.busy) return;
-  const response = await api("/api/sessions", {mode});
+  const response = await api("/api/sessions", {mode, chapter: state.chapter});
   const session = await response.json(); state.sessions.push(session); selectSession(session);
 }
 function trace(title, subtitle, data, kind = "") {
@@ -135,9 +144,15 @@ function trace(title, subtitle, data, kind = "") {
 function consume(kind, data) {
   if (kind === "started") {
     $("model").textContent = data.model; $("provider").textContent = data.provider.toUpperCase();
+    if (data.provider === "experiment") $("usage-note").textContent = "机制实验未调用模型；耗时为实际测量。";
     $("workspace").textContent = data.workspace; $("context-window").textContent = data.context_length?.toLocaleString() || "未配置";
     state.session.model = data.model;
-    trace("回合开始", data.mode === "offline" ? "离线 provider · 真实 Agent 循环" : "真实模型 · 本地工具");
+    trace("回合开始", data.provider === "experiment" ? "实际机制实验 · 未调用模型" : data.mode === "offline" ? "离线 provider · 真实 Agent 循环" : "真实模型 · 本地工具");
+  } else if (kind === "evidence") {
+    evidenceUI(data);
+    trace(data.ok ? "本章观察已验证" : "本章观察未满足", data.label, data, data.ok ? "success" : "error");
+  } else if (kind === "lesson") {
+    $("lesson-title").textContent = data.title;
   } else if (kind === "trace") {
     if (data.event === "pre_tool_call") $("tool-count").textContent = String(++state.tools);
     if (data.event === "post_api_request" && (data.usage?.prompt_tokens != null || data.usage?.completion_tokens != null)) {
@@ -191,8 +206,52 @@ async function stream(response) {
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 async function refresh() {
-  const data = await (await api("/api/bootstrap")).json(); state.token = data.token; state.sessions = data.sessions; sessionsUI();
+  const data = await (await api("/api/bootstrap")).json(); state.token = data.token; state.sessions = data.sessions; state.chapters = data.chapters; state.config = data.model_config; sessionsUI();
 }
+function evidenceUI(row) {
+  const el = node("details", "evidence-row " + (row.ok ? "passed" : "failed"));
+  const count = row.observed?.before != null && row.observed?.after != null ? ` · ${row.observed.before} → ${row.observed.after}` : "";
+  el.append(node("summary", "", (row.ok ? "✓ " : "✗ ") + row.label + count), node("pre", "", JSON.stringify(row.observed, null, 2)), node("small", "", row.source));
+  $("evidence").append(el);
+}
+function lessonUI(evidence = []) {
+  const select = $("chapter-select"); select.replaceChildren();
+  for (const item of state.chapters) { const option = node("option", "", item.id + " · " + item.title); option.value = item.id; select.append(option); }
+  select.value = state.chapter;
+  const item = state.chapters.find(c => c.id === state.chapter); if (!item) return;
+  $("lesson-title").textContent = item.title; $("lesson-focus").textContent = item.focus;
+  $("lesson-kind").textContent = {guide: "文档导览", mechanism: "机制实验", agent: "Agent 实跑"}[item.kind];
+  $("lesson-docs").replaceChildren();
+  for (const kind of item.documents) { const a = node("a", "", kind === "translation" ? "阅读精译 ↗" : "阅读源码讲解 ↗"); a.href = `/docs/${item.id}/${kind}`; a.target = "_blank"; a.rel = "noopener"; $("lesson-docs").append(a); }
+  $("evidence").replaceChildren(); evidence.forEach(evidenceUI);
+  $("prompt").placeholder = item.prompt;
+}
+$("chapter-select").addEventListener("change", async () => {
+  state.chapter = $("chapter-select").value;
+  try { await createSession(); } catch (error) { state.chapter = state.session.chapter; lessonUI(state.session.evidence); notice(error.message); }
+});
+$("run-lesson").addEventListener("click", () => {
+  const item = state.chapters.find(c => c.id === state.chapter);
+  if (item && !state.busy) { $("prompt").value = item.prompt; $("composer").requestSubmit(); }
+});
+$("model-settings").addEventListener("click", () => {
+  $("api-key").value = ""; $("model-name").value = state.config.model;
+  $("model-config-status").textContent = state.config.configured ? "Web 密钥已在服务内存中；不回显，未自动验证。" : "尚未配置 Web 密钥。";
+  $("model-dialog").showModal();
+});
+$("close-model").addEventListener("click", () => $("model-dialog").close());
+$("model-dialog").addEventListener("close", () => { $("api-key").value = ""; });
+async function saveModel(clear = false) {
+  const key = $("api-key").value.trim(); const model = $("model-name").value.trim();
+  $("api-key").value = "";
+  const data = {model, clear}; if (key && !clear) data.api_key = key;
+  try {
+    state.config = await (await api("/api/model-config", data)).json();
+    $("model-dialog").close(); notice(clear ? "Web 密钥已清除，真实模式恢复后端配置" : "设置已保存到服务内存；发送任务时验证连接");
+  } catch (error) { notice(error.message); }
+}
+$("model-form").addEventListener("submit", event => { event.preventDefault(); saveModel(); });
+$("clear-model").addEventListener("click", () => saveModel(true));
 $("composer").addEventListener("submit", async (event) => {
   event.preventDefault(); const prompt = $("prompt").value.trim(); if (!prompt || state.busy) return;
   try {

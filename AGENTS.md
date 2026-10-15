@@ -75,6 +75,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 
 **凭据**
 
+- Web 演示允许用户主动输入 DeepSeek 密钥；只存本次服务内存，通过 `get_secret` 的作用域读取，不落文件、浏览器持久存储或消息；CLI 密钥规则如下。
 - 密钥只写在 `~/.hermes/.env`（和 `~/.mini-hermes/.env` 的非空覆盖位）。
 - **不进 shell 历史、不在聊天里出现值**；代码里取凭据必须走 `get_secret`，不用 `os.getenv`。
 - 公开仓里**不出现真实密钥、个人路径、个人身份信息**；示例一律通用化。
@@ -101,7 +102,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | `agent/skill_utils.py` · `tools/skills.py` | `tests/test_skills.py` |
 | `agent/context_engine.py` · `agent/engine_registry.py` | `tests/test_context_engine.py` |
 | `agent/observer.py` | `tests/test_observers.py` |
-| `hermes_cli/web.py` · `hermes_cli/web_assets/`（本地演示页面） | `tests/test_web.py`（+ `test_packaging.py`） |
+| `hermes_cli/web.py` · `hermes_cli/web_lessons.py` · `hermes_cli/web_assets/`（本地演示页面） | `tests/test_web.py` + `tests/test_web_lessons.py`（+ `test_packaging.py`） |
 | **新增/删除模块** · 动依赖 · 改模块白名单 | `tests/test_packaging.py`（**永远跑**：它是"发布前自检"） |
 
 三条从归属图带出来的约定，在 mini 里的对应物：

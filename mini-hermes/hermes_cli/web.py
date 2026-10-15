@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import queue
+import re
 import secrets
 import threading
 import time
@@ -25,7 +26,8 @@ from hermes_constants import (get_mini_home, reset_mini_home_override,
                               resolve_context_cwd, set_mini_home_override)
 from hermes_cli.runtime_provider import resolve_provider
 from hermes_state import SessionDB
-from run_agent import AIAgent
+from run_agent import AIAgent, ApiHTTPError
+from hermes_cli import web_lessons
 
 ASSETS = Path(__file__).with_name("web_assets")
 MAX_BODY = 32_768
@@ -38,8 +40,10 @@ class WebError(ValueError):
 
 
 class Turn:
-    def __init__(self, session_id):
+    def __init__(self, session_id, redact=lambda value: value):
         self.session_id = session_id
+        self.redact = redact
+        self.traces = []
         self.events = queue.Queue(maxsize=128)
         self.cancelled = threading.Event()
         self.finished = threading.Event()
@@ -53,7 +57,10 @@ class Turn:
         if self.agent is not None:
             self.agent.interrupt()
 
-    def emit(self, kind, **data):
+    def emit(self, kind, /, **data):
+        data = self.redact(data)
+        if kind == "trace":
+            self.traces.append({k: data.get(k) for k in ("event", "turn_id", "tool_name", "status", "tool_call_id")})
         item = {"event": kind, "data": hook_jsonable(data)}
         while True:
             if self.cancelled.is_set():
@@ -96,6 +103,8 @@ class WebApp:
     """Single active turn, bounded in-memory sessions; no process-global monkeypatches."""
     def __init__(self, provider="deepseek", model=None, max_turns=12):
         self.provider, self.model, self.max_turns = provider, model, max_turns
+        self.live_secrets = {}
+        self.web_model = "deepseek-flash"
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.Lock()
         self.sessions = {}
@@ -117,9 +126,54 @@ class WebApp:
                 turn.stop()
                 turn.thread.join(timeout=10)
         finally:
+            self.live_secrets.clear()
+            for session in self.sessions.values():
+                session["agent"] = None
             self.temp.cleanup()
 
-    def create_session(self, mode):
+    def redact(self, value):
+        # Redact BEFORE persistence/observer truncation, including provider error bodies.
+        if isinstance(value, str):
+            for secret in self.live_secrets.values():
+                if secret:
+                    value = value.replace(secret, "[REDACTED]")
+            return value
+        if isinstance(value, dict):
+            return {self.redact(k): self.redact(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.redact(v) for v in value]
+        return value
+
+    def model_config(self):
+        return {"configured": bool(self.live_secrets), "model": self.web_model,
+                "provider": "deepseek", "storage": "memory"}
+
+    def configure_model(self, data):
+        key, model = data.get("api_key"), data.get("model", self.web_model)
+        clear = data.get("clear", False)
+        if not isinstance(clear, bool) or not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,128}", model):
+            raise WebError("模型名或清除参数无效")
+        if key is not None and (not isinstance(key, str) or not 1 <= len(key) <= 512 or any(ord(c) < 33 or ord(c) > 126 for c in key)):
+            raise WebError("API Key 必须是无空白的可打印英文字符")
+        with self.lock:
+            if self.active:
+                raise WebError("请先等待当前回合结束或停止", 409)
+            # Credentials never enter session dictionaries, browser storage or .env files.
+            for session in self.sessions.values():
+                if session["mode"] == "live":
+                    session["agent"] = None
+            if clear:
+                self.live_secrets.clear()
+            elif key is not None:
+                self.live_secrets = {"DEEPSEEK_API_KEY": key}
+            self.web_model = model
+            return self.model_config()
+
+    def create_session(self, mode, chapter_id="02"):
+        try:
+            web_lessons.chapter(chapter_id)
+        except ValueError as exc:
+            raise WebError(str(exc))
         if mode not in ("offline", "live"):
             raise WebError("未知运行模式")
         with self.lock:
@@ -127,12 +181,12 @@ class WebApp:
                 raise WebError("本次运行最多保留 20 个会话，请重启演示服务", 409)
             sid = uuid.uuid4().hex
             session = {"id": sid, "mode": mode, "title": "新会话", "messages": [],
-                       "agent": None, "history": [], "model": None}
+                       "agent": None, "history": [], "model": None, "chapter": chapter_id, "evidence": []}
             self.sessions[sid] = session
             return self._public(session)
 
     def _public(self, s):
-        return {k: s[k] for k in ("id", "mode", "title", "model")} | {
+        return {k: s[k] for k in ("id", "mode", "title", "model", "chapter", "evidence")} | {
             "messages": list(s["messages"]),
             "running": bool(self.active and self.active.session_id == s["id"])}
 
@@ -149,7 +203,9 @@ class WebApp:
             session = self.sessions.get(sid)
             if session is None:
                 raise WebError("会话不存在", 404)
-            turn = Turn(sid)
+            if any(key in message for key in self.live_secrets.values()):
+                raise WebError("请在模型设置中填写密钥，不要发送到对话")
+            turn = Turn(sid, self.redact)
             self.active = turn
             session["messages"].append({"role": "user", "content": message.strip()})
             session["title"] = message.strip()[:26]
@@ -236,6 +292,34 @@ class WebApp:
         started = time.perf_counter()
         try:
             offline = session["mode"] == "offline"
+            lesson = web_lessons.chapter(session["chapter"])
+            # Every fixture uses its own empty scope and temporary home, even in live mode.
+            with TemporaryDirectory(prefix="lesson-", dir=str(self.root)) as experiment_home:
+                ht = set_mini_home_override(Path(experiment_home))
+                st = set_secret_scope({})
+                evidence = []
+                try:
+                    evidence = web_lessons.run_experiment(session["chapter"], experiment_home,
+                        lambda kind, **data: evidence.append(data))
+                finally:
+                    reset_secret_scope(st)
+                    reset_mini_home_override(ht)
+            if offline and lesson["kind"] != "agent":
+                turn.emit("started", session_id=session["id"], model="机制实验（未调用模型）",
+                          provider="experiment", mode="offline", workspace="隔离临时夹具", context_length=None)
+                turn.emit("lesson", **lesson)
+                for row in evidence:
+                    turn.emit("evidence", **row)
+                answer = lesson["title"] + "\n" + "\n".join(
+                    ("✓ " if row["ok"] else "✗ ") + row["label"] + "：" + json.dumps(row["observed"], ensure_ascii=False) for row in evidence)
+                with self.lock:
+                    session["evidence"] = evidence
+                    session["messages"].append({"role": "assistant", "content": answer})
+                    session["model"] = "机制实验（未调用模型）"
+                turn.emit("result", text=answer, usage=None, iterations=0,
+                          error=any(not row["ok"] for row in evidence),
+                          duration_ms=round((time.perf_counter()-started)*1000))
+                return
             if offline:
                 home = self.root / "offline-home"
                 home_token = set_mini_home_override(home)
@@ -245,7 +329,22 @@ class WebApp:
                         "context_length": 32000}
                 workspace = self.project
             else:
-                spec = resolve_provider(self.provider, self.model)
+                if self.live_secrets:
+                    secret_token = set_secret_scope(dict(self.live_secrets))
+                    spec = resolve_provider("deepseek", self.web_model,
+                                            explicit_base_url="https://api.deepseek.com")
+                else:
+                    spec = resolve_provider(self.provider, self.model)
+                # Resolve existing configured credentials as well; never echo them in errors.
+                active_key = spec.get("api_key", "")
+                if active_key:
+                    original_redact = turn.redact
+                    def redact_active(value):
+                        if isinstance(value, str): return original_redact(value.replace(active_key, "[REDACTED]"))
+                        if isinstance(value, dict): return {k: redact_active(v) for k,v in value.items()}
+                        if isinstance(value, (list, tuple)): return [redact_active(v) for v in value]
+                        return value
+                    turn.redact = redact_active
                 home = get_mini_home() / "web"
                 workspace = Path(resolve_context_cwd())
             home.mkdir(parents=True, exist_ok=True)
@@ -254,9 +353,14 @@ class WebApp:
             if session["agent"] is None:
                 session["agent"] = AIAgent(
                     spec, session_id=session["id"], max_turns=self.max_turns,
-                    fallback_providers=[] if offline else None,
+                    fallback_providers=[],
+                    thinking={"type": "disabled"} if spec["provider"] == "deepseek" else None,
                     context_cwd=str(workspace), skip_context_files=offline)
             agent = session["agent"]
+            agent.ephemeral_system_prompt = (
+                "当前演示章节：" + lesson["title"] + "。重点：" + lesson["focus"] +
+                "。请围绕本章解释，不要把夹具验证描述为生产能力。夹具摘要为固定生成，不代表真实模型压缩。实测证据：" +
+                json.dumps(evidence, ensure_ascii=False))
             turn.agent = agent
             # A new connection per worker avoids sharing SQLite connections between threads.
             agent.session_db = db
@@ -270,16 +374,45 @@ class WebApp:
             agent._observers = observer
             if offline:
                 agent._http_post = self._scripted_provider(message, turn)
+            else:
+                # Bind only once per cached agent; sanitize before the core logs/persists responses.
+                transport = getattr(agent, "_web_transport", agent._http_post)
+                agent._web_transport = transport
+                def sanitized_request(candidate, messages):
+                    try:
+                        return turn.redact(transport(candidate, messages))
+                    except ApiHTTPError as exc:
+                        raise ApiHTTPError(exc.code, turn.redact(exc.body), turn.redact(exc.url)) from None
+                    except Exception as exc:
+                        raise RuntimeError(turn.redact(str(exc))) from None
+                agent._http_post = sanitized_request
             with self.lock:
                 session["model"] = agent.model
             turn.emit("started", session_id=session["id"], model=agent.model,
                       provider=agent.provider, mode=session["mode"], workspace=workspace.name,
                       context_length=spec.get("context_length"))
+            turn.emit("lesson", **lesson)
+            for row in evidence:
+                turn.emit("evidence", **row)
             if turn.cancelled.is_set():
                 turn.emit("status", text="本轮已停止")
                 return
             result = agent.run_conversation(message, conversation_history=session["history"])
+            if lesson["kind"] == "agent":
+                if session["chapter"] == "02":
+                    calls = [d for d in turn.traces if d["event"] == "pre_tool_call"]
+                    returns = [d for d in turn.traces if d["event"] == "post_tool_call"]
+                    evidence.append({"label": "实际工具调用与返回", "observed": {"calls": len(calls), "returns": len(returns)},
+                                     "ok": bool(calls) and len(calls) == len(returns), "source": lesson["source"]})
+                else:
+                    names = sorted({d["event"] for d in turn.traces})
+                    ids = {d["turn_id"] for d in turn.traces if d["turn_id"]}
+                    evidence.append({"label": "观察到的事件类别与回合关联", "observed": {"events": names, "turn_ids": len(ids)},
+                                     "ok": bool(names) and len(ids) == 1, "source": lesson["source"]})
+                for row in evidence:
+                    turn.emit("evidence", **row)
             with self.lock:
+                session["evidence"] = evidence
                 session["history"] = result["messages"]
                 answer = result.get("final_response", "")
                 if answer:
@@ -355,7 +488,20 @@ class WebHandler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/bootstrap":
                 return self._json(200, {"token": self.server.app.token,
-                                       "sessions": self.server.app.snapshot()})
+                                       "sessions": self.server.app.snapshot(),
+                                       "chapters": web_lessons.catalog(), "model_config": self.server.app.model_config()})
+            if path.startswith("/docs/"):
+                parts = path.split("/")
+                try:
+                    document = web_lessons.documents(parts[2]).get(parts[3]) if len(parts) == 4 else None
+                except ValueError:
+                    document = None
+                if not document or not document.is_file():
+                    raise WebError("文档不存在", 404)
+                raw = document.read_bytes()
+                self._headers(200, "text/plain; charset=utf-8", len(raw))
+                self.wfile.write(raw)
+                return
             assets = {"/": ("index.html", "text/html; charset=utf-8"),
                       "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                       "/style.css": ("style.css", "text/css; charset=utf-8")}
@@ -394,7 +540,9 @@ class WebHandler(BaseHTTPRequestHandler):
             if sid is not None and not isinstance(sid, str):
                 raise WebError("无效会话 ID")
             if path == "/api/sessions":
-                return self._json(201, app.create_session(data.get("mode", "offline")))
+                return self._json(201, app.create_session(data.get("mode", "offline"), data.get("chapter", "02")))
+            if path == "/api/model-config":
+                return self._json(200, app.configure_model(data))
             if path == "/api/stop":
                 app.stop(sid)
                 return self._json(200, {"ok": True})

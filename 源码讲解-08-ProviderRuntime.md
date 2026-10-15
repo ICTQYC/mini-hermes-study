@@ -980,3 +980,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 - **文档怎么说**：三把 key 里 `OPENAI_API_KEY` 兼作"自定义端点/兜底"。
 - **源码怎么算**：`runtime_provider.py:317-326 _host_gated_env_key_candidates()` 把三把 key **都只挂自己的权威域名**，其余给空串；自定义端点走 `_host_derived_api_key()`（从 host 反推 `<VENDOR>_API_KEY`）。docstring 附安全理由：*"Sending OPENAI/OPENROUTER/OLLAMA keys to an unrelated endpoint leaks credentials (GHSA-76xc-57q6-vm5m); match on HOST, not substring."*
 - **对学习者意味着什么**："兜底"= **按域名推导出来的那把 key**，不是"把 OpenAI 的 key 发给任意端点"。mini 照抄了这一条（`providers/host_gate.py`；实跑：`openrouter.ai` 只发 OPENROUTER、`api.openai.com` 只发 OPENAI、陌生 host 一把都不发）。
+
+### 后续维护：Web 的显式 DeepSeek 连接
+
+Web 模型设置是现有凭据解析的一个内存入口：通过 `set_secret_scope` → `get_secret` → `resolve_provider` 复用连接层，并显式固定官方端点，不修改进程环境或 `.env`。真实 Web 回合禁用自动回退，防止演示时切到另一个服务商；DeepSeek 请求显式关闭思考模式，所需可选 `thinking` 参数在 Agent 传输层装配。CLI 默认请求不增加该字段。完整用法与边界见 [Web 演示说明](WEB_DEMO.md)。

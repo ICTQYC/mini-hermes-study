@@ -20,7 +20,12 @@
     <section class="mode-bar" aria-label="选择运行模式">
       <div class="mode-switch"><button id="mode-offline" class="selected" type="button">◉ 离线演示</button><button id="mode-live" type="button">◎ 真实模型</button></div>
       <p id="mode-description">固定 provider + 真实 Agent 与工具，无需密钥或网络。</p>
-      <span id="mode-badge" class="pill">DEMO</span>
+      <button id="model-settings" type="button" class="settings-button">模型设置</button><span id="mode-badge" class="pill">DEMO</span>
+    </section>
+    <section class="lesson panel" aria-label="章节演示">
+      <div class="lesson-top"><label for="chapter-select">演示章节</label><select id="chapter-select"></select><button id="run-lesson" class="send-button" type="button">运行本章演示 ↗</button></div>
+      <div class="lesson-info"><span id="lesson-kind" class="pill"></span><strong id="lesson-title"></strong><p id="lesson-focus"></p><div id="lesson-docs"></div></div>
+      <div id="evidence" class="evidence" aria-live="polite"></div>
     </section>
     <div class="workbench">
       <section class="conversation panel">
@@ -48,5 +53,6 @@
     <div id="notice" class="notice" role="alert" hidden></div>
   </main>
   <dialog id="approval-dialog"><form method="dialog"><div class="eyebrow">TOOL APPROVAL</div><h2>此命令需要确认</h2><p>Agent 请求执行以下危险命令：</p><pre id="approval-command"></pre><div class="dialog-actions"><button id="deny-approval" value="deny">拒绝</button><button id="allow-approval" value="allow" class="send-button">允许执行</button></div></form></dialog>
+  <dialog id="model-dialog"><form id="model-form" autocomplete="off"><div class="eyebrow">DEEPSEEK · LIVE MODEL</div><h2>连接真实模型</h2><p>密钥只保存在本次本地服务内存，关闭服务后清除。发送任务会请求 DeepSeek，产生 API 费用。</p><label for="api-key">API Key</label><input id="api-key" type="password" autocomplete="off" placeholder="粘贴密钥；留空可保留已配置密钥" maxlength="512"><label for="model-name">模型名</label><input id="model-name" required maxlength="128" placeholder="填写账号可用的模型名"><p id="model-config-status"></p><p>未配置 Web 密钥时，真实模式沿用启动服务时的后端配置。</p><div class="dialog-actions"><button id="close-model" type="button">关闭</button><button id="clear-model" type="button">清除密钥</button><button type="submit" class="send-button">保存到内存</button></div></form></dialog>
 </body>
 </html>

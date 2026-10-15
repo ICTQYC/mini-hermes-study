@@ -42,6 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # 项目自己的顶层模块（和 Hermes 一一对应的那套文件名）
 PROJECT_MODULES = {
+    "tests",  # Shared Web integration fixtures inside the local test package.
     "hermes_constants",
     "model_tools",
     "run_agent",
