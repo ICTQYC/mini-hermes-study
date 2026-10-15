@@ -129,6 +129,8 @@ mini-hermes/                  Runnable implementation
 
 ## Historical snapshots
 
+The public history has been sanitized to remove local paths and personal email addresses. Local commit references and chapter tags have been updated to match this public history.
+
 Use the current main branch to run the maintained implementation. Chapter tags and `final-v1` preserve earlier milestones, but some chapter tags were moved during earlier maintenance. For historical code and line references, use the explicit commit recorded in each document rather than assuming every tag identifies the original chapter snapshot. The [implementation README](mini-hermes/README.md) lists the historical commits.
 
 ## Scope
@@ -139,6 +141,6 @@ This is a learning implementation. It does not include the upstream cron subsyst
 
 Hermes Agent is developed by [Nous Research](https://nousresearch.com). This is an independent learning project, unaffiliated with the official project.
 
-The repository includes an [MIT license](LICENSE). The translations and quotations identify their upstream sources; attribution to the original authors is retained. See [Hermes Agent](https://github.com/NousResearch/hermes-agent) and the [official documentation](https://hermes-agent.nousresearch.com/docs) for the source material.
+Original material in this repository is covered by the [MIT license](LICENSE). Translations and quotations retain the upstream attribution and MIT permission notice; see [third-party notices](THIRD_PARTY_NOTICES.md). See [Hermes Agent](https://github.com/NousResearch/hermes-agent) and the [official documentation](https://hermes-agent.nousresearch.com/docs) for the source material.
 
 The local `官方文档-Developer-Guide/` mirror is ignored by Git and is not distributed in this repository. The [Chinese README](README.md#快速开始) explains how to obtain the upstream documentation at the reference commit. You can read this repository and run its tests without that mirror.

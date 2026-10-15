@@ -107,6 +107,8 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 
 发布前修复与验证明细见 [发布前修复记录](发布前修复记录.md)。章节标签曾移到后续统一维护提交；历史行号和规模须按正文注明的具体提交核对，不能仅凭 `chXX` 标签复现原章状态。
 
+公开历史已脱敏：本机路径及个人邮箱已移除，正文中的本仓提交引用与章节标签已同步到公开历史。
+
 ## 内容地图
 
 | 板块 | 篇数 / 规模 |
@@ -115,7 +117,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,972 行 |
 | 跟读文档（消息旅程 / 代码解读 / 测试怎么写） | 3 份 · 2,073 行 |
 | 收尾总览（46 篇图谱 / 差距总账 / 冻结清单 —— 全库的账） | 1 篇 · 464 行 |
-| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 132 行 |
+| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 140 行 |
 | `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 18,551 行 · 78 个文件 |
 | `mini-hermes/tests/`（15 个测试文件） | 12,357 行 |
 | `mini-hermes/demos/`（故障复现 + 真跑脚本） | 1,794 行 · 10 个 |
@@ -162,7 +164,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 
 ## 依赖与许可
 
-本仓现有许可文件为 [MIT License](LICENSE)。上游项目与文档来源见下方链接；翻译和引用保留原作者归属。
+本仓原创内容采用 [MIT License](LICENSE)。Hermes 精译与引用保留 Nous Research 的署名及上游 MIT 许可，见 [上游许可通知](THIRD_PARTY_NOTICES.md)。
 
 - **零第三方依赖**，只用 Python 标准库（`urllib` / `json` / `threading` / `queue` / `sqlite3` / `subprocess`…）。这是设计选择不是疏忽：手搓 `urllib` 发 HTTP，才能看清 API payload 的真实长相（`tools` 字段、`tool_choice`、消息数组到底长什么样）。
 - 本仓内容基于 **Hermes Agent 官方文档**写作 —— 上游仓库 [github.com/NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)，文档站 [hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs)。**不随仓分发上游文档**（`官方文档-Developer-Guide/` 是 gitignore 的本地镜像）；要读原文请去上游获取。
