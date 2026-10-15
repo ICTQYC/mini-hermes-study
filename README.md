@@ -1,8 +1,22 @@
 # 手写一个能跑的 Agent：逐章精读 Hermes 并复刻一个迷你版
 
-**一句话**：逐章精读 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 官方 developer-guide 的每一篇，并把对应机制在一个零依赖的迷你版实现里手写一遍 —— 目前 **17 篇中文精译 + 16 篇源码讲解 + 一个约 1.9 万行的迷你 agent**。
+**简体中文** | [English](README.en.md)
+
+**一句话**：逐章精读 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 官方 Developer Guide 的选定章节，并把对应机制在一个零依赖的迷你版实现里手写一遍 —— 目前 **17 篇中文精译 + 16 篇源码讲解 + 一个约 1.9 万行的迷你 agent**。
 
 一个从零手写的、真正能跑的 agent，目的是搞懂 Hermes 怎么实现的。**抄的是架构决策，不是代码量。**
+
+## 从这里开始
+
+| 你想做什么 | 入口 |
+|---|---|
+| 先运行，再看实现 | [快速开始](#快速开始) · [mini 使用说明](mini-hermes/README.md) |
+| 从第一章系统阅读 | [架构总览](中文精译-01-Architecture.md) → [章节目录](#内容地图) |
+| 跟踪一条消息怎么流转 | [Hermes 消息完整旅程](Hermes消息完整旅程.md) |
+| 逐文件看代码与测试 | [代码解读](代码解读-mini-hermes.md) · [测试怎么写](测试怎么写.md) |
+| 看实现边界与验证记录 | [收尾总览](收尾总览.md) · [发布前修复记录](发布前修复记录.md) |
+
+英文入口提供项目介绍、运行方式和章节导航；正文精译与讲解目前以中文为主。
 
 ## 为什么值得读
 
@@ -10,7 +24,7 @@
 
 - **窄腰与插槽**：核心是一根「窄腰」，能力长在边缘。迷你版把上下文压缩器做成了**可替换插槽** —— 换引擎只改一处构造点，且默认路径**逐字节不变**。这是「扩展点该开在哪」的现成实例。
 - **失败语义**：回退链只在「换个环境重试有可能成功」的状态码上回退（429/5xx/401/403 回退，400/422 绝不）；压缩摘要失败分四层（终止类总是中止、非终止类走确定性兜底、再叠冷却阶梯）。读的是「出错了怎么办」的设计。
-- **字节稳定**：同一会话内反复构建系统提示词，**字节必须完全相同**。不缓存的话每轮重读文件、结果可能变，prompt 缓存每轮失效、成本翻倍 —— 而这个 bug **没有症状，只有账单**。
+- **字节稳定**：同一会话内反复构建系统提示词，**字节必须完全相同**。若文件内容变化，反复读取可能缩短可复用的提示词前缀，增加模型输入成本；具体影响取决于 provider 的缓存规则与实际请求。
 - **零成本钩子**：只读观察者用 `has()` 查询订阅表实现快路径 —— 没装观察者时，载荷在构造之前就被掐掉，接近零开销。
 - **静默失败是主角**：注册了但没在任何 toolset 里点名的工具会**静默消失**（不报错、日志干净）；一个未绑定的读取会**静默串库**（不报错，只是用了别人的数据）。整套材料反复在讲「不报错的错最贵」。
 - **测试守的是不变量**：机制自测断言关系（顺序 / 计数 / 边界），反向验证要求「把机制改回旧写法，测试必**干净地变红**」。
@@ -110,23 +124,23 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 
 | 章 | 主题 | 精译 | 源码讲解 |
 |---|---|---|---|
-| 01 | Architecture（架构总览：地图章，无源码讲解） | 473 | — |
-| 02 | Agent Loop（回合循环） | 1214 | 559 |
-| 03 | Prompt Assembly（提示词装配） | 2202 | 967 |
-| 04 | Tools Runtime（工具运行时） | 934 | 2848 |
-| 05 | Context Compression & Caching（压缩与缓存） | 931 | 1770 |
-| 06 | Session Storage（会话存储） | 812 | 1055 |
-| 07 | Gateway Internals（网关内部） | 638 | 937 |
-| 07b · 扩展 7.1 | Gateway Session Lifecycle（网关会话生命周期） | 903 | 1376 |
-| 07c · 扩展 7.2 | Multiplexing Gateway（多路复用网关） | 472 | 1292 |
-| 08 | Provider Runtime（服务商运行时） | 366 | 982 |
-| 09 | Programmatic Integration（程序化集成） | 284 | 788 |
-| 10 | Micro Compaction（微压缩） | 362 | 847 |
-| 11 | State DB Recovery（state.db 抢修） | 172 | 977 |
-| 12 | Codebase Ownership & Completion Backlog（归属与投递债） | 204 | 838 |
-| 13 | Creating Skills（技能系统） | 684 | 1176 |
-| 14 | Context Engine Plugin（上下文引擎插槽） | 420 | 1349 |
-| 15 | Observer Hooks（观察者钩子） | 528 | 1211 |
+| 01 | Architecture（架构总览：地图章，无源码讲解） | [473](中文精译-01-Architecture.md) | — |
+| 02 | Agent Loop（回合循环） | [1214](中文精译-02-AgentLoop.md) | [559](源码讲解-02-AgentLoop.md) |
+| 03 | Prompt Assembly（提示词装配） | [2202](中文精译-03-PromptAssembly.md) | [967](源码讲解-03-PromptAssembly.md) |
+| 04 | Tools Runtime（工具运行时） | [934](中文精译-04-ToolsRuntime.md) | [2848](源码讲解-04-ToolsRuntime.md) |
+| 05 | Context Compression & Caching（压缩与缓存） | [931](中文精译-05-ContextCompressionAndCaching.md) | [1770](源码讲解-05-ContextCompressionAndCaching.md) |
+| 06 | Session Storage（会话存储） | [812](中文精译-06-SessionStorage.md) | [1055](源码讲解-06-SessionStorage.md) |
+| 07 | Gateway Internals（网关内部） | [638](中文精译-07-GatewayInternals.md) | [937](源码讲解-07-GatewayInternals.md) |
+| 07b · 扩展 7.1 | Gateway Session Lifecycle（网关会话生命周期） | [903](中文精译-07b-GatewaySessionLifecycle.md) | [1376](源码讲解-07b-GatewaySessionLifecycle.md) |
+| 07c · 扩展 7.2 | Multiplexing Gateway（多路复用网关） | [472](中文精译-07c-MultiplexingGateway.md) | [1292](源码讲解-07c-MultiplexingGateway.md) |
+| 08 | Provider Runtime（服务商运行时） | [366](中文精译-08-ProviderRuntime.md) | [982](源码讲解-08-ProviderRuntime.md) |
+| 09 | Programmatic Integration（程序化集成） | [284](中文精译-09-ProgrammaticIntegration.md) | [788](源码讲解-09-ProgrammaticIntegration.md) |
+| 10 | Micro Compaction（微压缩） | [362](中文精译-10-MicroCompaction.md) | [847](源码讲解-10-MicroCompaction.md) |
+| 11 | State DB Recovery（state.db 抢修） | [172](中文精译-11-StateDbRecovery.md) | [977](源码讲解-11-StateDbRecovery.md) |
+| 12 | Codebase Ownership & Completion Backlog（归属与投递债） | [204](中文精译-12-CodebaseOwnershipAndCompletionBacklog.md) | [838](源码讲解-12-CodebaseOwnershipAndCompletionBacklog.md) |
+| 13 | Creating Skills（技能系统） | [684](中文精译-13-CreatingSkills.md) | [1176](源码讲解-13-CreatingSkills.md) |
+| 14 | Context Engine Plugin（上下文引擎插槽） | [420](中文精译-14-ContextEnginePlugin.md) | [1349](源码讲解-14-ContextEnginePlugin.md) |
+| 15 | Observer Hooks（观察者钩子） | [528](中文精译-15-ObserverHooks.md) | [1211](源码讲解-15-ObserverHooks.md) |
 
 **三份跟读文档**（仓库根）：《Hermes消息完整旅程.md》（580 行，横切：一条消息穿过所有模块）·《代码解读-mini-hermes.md》（1,078 行，逐文件走读迷你版，历史正文锚 `db6229c` 提交（章节标签曾后移））·《测试怎么写.md》（415 行，测试的写法与反例）。第 1 章《中文精译-01-Architecture.md》（473 行）是纵切地图，排在上面章清单里，建议先读它。
 
@@ -147,6 +161,8 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 **章号规则**：`-NN-` 是**全局序**；`07b` / `07c` 属于第 7 章的家族（= 扩展 7.1 / 7.2，不占章号，文件编号仍按全局序排）。每章一个标签 `chNN-<slug>`。
 
 ## 依赖与许可
+
+本仓现有许可文件为 [MIT License](LICENSE)。上游项目与文档来源见下方链接；翻译和引用保留原作者归属。
 
 - **零第三方依赖**，只用 Python 标准库（`urllib` / `json` / `threading` / `queue` / `sqlite3` / `subprocess`…）。这是设计选择不是疏忽：手搓 `urllib` 发 HTTP，才能看清 API payload 的真实长相（`tools` 字段、`tool_choice`、消息数组到底长什么样）。
 - 本仓内容基于 **Hermes Agent 官方文档**写作 —— 上游仓库 [github.com/NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)，文档站 [hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs)。**不随仓分发上游文档**（`官方文档-Developer-Guide/` 是 gitignore 的本地镜像）；要读原文请去上游获取。
