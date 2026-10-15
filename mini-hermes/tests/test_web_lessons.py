@@ -78,6 +78,11 @@ def test_credentials():
         with patch.object(web,'resolve_provider',side_effect=resolve), patch.object(web.AIAgent,'_http_post',return_value=reply):
             body=request(server,'/api/turn',{'session_id':sid,'message':'解释实验'})[2]
         agent=app.sessions[sid]['agent']
+        prompt_sid=json.loads(request(server,'/api/sessions',{'mode':'live','chapter':'03'})[2])['id']
+        with patch.object(web,'resolve_provider',side_effect=resolve), patch.object(web.AIAgent,'_http_post',return_value=reply):
+            for message in ('解释本次提示词','再追问一次'):
+                request(server,'/api/turn',{'session_id':prompt_sid,'message':message})
+        check("真实模式续聊也逐次捕获，且传输包装不递归", len(app.sessions[prompt_sid]['prompt_requests'])==2 and len(app.sessions[prompt_sid]['messages'])==4)
         check("凭据走密钥作用域并固定到官方端点", observed=={'provider':'deepseek','model':'fixture-model','base':'https://api.deepseek.com','key':fake})
         check("DeepSeek Web 回合显式关闭思考模式", agent.thinking=={'type':'disabled'})
         check("真实路径返回值在核心落盘前脱敏", fake not in body+str(app.sessions[sid]['history']) and '[REDACTED]' in body)
@@ -127,7 +132,48 @@ def test_thinking_transport():
         finally:
             reset_secret_scope(st);reset_mini_home_override(ht)
 
-GROUPS=[('隔离章节实验',test_experiments),('章节 HTTP',test_chapter_http),('内存凭据',test_credentials),('请求协议',test_thinking_transport)]
+def test_prompt_conversation():
+    from hermes_cli.web_prompts import common_prefix
+    check("公共前缀按 UTF-8 字节测量", common_prefix("中a", "中b") == 3)
+    with fixture() as (app,server,home):
+        sid=json.loads(request(server,'/api/sessions',{'chapter':'03'})[2])['id']
+        # Large, real project instructions verify that the exact endpoint does not clip at 8000 characters.
+        (app.prompt_project/'AGENTS.md').write_text("# Demo rules\n" + "保留这段项目规则。"*1600,encoding='utf-8')
+        seen=[]; original=app._scripted_provider
+        def provider(message,turn,project=None):
+            respond=original(message,turn,project)
+            def capture(candidate,messages):
+                seen.append(json.loads(json.dumps(messages)))
+                return respond(candidate,messages)
+            return capture
+        with patch.object(app,'_scripted_provider',side_effect=provider):
+            stream=events(request(server,'/api/turn',{'session_id':sid,'message':'读一下 README'})[2])
+            snapshots=app.sessions[sid]['prompt_requests']
+            check("提示词章进入实际 Agent 回合并逐次捕获", len(snapshots)==3 and len([1 for k,d in stream if k=='prompt_request'])==3, stream)
+            check("快照与真正交给 provider 的 messages 一致", [row['messages'] for row in snapshots]==seen)
+            check("每次请求均可反查三层和临时指导", all(row['mapped'] and '\n\n'.join(layer['text'] for layer in row['layers'] if layer['text'])+row['temporary']==row['system'] for row in snapshots))
+            first=snapshots[0]
+            layer_text={row["name"]: row["text"] for row in first["layers"]}
+            check("展示真实身份、项目规则、记忆和环境", "演示用的 mini-hermes" in layer_text.get("stable", "") and "保留这段项目规则" in layer_text.get("context", "") and "演示记忆" in layer_text.get("volatile", ""))
+            check("同一工具回合中系统稳定而消息增长", all(row['comparison']['system_equal'] and row['comparison']['current_messages']>row['comparison']['previous_messages'] for row in snapshots[1:]))
+            detail=json.loads(request(server,f"/api/prompts/{sid}/{first['id']}")[2])
+            check("完整提示词端点不受事件 8000 字符截断", len(detail['system'])>8000 and detail['system']==first['system'] and 'truncated' not in detail['system'])
+            (app.root/'prompt-home/MEMORY.md').write_text('CHANGED_MEMORY_AFTER_FIRST_TURN',encoding='utf-8')
+            request(server,'/api/turn',{'session_id':sid,'message':'继续读入口代码'})
+            snapshots=app.sessions[sid]['prompt_requests']
+            check("续聊保留前次请求并新增独立对话回合", len(snapshots)==6 and len({row['turn'] for row in snapshots})==2 and snapshots[3]['iteration']==1)
+            check("记忆文件变化不使同一 Agent 的缓存悄悄变化", snapshots[3]['system']==first['system'] and 'CHANGED_MEMORY_AFTER_FIRST_TURN' not in snapshots[3]['system'])
+            check("新问题与工具调用在完整请求中可见", '继续读入口代码' in str(snapshots[-1]['messages']) and any(m.get('tool_calls') for m in snapshots[-1]['messages']))
+            check("临时提示只进请求副本，不污染历史", first['temporary'].strip() not in app.sessions[sid]['history'][0]['content'])
+            newer=json.loads(request(server,'/api/sessions',{'chapter':'03'})[2])['id']
+            request(server,'/api/turn',{'session_id':newer,'message':'读一下 README'})
+            check("新会话重建时读取新的记忆快照", 'CHANGED_MEMORY_AFTER_FIRST_TURN' in app.sessions[newer]['prompt_requests'][0]['system'])
+        check("提示词读取路由拒绝未知会话或请求", request(server,'/api/prompts/no-session/no-request')[0]==404)
+        architecture=json.loads(request(server,'/api/sessions',{'chapter':'01'})[2])['id']
+        check("架构章仅导览，后端拒绝运行演示", request(server,'/api/turn',{'session_id':architecture,'message':'运行'})[0]==400 and not app.sessions[architecture]['messages'])
+        check("切换会话后的启动索引仍含全部请求入口", len(next(row for row in json.loads(request(server,'/api/bootstrap')[2])['sessions'] if row['id']==sid)['prompt_requests'])==6)
+
+GROUPS=[('当前对话的提示词装配',test_prompt_conversation),('隔离章节实验',test_experiments),('章节 HTTP',test_chapter_http),('内存凭据',test_credentials),('请求协议',test_thinking_transport)]
 if __name__=='__main__':
     for name,test in GROUPS:
         print('\n'+name)

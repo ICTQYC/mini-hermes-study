@@ -41,6 +41,16 @@
         <form id="composer" class="composer"><label class="sr-only" for="prompt">输入任务</label><textarea id="prompt" rows="2" maxlength="6000" placeholder="输入一个任务，或选择上方的演示场景…"></textarea><div class="composer-bottom"><span id="composer-hint">Enter 发送 · Shift + Enter 换行</span><div><button id="stop" class="stop-button" type="button" hidden>■ 停止</button><button id="send" class="send-button" type="submit">发送任务 <span>↑</span></button></div></div></form>
       </section>
       <aside class="inspector">
+    <section id="prompt-inspector" class="panel prompt-inspector" hidden>
+      <div class="prompt-top"><div><div class="eyebrow">PROMPT ASSEMBLY · 当前对话</div><h2>模型这一次看到了什么？</h2></div><label for="prompt-request-select">选择模型请求</label><select id="prompt-request-select"></select></div>
+      <p class="prompt-intro">稳定层 → 项目上下文层 → 重建时可能变化的层 → 本次临时指导。点开各层可看本次原文；内容取自真实请求副本，已对已知密钥脱敏。</p>
+      <p id="prompt-comparison" class="prompt-comparison">发送一条消息后查看本次系统提示词；继续追问，对比每次模型请求。</p>
+      <div id="prompt-layers" class="prompt-layers"></div>
+      <details class="prompt-details"><summary>完整系统消息（交给传输层的内容）</summary><pre id="prompt-system"></pre></details>
+      <details class="prompt-details"><summary>完整 messages：历史、当前问题、工具调用与工具结果</summary><div id="prompt-message-list"></div><pre id="prompt-raw"></pre></details>
+      <p id="prompt-explanation" class="prompt-intro">系统提示词缓存和服务商的计费缓存是两回事；这里先验证每次发送的内容。</p>
+    </section>
+
         <section class="panel runtime"><div class="panel-heading"><strong>运行状态</strong><span class="tiny-live">● LIVE</span></div>
           <div class="runtime-body"><div class="model-label">当前模型 <span id="provider">OFFLINE</span></div><div id="model" class="model-name">scripted-offline</div>
             <div class="metric-grid"><div><small>输入 tokens</small><strong id="input-tokens">—</strong></div><div><small>输出 tokens</small><strong id="output-tokens">—</strong></div><div><small>工具调用</small><strong id="tool-count">0</strong></div><div><small>回合耗时</small><strong id="duration">—</strong></div></div>

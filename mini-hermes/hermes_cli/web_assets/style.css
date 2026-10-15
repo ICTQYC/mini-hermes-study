@@ -208,3 +208,32 @@ select,input{font:inherit;border:1px solid #dfe4eb;border-radius:6px;padding:8px
 #model-form input{width:100%}
 #model-config-status{color:#48886d}
 @media(max-width:600px){.lesson{padding:12px}.lesson-top{flex-wrap:wrap}.lesson-top label{width:100%}.lesson-top select{width:60%}.mode-bar{flex-wrap:wrap}.settings-button{margin-left:0}.evidence{grid-template-columns:1fr}}
+
+.prompt-inspector{margin-bottom:20px;padding:20px}
+.prompt-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.prompt-top>div{margin-right:auto}
+.prompt-top h2{margin:5px 0}
+.prompt-top label{font-size:11px;color:#8190a3}
+.prompt-top select{min-width:0;max-width:100%;font-size:11px}
+.prompt-intro{font-size:12px;color:#748399;line-height:1.8}
+.prompt-comparison{padding:12px;background:#eff6f4;border-radius:7px;font-size:12px;color:#416d60}
+.prompt-layers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
+.prompt-layer{border:1px solid #e3e8ef;border-top:3px solid #6f9f8e;border-radius:7px;padding:12px;min-width:0}
+.prompt-layer:nth-child(2){border-top-color:#d8a170}.prompt-layer:nth-child(3){border-top-color:#829bc3}
+.prompt-layer summary,.prompt-details summary{cursor:pointer;font-size:12px;font-weight:600}
+.prompt-layer p{font-size:11px;color:#8793a5;min-height:54px}
+.prompt-layer small{font:9px monospace;color:#9aa5b6}
+.prompt-layer pre,.prompt-details pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.8 monospace;max-height:280px;overflow:auto;color:#576a7e;background:#f7f9fb;padding:10px;border-radius:5px}
+.prompt-layer.temporary{grid-column:1/-1;border-top-color:#ac96b1}
+.prompt-details{margin:12px 0;padding:12px;border:1px solid #e6eaf0;border-radius:7px}
+.message-role{display:inline-block;padding:4px 8px;margin:8px 5px 0 0;border-radius:4px;background:#edf1f6;font:10px monospace;color:#687c92}
+@media(max-width:930px){.prompt-layers{grid-template-columns:1fr}.prompt-layer p{min-height:0}}
+
+.prompt-mode .workbench{grid-template-columns:minmax(300px,.85fr) minmax(450px,1.15fr)}
+.prompt-mode .runtime,.prompt-mode .trace-panel{display:none}
+.prompt-mode .prompt-inspector{height:calc(100vh - 425px);min-height:520px;overflow:auto;margin-bottom:0;padding:16px}
+.prompt-mode .conversation{height:calc(100vh - 425px);min-height:520px}
+.prompt-mode .prompt-layers{grid-template-columns:1fr}
+.prompt-mode .prompt-layer pre{max-height:140px}
+.prompt-mode .prompt-layer p{min-height:0;margin:7px 0}
+@media(max-width:1150px){.prompt-mode .workbench{grid-template-columns:1fr}.prompt-mode .inspector{grid-template-columns:1fr}.prompt-mode .prompt-inspector{height:auto;max-height:1000px}.prompt-mode .conversation{height:500px}}

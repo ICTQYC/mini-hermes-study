@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const state = {token: "", sessions: [], session: null, mode: "offline", busy: false, events: 0,
-  chapters: [], chapter: "02", config: {}, tools: 0, started: 0, usage: false, stopped: false, approval: null};
+  promptSelection: null, promptLoad: 0, chapters: [], chapter: "02", config: {}, tools: 0, started: 0, usage: false, stopped: false, approval: null};
 const labels = {pre_llm_call: "Agent 请求模型", post_llm_call: "模型返回决策", pre_api_request: "发送模型请求",
   post_api_request: "收到模型响应", api_request_error: "模型请求失败", pre_tool_call: "开始执行工具", post_tool_call: "工具执行完成"};
 function node(tag, className, text) {
@@ -91,6 +91,7 @@ function renderMessages(session) {
       const button = node("button", "", "运行本章场景 ↗"); button.dataset.prompt = lesson.prompt; presets.append(button);
       start.querySelector(".welcome-footnote").textContent = lesson.kind === "guide" ? "文档与源码导览，不代表新增了独立子系统。" : "实测结果会显示在上方；可展开轨迹核对原始数据。";
     }
+    if (lesson?.id === "03") start.querySelector(".welcome-footnote").textContent = "在同一会话继续追问，右侧逐次展示实际提示词。";
     if (session.mode === "live") {
       start.querySelector(".welcome-footnote").textContent = "真实模式使用启动服务时的工作区与现有工具权限。";
       start.querySelectorAll("[data-prompt]").forEach(button => {
@@ -148,6 +149,10 @@ function consume(kind, data) {
     $("workspace").textContent = data.workspace; $("context-window").textContent = data.context_length?.toLocaleString() || "未配置";
     state.session.model = data.model;
     trace("回合开始", data.provider === "experiment" ? "实际机制实验 · 未调用模型" : data.mode === "offline" ? "离线 provider · 真实 Agent 循环" : "真实模型 · 本地工具");
+  } else if (kind === "prompt_request") {
+    state.session.prompt_requests ||= [];
+    state.session.prompt_requests.push(data);
+    promptRequestsUI(data.id);
   } else if (kind === "evidence") {
     evidenceUI(data);
     trace(data.ok ? "本章观察已验证" : "本章观察未满足", data.label, data, data.ok ? "success" : "error");
@@ -225,7 +230,54 @@ function lessonUI(evidence = []) {
   for (const kind of item.documents) { const a = node("a", "", kind === "translation" ? "阅读精译 ↗" : "阅读源码讲解 ↗"); a.href = `/docs/${item.id}/${kind}`; a.target = "_blank"; a.rel = "noopener"; $("lesson-docs").append(a); }
   $("evidence").replaceChildren(); evidence.forEach(evidenceUI);
   $("prompt").placeholder = item.prompt;
+  const architecture = item.id === "01";
+  $("run-lesson").hidden = architecture;
+  document.querySelector(".workbench").hidden = architecture;
+  $("prompt-inspector").hidden = item.id !== "03";
+  document.querySelector("main").classList.toggle("prompt-mode", item.id === "03");
+  if (architecture) $("lesson-focus").textContent = "本章是架构地图：阅读精译了解入口、Agent、工具与存储之间的关系，无需运行演示。";
+  if (item.id === "03") promptRequestsUI();
 }
+const layerLabels = {stable: ["稳定层 stable", "身份与工具使用指导；按变化频率排在最前。"], context: ["项目上下文层 context", "项目规则、工作区快照和相关平台提示；具体归属取决于装配条件。"], volatile: ["重建时可能变化的层 volatile", "技能索引、记忆、会话时间与运行环境。此层也随整份系统提示词缓存，不会每轮刷新。"]};
+async function loadPrompt(id) {
+  const version = ++state.promptLoad, sid = state.session.id;
+  state.promptSelection = id;
+  try {
+    const data = await (await api(`/api/prompts/${sid}/${id}`)).json();
+    if (version !== state.promptLoad || state.session.id !== sid) return;
+    $("prompt-layers").replaceChildren();
+    for (const layer of data.layers) {
+      const card = node("details", "prompt-layer"); card.open = layer.name === "context";
+      const [title, description] = layerLabels[layer.name];
+      card.append(node("summary", "", title + ` · ${layer.bytes} 字节`), node("p", "", description), node("small", "", "SHA-256 " + layer.sha256.slice(0,16)), node("pre", "", layer.text || "（本次没有此层内容，不插入额外空行）"));
+      $("prompt-layers").append(card);
+    }
+    const temp = node("details", "prompt-layer temporary");
+    temp.append(node("summary", "", "本次临时指导 · 只影响请求副本"), node("pre", "", data.temporary || "（本次没有额外临时指导）"));
+    $("prompt-layers").append(temp);
+    const c = data.comparison;
+    $("prompt-inspector").dataset.request = data.id;
+    $("prompt-comparison").textContent = !data.mapped ? "当前系统消息无法完整对应缓存分层，下面保留实际消息，不猜测分层。" : c
+      ? `与上一次模型请求相比：系统消息${c.system_equal ? "逐字节相同" : "发生变化"}；公共前缀 ${c.system_prefix_bytes} 字节；消息数量 ${c.previous_messages} → ${c.current_messages}。` + Object.entries(c.layers_equal).map(([name,equal]) => `${layerLabels[name][0]}${equal ? "未变" : "变化"}`).join("；") + `；临时指导${c.temporary_equal ? "未变" : "变化"}。`
+      : `这是本会话第一次模型请求。系统消息 ${data.system_fingerprint.bytes} 字节，含 ${data.messages.length} 条消息；继续追问后可逐次比较。`;
+    $("prompt-system").textContent = data.system;
+    $("prompt-raw").textContent = JSON.stringify(data.messages, null, 2);
+    $("prompt-message-list").replaceChildren();
+    data.messages.forEach((m,index) => $("prompt-message-list").append(node("span", "message-role", `${index+1}. ${m.role}${m.tool_calls ? " → 工具调用" : ""}`)));
+    $("prompt-explanation").textContent = data.explanation;
+  } catch (error) { if (version === state.promptLoad) notice(error.message); }
+}
+function promptRequestsUI(selected) {
+  const rows = state.session?.prompt_requests || [], select = $("prompt-request-select");
+  select.replaceChildren();
+  const turns = [...new Set(rows.map(row => row.turn))];
+  for (const row of rows) { const option = node("option", "", `对话 ${turns.indexOf(row.turn)+1} · 模型请求 ${row.iteration} · ${row.model}`); option.value = row.id; select.append(option); }
+  select.disabled = rows.length === 0;
+  if (!rows.length) { ++state.promptLoad; state.promptSelection = null; $("prompt-layers").replaceChildren(); $("prompt-system").textContent = ""; $("prompt-raw").textContent = ""; $("prompt-message-list").replaceChildren(); $("prompt-comparison").textContent = "发送一条消息后查看分层提示词；在同一会话继续追问，对比每次模型请求。"; return; }
+  const id = rows.some(row => row.id === selected) ? selected : rows[rows.length-1].id;
+  select.value = id; loadPrompt(id);
+}
+$("prompt-request-select").addEventListener("change", () => loadPrompt($("prompt-request-select").value));
 $("chapter-select").addEventListener("change", async () => {
   state.chapter = $("chapter-select").value;
   try { await createSession(); } catch (error) { state.chapter = state.session.chapter; lessonUI(state.session.evidence); notice(error.message); }
@@ -267,7 +319,7 @@ $("composer").addEventListener("submit", async (event) => {
     setBusy(false, $("run-status").textContent === "运行中" ? "已结束" : $("run-status").textContent);
     await refresh().catch(error => notice(error.message));
     const updated = state.sessions.find(s => s.id === state.session?.id);
-    if (updated) { state.session = updated; renderMessages(updated); sessionsUI(); }
+    if (updated) { state.session = updated; renderMessages(updated); sessionsUI(); if (updated.chapter === "03") promptRequestsUI(state.promptSelection); }
     $("prompt").focus();
   }
 });

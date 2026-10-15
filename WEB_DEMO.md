@@ -32,9 +32,9 @@ Offline mechanism experiments invoke actual modules with isolated fixtures. The 
 
 | 章节 | 演示重点 | 实际验证范围 |
 |---|---|---|
-| 01、09、12 | 架构、集成边界、代码归属 | 源码入口与文档导览；不代表已实现程序化宿主 API 或后台投递系统 |
+| 01、09、12 | 架构、集成边界、代码归属 | 01 只提供架构阅读，无运行按钮；09/12 为源码文档导览，不代表已实现程序化宿主 API 或后台投递系统 |
 | 02 | Agent 循环 | 列目录、读文件、工具结果回填；也可输入“不存在的文件”观察失败 |
-| 03 | 提示词装配 | 同一 Agent 重复装配的字节稳定性 |
+| 03 | 提示词装配 | 当前对话的实际三层提示词、每次模型请求、完整 messages 与前缀对比；见 [操作说明](WEB_PROMPT_ASSEMBLY.md) |
 | 04 | 工具运行时 | file 工具集与默认工具集的真实暴露差异 |
 | 05、10 | 全量压缩、微压缩 | 消息数量/吸收动作、系统规则、头尾保护与工具配对；摘要为明确标注的固定夹具 |
 | 06 | SQLite 会话 | 写入、关闭重开恢复、FTS 搜索 |
@@ -46,6 +46,8 @@ Offline mechanism experiments invoke actual modules with isolated fixtures. The 
 | 15 | 观察者 | 实际出现的事件类别、同一回合关联 ID；正常运行不一定出现全部七类事件 |
 
 Select a chapter and run its scene. Evidence comes from actual calls, not prerecorded success messages. Chapters without an independent implementation are explicitly presented as source/document guides. Compression summaries are scripted fixtures even in live mode; the real model explains their measured results separately.
+
+第 3 章已改为当前会话的提示词观察；其他章节仍保留先前的机制实验，后续按章调整。
 
 ## Web 输入 DeepSeek API / Configure DeepSeek
 

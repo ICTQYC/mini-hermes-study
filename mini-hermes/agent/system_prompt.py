@@ -338,6 +338,7 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
         return cached
 
     parts = build_system_prompt_parts(agent, system_message=system_message)
+    agent._cached_system_prompt_parts = dict(parts)
     agent._cached_system_prompt_static = parts["stable"]
     prompt = "\n\n".join(
         p for p in (parts["stable"], parts["context"], parts["volatile"]) if p

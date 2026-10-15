@@ -18,7 +18,7 @@ MINI = ROOT / "mini-hermes"
 _ROWS = [
  ("01", "架构总览", "入口、Agent、工具与存储如何连接", "结合本章架构图，解释一条消息经过哪些模块。", "run_agent.py", "guide"),
  ("02", "Agent 循环", "模型决策 → 工具执行 → 结果回填 → 再次请求", "看看演示项目有哪些文件，并读一下 README。", "run_agent.py", "agent"),
- ("03", "提示词装配", "系统提示词分层、缓存字节稳定", "解释本次实验中提示词为何保持不变。", "agent/system_prompt.py", "mechanism"),
+ ("03", "提示词装配", "当前对话的三层提示词、逐次请求与稳定前缀对比", "看看演示项目有哪些文件，并读一下 README。", "agent/system_prompt.py", "agent"),
  ("04", "工具运行时", "注册不等于暴露，toolset 白名单决定可见工具", "解释文件工具集和默认工具集的区别。", "model_tools.py", "mechanism"),
  ("05", "上下文压缩与缓存", "压缩前后、保护头尾、工具配对", "根据压缩实验的实测结果解释压缩过程。", "agent/context_compressor.py", "mechanism"),
  ("06", "会话存储", "逐条落盘、关闭后恢复、FTS 搜索", "解释为何重开数据库还能恢复历史。", "hermes_state.py", "mechanism"),
@@ -75,20 +75,12 @@ def run_experiment(chapter_id, home, emit):
         record("源码入口可定位（静态导览，非运行验证）", [n for n in names if n in required], all(n in names for n in required))
         record("本章配套文档存在", [k for k,p in documents(chapter_id).items() if p], bool(documents(chapter_id)["translation"]))
         return evidence
-    if chapter_id in ("02", "15"):
+    if chapter_id in ("02", "03", "15"):
         # The Web adapter derives these chapters' evidence from the real running agent.
         return evidence
-    if chapter_id == "03":
-        from agent.system_prompt import build_system_prompt
-        from run_agent import AIAgent
-        agent = AIAgent({"provider": "demo", "model": "offline", "api_key": "demo"},
-                        fallback_providers=[], skip_context_files=True, context_cwd=str(home))
-        first = build_system_prompt(agent)
-        second = build_system_prompt(agent)
-        record("同一 Agent 两次装配的字节完全相等", {"first_bytes": len(first.encode()), "second_bytes": len(second.encode())}, first == second)
-        record("提示词不是空串", {"characters": len(first)}, bool(first))
-    elif chapter_id == "04":
+    if chapter_id == "04":
         import model_tools
+        model_tools.discover_builtin_tools()
         file_defs = model_tools.get_tool_definitions(["file"])
         all_defs = model_tools.get_tool_definitions()
         names = [d["function"]["name"] for d in file_defs]

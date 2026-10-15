@@ -28,6 +28,7 @@ from hermes_cli.runtime_provider import resolve_provider
 from hermes_state import SessionDB
 from run_agent import AIAgent, ApiHTTPError
 from hermes_cli import web_lessons
+from hermes_cli.web_prompts import capture_request
 
 ASSETS = Path(__file__).with_name("web_assets")
 MAX_BODY = 32_768
@@ -119,6 +120,13 @@ class WebApp:
         (self.project / "main.py").write_text(
             'def main():\n    print("Hello, agent!")\n\nif __name__ == "__main__":\n    main()\n', encoding="utf-8")
 
+        self.prompt_project = self.root / "prompt-project"
+        self.prompt_project.mkdir()
+        for filename in ("README.md", "main.py"):
+            (self.prompt_project / filename).write_bytes((self.project / filename).read_bytes())
+        (self.prompt_project / "AGENTS.md").write_text(
+            "# Demo project rules\n先阅读 README.md，再根据文件内容回答；不要凭文件名猜测。\n", encoding="utf-8")
+
     def close(self):
         turn = self.active
         try:
@@ -181,13 +189,14 @@ class WebApp:
                 raise WebError("本次运行最多保留 20 个会话，请重启演示服务", 409)
             sid = uuid.uuid4().hex
             session = {"id": sid, "mode": mode, "title": "新会话", "messages": [],
-                       "agent": None, "history": [], "model": None, "chapter": chapter_id, "evidence": []}
+                       "agent": None, "history": [], "model": None, "chapter": chapter_id, "evidence": [], "prompt_requests": []}
             self.sessions[sid] = session
             return self._public(session)
 
     def _public(self, s):
         return {k: s[k] for k in ("id", "mode", "title", "model", "chapter", "evidence")} | {
             "messages": list(s["messages"]),
+            "prompt_requests": [{k: row[k] for k in ("id", "turn", "iteration", "model")} for row in s["prompt_requests"]],
             "running": bool(self.active and self.active.session_id == s["id"])}
 
     def snapshot(self):
@@ -203,6 +212,8 @@ class WebApp:
             session = self.sessions.get(sid)
             if session is None:
                 raise WebError("会话不存在", 404)
+            if session["chapter"] == "01":
+                raise WebError("本章只提供架构导览，无需运行演示")
             if any(key in message for key in self.live_secrets.values()):
                 raise WebError("请在模型设置中填写密钥，不要发送到对话")
             turn = Turn(sid, self.redact)
@@ -242,13 +253,14 @@ class WebApp:
         except ValueError:
             return {"error": raw}
 
-    def _scripted_provider(self, message, turn):
+    def _scripted_provider(self, message, turn, project=None):
         """Scripted decisions; tools and their results still run through the real loop."""
+        project = project or self.project
         failed = "失败" in message or "不存在" in message
         code = "代码" in message or "入口" in message
-        plan = [("read_file", {"path": str(self.project / "missing.txt")})] if failed else [
-            ("list_dir", {"path": str(self.project)}),
-            ("read_file", {"path": str(self.project / ("main.py" if code else "README.md"))})]
+        plan = [("read_file", {"path": str(project / "missing.txt")})] if failed else [
+            ("list_dir", {"path": str(project)}),
+            ("read_file", {"path": str(project / ("main.py" if code else "README.md"))})]
         index = 0
 
         def respond(candidate, messages):
@@ -266,7 +278,7 @@ class WebApp:
                 # Summaries use actual tool content; the scripted provider is labelled in the UI.
                 payload = self._tool_payload(tools[-1]) if tools else {"error": "没有工具结果"}
                 if payload.get("error"):
-                    result = str(payload["error"]).replace(str(self.project), "sample-project")
+                    result = str(payload["error"]).replace(str(project), "sample-project")
                     text = "工具返回了文件不存在的错误：\n" + result + "\n\nAgent 已收到这个结果，并正常结束本轮。"
                 else:
                     lines = payload.get("content", "").splitlines()
@@ -321,13 +333,17 @@ class WebApp:
                           duration_ms=round((time.perf_counter()-started)*1000))
                 return
             if offline:
-                home = self.root / "offline-home"
+                home = self.root / ("prompt-home" if session["chapter"] == "03" else "offline-home")
+                if session["chapter"] == "03":
+                    home.mkdir(exist_ok=True)
+                    for name, text in (("SOUL.md", "你是演示用的 mini-hermes 助手。回答以工具读取的内容为依据。"), ("MEMORY.md", "演示记忆：这个项目的入口是 main.py。")):
+                        if not (home / name).exists(): (home / name).write_text(text, encoding="utf-8")
                 home_token = set_mini_home_override(home)
                 secret_token = set_secret_scope({})
                 spec = {"provider": "demo", "model": "scripted-offline", "api_key": "demo",
                         "base_url": "http://offline.invalid", "api_mode": "chat_completions",
                         "context_length": 32000}
-                workspace = self.project
+                workspace = self.prompt_project if session["chapter"] == "03" else self.project
             else:
                 if self.live_secrets:
                     secret_token = set_secret_scope(dict(self.live_secrets))
@@ -355,12 +371,14 @@ class WebApp:
                     spec, session_id=session["id"], max_turns=self.max_turns,
                     fallback_providers=[],
                     thinking={"type": "disabled"} if spec["provider"] == "deepseek" else None,
-                    context_cwd=str(workspace), skip_context_files=offline)
+                    context_cwd=str(workspace), skip_context_files=offline and session["chapter"] != "03")
             agent = session["agent"]
             agent.ephemeral_system_prompt = (
                 "当前演示章节：" + lesson["title"] + "。重点：" + lesson["focus"] +
                 "。请围绕本章解释，不要把夹具验证描述为生产能力。夹具摘要为固定生成，不代表真实模型压缩。实测证据：" +
                 json.dumps(evidence, ensure_ascii=False))
+            if session["chapter"] == "03":
+                agent.ephemeral_system_prompt = "请根据当前用户问题完成任务；文件内容以实际工具读取为准。提示词由页面从请求中展示，不要编造分层内容或缓存命中。"
             turn.agent = agent
             # A new connection per worker avoids sharing SQLite connections between threads.
             agent.session_db = db
@@ -373,19 +391,29 @@ class WebApp:
                 observer.add(name, lambda **payload: turn.emit("trace", **payload))
             agent._observers = observer
             if offline:
-                agent._http_post = self._scripted_provider(message, turn)
+                agent._http_post = self._scripted_provider(message, turn, workspace)
             else:
                 # Bind only once per cached agent; sanitize before the core logs/persists responses.
                 transport = getattr(agent, "_web_transport", agent._http_post)
                 agent._web_transport = transport
-                def sanitized_request(candidate, messages):
+                def sanitized_request(candidate, messages, _transport=transport):
                     try:
-                        return turn.redact(transport(candidate, messages))
+                        return turn.redact(_transport(candidate, messages))
                     except ApiHTTPError as exc:
                         raise ApiHTTPError(exc.code, turn.redact(exc.body), turn.redact(exc.url)) from None
                     except Exception as exc:
                         raise RuntimeError(turn.redact(str(exc))) from None
                 agent._http_post = sanitized_request
+            if session["chapter"] == "03":
+                transport = agent._http_post
+                def inspected_request(candidate, messages):
+                    # Capture the already assembled request copy, before any provider call.
+                    snapshot = capture_request(agent, candidate, messages, session["prompt_requests"], turn.redact)
+                    with self.lock:
+                        session["prompt_requests"].append(snapshot)
+                    turn.emit("prompt_request", **{k: snapshot[k] for k in ("id", "turn", "iteration", "model")})
+                    return transport(candidate, messages)
+                agent._http_post = inspected_request
             with self.lock:
                 session["model"] = agent.model
             turn.emit("started", session_id=session["id"], model=agent.model,
@@ -398,7 +426,7 @@ class WebApp:
                 turn.emit("status", text="本轮已停止")
                 return
             result = agent.run_conversation(message, conversation_history=session["history"])
-            if lesson["kind"] == "agent":
+            if lesson["kind"] == "agent" and session["chapter"] != "03":
                 if session["chapter"] == "02":
                     calls = [d for d in turn.traces if d["event"] == "pre_tool_call"]
                     returns = [d for d in turn.traces if d["event"] == "post_tool_call"]
@@ -468,8 +496,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(size))
         self.end_headers()
 
-    def _json(self, status, data):
-        raw = json.dumps(hook_jsonable(data), ensure_ascii=False).encode()
+    def _json(self, status, data, exact=False):
+        raw = json.dumps(data if exact else hook_jsonable(data), ensure_ascii=False).encode()
         self._headers(status, "application/json; charset=utf-8", len(raw))
         self.wfile.write(raw)
 
@@ -490,6 +518,15 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"token": self.server.app.token,
                                        "sessions": self.server.app.snapshot(),
                                        "chapters": web_lessons.catalog(), "model_config": self.server.app.model_config()})
+            if path.startswith("/api/prompts/"):
+                parts = path.split("/")
+                app = self.server.app
+                with app.lock:
+                    session = app.sessions.get(parts[3]) if len(parts) == 5 else None
+                    snapshot = next((row for row in session["prompt_requests"] if row["id"] == parts[4]), None) if session else None
+                if snapshot is None:
+                    raise WebError("提示词请求不存在", 404)
+                return self._json(200, snapshot, exact=True)
             if path.startswith("/docs/"):
                 parts = path.split("/")
                 try:
