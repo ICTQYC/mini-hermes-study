@@ -1768,3 +1768,7 @@ tests/test_compression.py   955 行 / 152 条 / 9 组
 `_MIN_CTX_TRIGGER_RATIO = 0.85`、`_SUMMARY_FAILURE_COOLDOWN_SECONDS = 600` ——
 而它们恰恰是"为什么压不动 / 什么时候该跳过 / 什么时候放弃"的答案
 （`agent/context_compressor.py:960-992`、`:2332`）。
+
+### 后续维护：可操作的章节演示
+
+Web 压缩章提供可操作的隔离长对话，允许调整窗口和保护头尾，调用真实阈值/压缩逻辑，展示原消息去向、摘要输入及新上下文；摘要固定离线生成并明确标注。 操作与验证边界见 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。

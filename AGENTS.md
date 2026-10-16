@@ -102,7 +102,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | `agent/skill_utils.py` · `tools/skills.py` | `tests/test_skills.py` |
 | `agent/context_engine.py` · `agent/engine_registry.py` | `tests/test_context_engine.py` |
 | `agent/observer.py` | `tests/test_observers.py` |
-| `hermes_cli/web.py` · `hermes_cli/web_lessons.py` · `hermes_cli/web_prompts.py` · `hermes_cli/web_assets/`（本地演示页面） | `tests/test_web.py` + `tests/test_web_lessons.py`（+ `test_packaging.py`） |
+| `hermes_cli/web.py` · `hermes_cli/web_lessons.py` · `hermes_cli/web_prompts.py` · `hermes_cli/web_labs.py` · `hermes_cli/web_assets/`（本地演示页面） | `tests/test_web.py` + `tests/test_web_lessons.py` + `tests/test_web_chapters.py`（+ `test_packaging.py`） |
 | **新增/删除模块** · 动依赖 · 改模块白名单 | `tests/test_packaging.py`（**永远跑**：它是"发布前自检"） |
 
 三条从归属图带出来的约定，在 mini 里的对应物：

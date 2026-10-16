@@ -51,9 +51,9 @@ def test_chapter_http():
             session=json.loads(request(server,'/api/sessions',{'chapter':chapter})[2])
             stream=events(request(server,'/api/turn',{'session_id':session['id'],'message':'运行本章'})[2])
             evidence=[d for k,d in stream if k=='evidence']
-            check(chapter+' HTTP 回合产生本章证据', bool(evidence) and all(d['ok'] for d in evidence), stream)
+            check(chapter+' HTTP 回合产生本章证据', bool(app.sessions[session['id']]['storage']) if chapter=='06' else bool(evidence) and all(d['ok'] for d in evidence), stream)
             check(chapter+' 完成后保留证据供切换查看', app.sessions[session['id']]['evidence']==evidence)
-            if chapter != '15':
+            if chapter not in ('06','15'):
                 check(chapter+' 机制实验不伪造模型事件或用量', not any(k=='trace' for k,_ in stream) and any(k=='result' and d['iterations']==0 and d['usage'] is None for k,d in stream))
         check("夹具临时目录逐回合清理", not list(app.root.glob('lesson-*')))
 

@@ -29,7 +29,7 @@ This repository contains **17 Chinese translation chapters**, **16 source walkth
 
 ## Web demo
 
-Run `./mini-hermes/mini --web` and open `http://127.0.0.1:8765`. Select a chapter to run a focused mechanism experiment and inspect measured evidence. Agent-loop chapters use scripted decisions with real tools offline. Enter a DeepSeek API key in Model settings (server memory only), then switch to live mode; existing backend configuration is also supported. No frontend build or third-party packages are needed. See the [Web demo guide](WEB_DEMO.md). Chapter 03 now shows the actual prompt tiers and each request in the current conversation: [Prompt assembly demo](WEB_PROMPT_ASSEMBLY.md).
+Run `./mini-hermes/mini --web` and open `http://127.0.0.1:8765`. Select a chapter to run a focused mechanism experiment and inspect measured evidence. Agent-loop chapters use scripted decisions with real tools offline. Enter a DeepSeek API key in Model settings (server memory only), then switch to live mode; existing backend configuration is also supported. No frontend build or third-party packages are needed. See the [Web demo guide](WEB_DEMO.md). Chapter 03 now shows the actual prompt tiers and each request in the current conversation: [Prompt assembly demo](WEB_PROMPT_ASSEMBLY.md). [Chapter demo guide](WEB_CHAPTER_DEMOS.md).
 
 ![mini-hermes local Web demo](docs/assets/web-chapters.png)
 
@@ -85,7 +85,7 @@ for f in tests/test_*.py; do
 done
 ```
 
-Verified results across 17 test files: **1,854 passing assertions on Python 3.13.14** and **1,850 on Python 3.9.6**, with zero failures. The four-assertion difference comes from a physical FTS corruption branch that the tested Python 3.9 SQLite build prevents from being created.
+Verified results across 18 test files: **1,910 passing assertions on Python 3.13.14** and **1,906 on Python 3.9.6**, with zero failures. The four-assertion difference comes from a physical FTS corruption branch that the tested Python 3.9 SQLite build prevents from being created.
 
 Both versions also passed with `python3 -S`, disabling site-packages, in an isolated HOME without credentials. These are recorded validation results, not a guarantee for every OS or SQLite build. See the [verification record](发布前修复记录.md).
 

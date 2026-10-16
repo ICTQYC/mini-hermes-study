@@ -30,24 +30,9 @@ Offline mechanism experiments invoke actual modules with isolated fixtures. The 
 
 选择章节 → 点击“运行本章演示” → 查看绿色/红色实测证据 → 展开详情与轨迹。切换章节会新建会话，旧会话保留本章证据；“阅读精译 / 源码讲解”可打开仓内完整 Markdown 原文。
 
-| 章节 | 演示重点 | 实际验证范围 |
-|---|---|---|
-| 01、09、12 | 架构、集成边界、代码归属 | 01 只提供架构阅读，无运行按钮；09/12 为源码文档导览，不代表已实现程序化宿主 API 或后台投递系统 |
-| 02 | Agent 循环 | 列目录、读文件、工具结果回填；也可输入“不存在的文件”观察失败 |
-| 03 | 提示词装配 | 当前对话的实际三层提示词、每次模型请求、完整 messages 与前缀对比；见 [操作说明](WEB_PROMPT_ASSEMBLY.md) |
-| 04 | 工具运行时 | file 工具集与默认工具集的真实暴露差异 |
-| 05、10 | 全量压缩、微压缩 | 消息数量/吸收动作、系统规则、头尾保护与工具配对；摘要为明确标注的固定夹具 |
-| 06 | SQLite 会话 | 写入、关闭重开恢复、FTS 搜索 |
-| 07、07b、07c | 网关与 profile | 路由复用/重置、FIFO 与最新单槽、同名会话的数据库/凭据作用域隔离；不连接外部聊天平台 |
-| 08 | Provider | 别名归一、HTTP 状态回退判据；不伪造外部服务故障 |
-| 11 | 状态恢复 | 在生成的数据库中设置 FTS 降级标记，再显式备份修复、体检；不物理损坏文件 |
-| 13 | 技能 | 索引只载描述，显式读取后得到正文 |
-| 14 | 引擎插槽 | 默认引擎选择、未知引擎警告回落 |
-| 15 | 观察者 | 实际出现的事件类别、同一回合关联 ID；正常运行不一定出现全部七类事件 |
+当前提供 **5 个当前对话查看器**（循环、提示词、存储、技能、观察者）与 **6 个可操作实验**（工具、压缩、Provider、微压缩、状态恢复、引擎）。其余章节只保留文档导览，不伪造运行过程。逐章操作与边界见 [详细演示指南](WEB_CHAPTER_DEMOS.md)。
 
-Select a chapter and run its scene. Evidence comes from actual calls, not prerecorded success messages. Chapters without an independent implementation are explicitly presented as source/document guides. Compression summaries are scripted fixtures even in live mode; the real model explains their measured results separately.
-
-第 3 章已改为当前会话的提示词观察；其他章节仍保留先前的机制实验，后续按章调整。
+对话页可回看每次实际请求与响应、工具回填、数据库记录或观察者事件；实验页可修改参数、连续操作，逐步检查实际输入和输出。实验使用独立临时目录；摘要和故障响应明确标为离线夹具，不调用外部模型。真实模式提问时会附带本次实验的实测片段。
 
 ## Web 输入 DeepSeek API / Configure DeepSeek
 
@@ -91,13 +76,13 @@ SSE（Server-Sent Events，服务器发送事件）让服务端持续推送执�
 
 静态文件与章节文档采用固定白名单路由；POST 请求校验本机 Host、Origin 与页面令牌，拒绝跨站请求；界面以纯文本渲染用户及工具内容。此服务用于本机演示，不是公网多人服务。
 
-`hermes_cli/web.py` 拥有 Web 生命周期、凭据作用域与回合适配；`hermes_cli/web_lessons.py` 拥有章节目录和隔离实验，`hermes_cli/web_assets/` 保存静态页面。复用观察者接口；Agent 传输层新增可选 `thinking` 参数，默认不发送，主循环不变。SQLite 连接在各工作线程内创建和关闭。
+`hermes_cli/web.py` 拥有 Web 生命周期、凭据作用域与回合适配；`hermes_cli/web_lessons.py` 拥有章节目录，`hermes_cli/web_labs.py` 拥有可操作隔离实验，`hermes_cli/web_assets/` 保存静态页面。复用观察者接口；Agent 传输层新增可选 `thinking` 参数，默认不发送，主循环不变。SQLite 连接在各工作线程内创建和关闭。
 
 The session list is in memory and resets when the server restarts. Live messages persist in a separate Web database, but this version does not expose restart recovery. One turn runs at a time. The UI streams execution events, not model tokens. This is a local demonstration service.
 
 ## 验证 / Validation
 
-运行 `python3 mini-hermes/tests/test_web.py` 与 `python3 mini-hermes/tests/test_web_lessons.py`：覆盖 SSE、真实离线工具、会话与存储隔离、跨站拒绝、审批、中断、断开清理和真实模式的假 provider 验证。新增测试覆盖全部章节夹具、HTTP 证据、文档白名单、密钥内存生命周期、响应与错误脱敏、官方端点和实际请求体参数。测试不读取本机凭据、不调用外部模型。模块位于已有 `hermes_cli` 根白名单内，发布自检会自动覆盖。
+运行 `python3 mini-hermes/tests/test_web.py` 与 `python3 mini-hermes/tests/test_web_lessons.py` 与 `python3 mini-hermes/tests/test_web_chapters.py`：覆盖 SSE、真实离线工具、会话与存储隔离、跨站拒绝、审批、中断、断开清理和真实模式的假 provider 验证。新增测试覆盖全部章节夹具、HTTP 证据、文档白名单、密钥内存生命周期、响应与错误脱敏、官方端点和实际请求体参数。测试不读取本机凭据、不调用外部模型。模块位于已有 `hermes_cli` 根白名单内，发布自检会自动覆盖。
 
 浏览器验收覆盖桌面与 390px 手机断点、发送与停止、失败结果、会话切换，以及 HTML 注入文本的安全呈现；无横向溢出，浏览器未报告脚本错误。章节页与模型设置也以假密钥验证保存、重开不回显及清除；真实外部 DeepSeek 本轮未调用。页面截图见下方。
 

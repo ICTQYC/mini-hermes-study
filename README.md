@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-**一句话**：逐章精读 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 官方 Developer Guide 的选定章节，并把对应机制在一个零依赖的迷你版实现里手写一遍 —— 目前 **17 篇中文精译 + 16 篇源码讲解 + 一个约 1.9 万行的迷你 agent**。
+**一句话**：逐章精读 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 官方 Developer Guide 的选定章节，并把对应机制在一个零依赖的迷你版实现里手写一遍 —— 目前 **17 篇中文精译 + 16 篇源码讲解 + 一个约 2 万行的迷你 agent**。
 
 一个从零手写的、真正能跑的 agent，目的是搞懂 Hermes 怎么实现的。**抄的是架构决策，不是代码量。**
 
@@ -32,7 +32,7 @@
 ## 演示页面
 
 运行 `./mini-hermes/mini --web`，打开 `http://127.0.0.1:8765`，即可体验无需密钥的离线演示。
-选择章节可运行本章重点实验、查看实测证据和配套 Markdown；页面实时展示对话与调用轨迹。“模型设置”支持输入 DeepSeek API Key（仅服务内存），切换真实模型运行。详见 [Web 演示说明](WEB_DEMO.md)。 第 3 章已支持查看当前对话的真实提示词分层与每次请求：[演示操作说明](WEB_PROMPT_ASSEMBLY.md)。
+选择章节可运行本章重点实验、查看实测证据和配套 Markdown；页面实时展示对话与调用轨迹。“模型设置”支持输入 DeepSeek API Key（仅服务内存），切换真实模型运行。详见 [Web 演示说明](WEB_DEMO.md)。 第 3 章已支持查看当前对话的真实提示词分层与每次请求：[演示操作说明](WEB_PROMPT_ASSEMBLY.md)。 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。
 
 ![mini-hermes 本地演示页面](docs/assets/web-chapters.png)
 
@@ -43,7 +43,7 @@
 ### 开箱即用清单
 
 **clone 下来直接就能跑的**：`./mini-hermes/mini --list-toolsets`、`./mini-hermes/mini --doctor`（**不需要密钥**）；
-测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,854 / 1,850 · 0 失败**。
+测试套件也不需要密钥（自带假密钥与假 provider）—— 在**干净 HOME 的克隆**里实测 **1,910 / 1,906 · 0 失败**。
 
 **要自己准备的三样**（前两样按需）：
 
@@ -108,7 +108,7 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 ```
 
-用两个解释器各跑一遍，期望 **1,854 通过 / 0 失败**（3.13.14）与 **1,850 通过 / 0 失败**（3.9.6），共 **17 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
+用两个解释器各跑一遍，期望 **1,910 通过 / 0 失败**（3.13.14）与 **1,906 通过 / 0 失败**（3.9.6），共 **18 个测试文件**。差额 4 条是因为 3.9 的 SQLite 拒 `DROP messages_fts_data`，那条真损坏分支造不出来。
 
 跑之前先清 `__pycache__`：`.pyc` 的失效判据是 `(mtime, size)`，**两块长度相同的代码对调**会被判成新鲜缓存，实际跑的是旧字节码。
 
@@ -121,12 +121,12 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 板块 | 篇数 / 规模 |
 |---|---|
 | 中文精译（每章一篇，翻译为主，目标看懂原理） | **17 篇** · 11,599 行 |
-| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 18,988 行 |
+| 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 19,028 行 |
 | 跟读文档（消息旅程 / 代码解读 / 测试怎么写） | 3 份 · 2,073 行 |
 | 收尾总览（46 篇图谱 / 差距总账 / 冻结清单 —— 全库的账） | 1 篇 · 466 行 |
-| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 164 行 |
-| `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 19,456 行 · 79 个文件 |
-| `mini-hermes/tests/`（17 个测试文件） | 12,771 行 |
+| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 172 行 |
+| `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 19,768 行 · 79 个文件 |
+| `mini-hermes/tests/`（18 个测试文件） | 12,942 行 |
 | `mini-hermes/demos/`（故障复现 + 真跑脚本） | 1,794 行 · 10 个 |
 
 **17 章清单**（精译 / 源码讲解行数为实测）：
@@ -134,22 +134,22 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 章 | 主题 | 精译 | 源码讲解 |
 |---|---|---|---|
 | 01 | Architecture（架构总览：地图章，无源码讲解） | [473](中文精译-01-Architecture.md) | — |
-| 02 | Agent Loop（回合循环） | [1214](中文精译-02-AgentLoop.md) | [559](源码讲解-02-AgentLoop.md) |
+| 02 | Agent Loop（回合循环） | [1214](中文精译-02-AgentLoop.md) | [563](源码讲解-02-AgentLoop.md) |
 | 03 | Prompt Assembly（提示词装配） | [2202](中文精译-03-PromptAssembly.md) | [973](源码讲解-03-PromptAssembly.md) |
-| 04 | Tools Runtime（工具运行时） | [934](中文精译-04-ToolsRuntime.md) | [2848](源码讲解-04-ToolsRuntime.md) |
-| 05 | Context Compression & Caching（压缩与缓存） | [931](中文精译-05-ContextCompressionAndCaching.md) | [1770](源码讲解-05-ContextCompressionAndCaching.md) |
-| 06 | Session Storage（会话存储） | [812](中文精译-06-SessionStorage.md) | [1055](源码讲解-06-SessionStorage.md) |
+| 04 | Tools Runtime（工具运行时） | [934](中文精译-04-ToolsRuntime.md) | [2852](源码讲解-04-ToolsRuntime.md) |
+| 05 | Context Compression & Caching（压缩与缓存） | [931](中文精译-05-ContextCompressionAndCaching.md) | [1774](源码讲解-05-ContextCompressionAndCaching.md) |
+| 06 | Session Storage（会话存储） | [812](中文精译-06-SessionStorage.md) | [1059](源码讲解-06-SessionStorage.md) |
 | 07 | Gateway Internals（网关内部） | [638](中文精译-07-GatewayInternals.md) | [937](源码讲解-07-GatewayInternals.md) |
 | 07b · 扩展 7.1 | Gateway Session Lifecycle（网关会话生命周期） | [903](中文精译-07b-GatewaySessionLifecycle.md) | [1376](源码讲解-07b-GatewaySessionLifecycle.md) |
 | 07c · 扩展 7.2 | Multiplexing Gateway（多路复用网关） | [472](中文精译-07c-MultiplexingGateway.md) | [1292](源码讲解-07c-MultiplexingGateway.md) |
-| 08 | Provider Runtime（服务商运行时） | [366](中文精译-08-ProviderRuntime.md) | [986](源码讲解-08-ProviderRuntime.md) |
+| 08 | Provider Runtime（服务商运行时） | [366](中文精译-08-ProviderRuntime.md) | [990](源码讲解-08-ProviderRuntime.md) |
 | 09 | Programmatic Integration（程序化集成） | [284](中文精译-09-ProgrammaticIntegration.md) | [788](源码讲解-09-ProgrammaticIntegration.md) |
-| 10 | Micro Compaction（微压缩） | [362](中文精译-10-MicroCompaction.md) | [847](源码讲解-10-MicroCompaction.md) |
-| 11 | State DB Recovery（state.db 抢修） | [172](中文精译-11-StateDbRecovery.md) | [977](源码讲解-11-StateDbRecovery.md) |
+| 10 | Micro Compaction（微压缩） | [362](中文精译-10-MicroCompaction.md) | [851](源码讲解-10-MicroCompaction.md) |
+| 11 | State DB Recovery（state.db 抢修） | [172](中文精译-11-StateDbRecovery.md) | [981](源码讲解-11-StateDbRecovery.md) |
 | 12 | Codebase Ownership & Completion Backlog（归属与投递债） | [204](中文精译-12-CodebaseOwnershipAndCompletionBacklog.md) | [838](源码讲解-12-CodebaseOwnershipAndCompletionBacklog.md) |
-| 13 | Creating Skills（技能系统） | [684](中文精译-13-CreatingSkills.md) | [1176](源码讲解-13-CreatingSkills.md) |
-| 14 | Context Engine Plugin（上下文引擎插槽） | [420](中文精译-14-ContextEnginePlugin.md) | [1349](源码讲解-14-ContextEnginePlugin.md) |
-| 15 | Observer Hooks（观察者钩子） | [528](中文精译-15-ObserverHooks.md) | [1217](源码讲解-15-ObserverHooks.md) |
+| 13 | Creating Skills（技能系统） | [684](中文精译-13-CreatingSkills.md) | [1180](源码讲解-13-CreatingSkills.md) |
+| 14 | Context Engine Plugin（上下文引擎插槽） | [420](中文精译-14-ContextEnginePlugin.md) | [1353](源码讲解-14-ContextEnginePlugin.md) |
+| 15 | Observer Hooks（观察者钩子） | [528](中文精译-15-ObserverHooks.md) | [1221](源码讲解-15-ObserverHooks.md) |
 
 **三份跟读文档**（仓库根）：《Hermes消息完整旅程.md》（580 行，横切：一条消息穿过所有模块）·《代码解读-mini-hermes.md》（1,078 行，逐文件走读迷你版，历史正文锚 `db6229c` 提交（章节标签曾后移））·《测试怎么写.md》（415 行，测试的写法与反例）。第 1 章《中文精译-01-Architecture.md》（473 行）是纵切地图，排在上面章清单里，建议先读它。
 

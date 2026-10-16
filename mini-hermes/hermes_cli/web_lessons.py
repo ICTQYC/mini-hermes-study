@@ -21,7 +21,7 @@ _ROWS = [
  ("03", "提示词装配", "当前对话的三层提示词、逐次请求与稳定前缀对比", "看看演示项目有哪些文件，并读一下 README。", "agent/system_prompt.py", "agent"),
  ("04", "工具运行时", "注册不等于暴露，toolset 白名单决定可见工具", "解释文件工具集和默认工具集的区别。", "model_tools.py", "mechanism"),
  ("05", "上下文压缩与缓存", "压缩前后、保护头尾、工具配对", "根据压缩实验的实测结果解释压缩过程。", "agent/context_compressor.py", "mechanism"),
- ("06", "会话存储", "逐条落盘、关闭后恢复、FTS 搜索", "解释为何重开数据库还能恢复历史。", "hermes_state.py", "mechanism"),
+ ("06", "会话存储", "逐条落盘、关闭后恢复、FTS 搜索", "看看演示项目有哪些文件，并读一下 README。", "hermes_state.py", "agent"),
  ("07", "网关入口", "消息先进入会话路由；相同来源复用会话", "解释网关消息为什么先确定会话归属。", "gateway/session_state.py", "mechanism"),
  ("07b", "会话生命周期", "复用与显式重置，两层队列的先后顺序", "解释显式排队和普通消息覆盖的区别。", "gateway/run_busy.py", "mechanism"),
  ("07c", "多 profile 网关", "按 home 隔离数据库与凭据作用域", "解释为什么两个 profile 不能共用凭据。", "agent/secret_scope.py", "mechanism"),
@@ -30,7 +30,7 @@ _ROWS = [
  ("10", "微压缩", "每次吸收有限交换，摘要标记仍保留工具配对", "解释微压缩与全量压缩各自何时工作。", "agent/micro_compaction.py", "mechanism"),
  ("11", "状态库恢复", "只读探测 → 显式备份修复 → 再检查", "解释 FTS 派生索引恢复为什么不等于修复坏文件。", "hermes_state_repair.py", "mechanism"),
  ("12", "代码归属与投递债", "按子系统找实现和测试；未实现的投递系统不伪装成已实现", "解释本项目的代码归属规则和未实现边界。", "hermes_cli/web.py", "guide"),
- ("13", "技能系统", "先发现描述索引，再按需读取正文", "解释技能索引为何不直接加载全部正文。", "agent/skill_utils.py", "mechanism"),
+ ("13", "技能系统", "先发现描述索引，再按需读取正文", "先用 skill_view 读取技能，再读取示例代码。", "agent/skill_utils.py", "agent"),
  ("14", "上下文引擎插槽", "默认引擎选择与未知引擎的有声回落", "根据引擎选择结果解释可替换插槽。", "agent/engine_registry.py", "mechanism"),
  ("15", "只读观察者", "实跑观察事件类别与同一回合的关联 ID", "读取示例代码，解释入口函数。", "agent/observer.py", "agent"),
 ]
@@ -49,8 +49,12 @@ def documents(chapter_id):
             for kind, prefix in (("translation", "中文精译"), ("walkthrough", "源码讲解"))}
 
 
+CONVERSATION_CHAPTERS = frozenset({"02", "03", "06", "13", "15"})
+GUIDE_CHAPTERS = frozenset({"01", "07", "07b", "07c", "09", "12"})
+
+
 def catalog():
-    return [{**row, "documents": [kind for kind, p in documents(row["id"]).items() if p]}
+    return [{**row, "presentation": "conversation" if row["id"] in CONVERSATION_CHAPTERS else "guide" if row["id"] in GUIDE_CHAPTERS else "lab", "documents": [kind for kind, p in documents(row["id"]).items() if p]}
             for row in CATALOG.values()]
 
 
@@ -75,7 +79,7 @@ def run_experiment(chapter_id, home, emit):
         record("源码入口可定位（静态导览，非运行验证）", [n for n in names if n in required], all(n in names for n in required))
         record("本章配套文档存在", [k for k,p in documents(chapter_id).items() if p], bool(documents(chapter_id)["translation"]))
         return evidence
-    if chapter_id in ("02", "03", "15"):
+    if chapter_id in ("02", "03", "06", "13", "15"):
         # The Web adapter derives these chapters' evidence from the real running agent.
         return evidence
     if chapter_id == "04":

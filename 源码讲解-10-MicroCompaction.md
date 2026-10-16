@@ -845,3 +845,7 @@ def _micro_compact_after_turn(agent, messages, final_response, logger) -> None:
 5. **§4「Staying in step with the session database」把 `archive_and_compact` 说成「软归档 active 行」，但微压缩实际走的是 `tail_count=len-1` 的部分归档。** 文档原文：*"each pass also calls `archive_and_compact`, which atomically soft-archives the active rows and inserts the compacted set."* 源码里微压缩传的是 `tail_count=max(0, len-1)`（`micro_compaction.py:352`），而 `archive_and_compact` 对该尾部原文行打的是 **rewind 旗 `active=0, compacted=0`**（`hermes_state_messages.py:613-617` + 函数 docstring :573-576），**不是**「软归档」的 `compacted=1`（那个状态「仍可搜」，rewind 旗是「被取代的重复」）。→ 结论「不双载」没错，但「soft-archives the active rows」对**携带尾部的原文行**不成立，文档省略了 `tail_count` 这一层。
 
 **未发现**：其余文档断言（默认值、`every_n` 夹取、三次失败跳过、`occupancy_pct` 定义、报告脚本字段、`finalize_turn` 包异常等）与锚点源码**逐条对得上**；另有几处为**示意 / 无法离线核**（§8 的 MLX「~31s」实测、§9 那张真实会话表的原始日志），本轮**不凑数**，标为不可核。
+
+### 后续维护：可操作的章节演示
+
+Web 微压缩章可以连续吸收交换，并展示每一步的滚动摘要、输入输出和实际 action；即使消息条数不变，也按 _micro_last_action 显示实际吸收。摘要仍是离线夹具。 操作与验证边界见 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。

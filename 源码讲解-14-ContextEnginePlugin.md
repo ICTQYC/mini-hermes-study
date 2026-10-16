@@ -1347,3 +1347,7 @@ messages[:] = c.compress(messages, **optional)
 
 - **说明**：`hermes_cli/plugins.py` 的**文件总行数**是 **2147**（本轮 `git show f5d1926110:hermes_cli/plugins.py | wc -l` 实测），它**不是**注册入口的行号。入口真身是 `hermes_cli/plugins.py:702-721` —— `:702` 逐字 `def register_context_engine(self, engine) -> Optional[PluginRegistration]:`（被 `:701` 的 `@_serialized_replacement` 装饰），`:705-708` 拒绝第二次注册并逐字警告 `"Plugin '%s' tried to register a context engine, but one is already registered. Only one context engine plugin is allowed."`，`:714` 逐字 `self._manager._context_engine = engine`，`:715-719` 登记可回滚句柄。单槽位初始化在 `:1146`（逐字 `self._context_engine = None  # Set by a plugin via register_context_engine()`），getter 在 `:1995-1997`。
 - **影响**：把文件总行数当方法行号会指到文件末尾的无关代码。同理，`hermes_cli/plugins_cmd.py`（**2213** 行）里的引擎相关代码在 `:1487-1521`，不是 2213。
+
+### 后续维护：可操作的章节演示
+
+Web 引擎章在生成目录里创建固定示例插件，以同一份输入比较内置、插件、未知名的真实选择与输出；未知名的回落警告可见，不加载使用者的插件。 操作与验证边界见 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。

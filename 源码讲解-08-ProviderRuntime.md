@@ -984,3 +984,7 @@ def _rebind_fallback_credential_pool(agent, fb_provider: str, fb_model: str) -> 
 ### 后续维护：Web 的显式 DeepSeek 连接
 
 Web 模型设置是现有凭据解析的一个内存入口：通过 `set_secret_scope` → `get_secret` → `resolve_provider` 复用连接层，并显式固定官方端点，不修改进程环境或 `.env`。真实 Web 回合禁用自动回退，防止演示时切到另一个服务商；DeepSeek 请求显式关闭思考模式，所需可选 `thinking` 参数在 Agent 传输层装配。CLI 默认请求不增加该字段。完整用法与边界见 [Web 演示说明](WEB_DEMO.md)。
+
+### 后续维护：可操作的章节演示
+
+Web Provider 章以固定传输注入 400/429/503，真实运行 Agent 的回退状态机，展示请求尝试、独立 api_request_id 和实际结局，不向真实服务注入错误。 操作与验证边界见 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。

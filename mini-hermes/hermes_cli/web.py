@@ -29,6 +29,7 @@ from hermes_state import SessionDB
 from run_agent import AIAgent, ApiHTTPError
 from hermes_cli import web_lessons
 from hermes_cli.web_prompts import capture_request
+from hermes_cli import web_labs
 
 ASSETS = Path(__file__).with_name("web_assets")
 MAX_BODY = 32_768
@@ -189,7 +190,7 @@ class WebApp:
                 raise WebError("本次运行最多保留 20 个会话，请重启演示服务", 409)
             sid = uuid.uuid4().hex
             session = {"id": sid, "mode": mode, "title": "新会话", "messages": [],
-                       "agent": None, "history": [], "model": None, "chapter": chapter_id, "evidence": [], "prompt_requests": []}
+                       "agent": None, "history": [], "model": None, "chapter": chapter_id, "evidence": [], "prompt_requests": [], "trace_log": [], "dropped_events": 0, "storage": None, "lab": None, "lab_state": {}, "observer_fault": False, "observer_faults": 0}
             self.sessions[sid] = session
             return self._public(session)
 
@@ -203,6 +204,64 @@ class WebApp:
         with self.lock:
             return [self._public(s) for s in self.sessions.values()]
 
+    def chapter_detail(self, sid):
+        session = self.sessions.get(sid)
+        if session is None:
+            raise WebError("会话不存在", 404)
+        return self.redact({"chapter": session["chapter"], "events": list(session["trace_log"]),
+            "dropped_events": session["dropped_events"], "storage": session["storage"], "lab": session["lab"],
+            "observer_fault": session["observer_fault"], "observer_faults": session["observer_faults"]})
+
+    @staticmethod
+    def _storage_snapshot(db, session):
+        return {"session_id": session["id"], "metadata": db.get_session(session["id"]),
+                "rows": db.get_messages(session["id"], include_inactive=True, include_compacted=True),
+                "restored": db.get_messages_as_conversation(session["id"])}
+
+    def chapter_action(self, data):
+        sid = data.get("session_id")
+        if not isinstance(sid, str): raise WebError("无效会话 ID")
+        if any(key in json.dumps(data, ensure_ascii=False) for key in self.live_secrets.values()):
+            raise WebError("请不要把密钥输入实验参数")
+        with self.lock:
+            if self.active: raise WebError("请等待当前回合结束或先停止", 409)
+            session = self.sessions.get(sid)
+            if session is None: raise WebError("会话不存在", 404)
+            action = data.get("action")
+            if session["chapter"] in web_labs.LABS:
+                home = self.root / "labs" / sid
+                ht = set_mini_home_override(home); st = set_secret_scope({})
+                try:
+                    session["lab"] = self.redact(web_labs.run(session["chapter"], action, data, home, session["lab_state"]))
+                    session["title"] = session["lab"]["title"]
+                except ValueError as exc:
+                    raise WebError(str(exc)) from None
+                finally:
+                    reset_secret_scope(st); reset_mini_home_override(ht)
+            elif session["chapter"] == "06":
+                if action not in ("snapshot", "search", "restore"): raise WebError("未知会话存储操作")
+                path = session.get("db_path")
+                if path is None: raise WebError("先发送一条消息，生成真实会话记录")
+                db = SessionDB(path, read_only=True)
+                try:
+                    session["storage"] = self._storage_snapshot(db, session)
+                    if action == "search":
+                        query = data.get("query", "")
+                        if not isinstance(query, str) or not 1 <= len(query) <= 200: raise WebError("请输入 1–200 字符的关键词")
+                        hits = [row for row in db.search_messages(query, limit=1000) if row.get("session_id") == sid]
+                        session["storage"]["search"] = {"query": query, "hits": hits}
+                    if action == "restore":
+                        session["agent"] = None
+                        session["history"] = session["storage"]["restored"]
+                        session["storage"]["memory_reloaded"] = True
+                finally: db.close()
+            elif session["chapter"] == "15" and action == "observer":
+                value = data.get("enabled")
+                if not isinstance(value, bool): raise WebError("观察者开关必须是布尔值")
+                session["observer_fault"] = value
+            else: raise WebError("本章没有这个操作")
+            return self.chapter_detail(sid)
+
     def start(self, sid, message):
         if not isinstance(message, str) or not message.strip() or len(message) > 6000:
             raise WebError("请输入 1–6000 个字符")
@@ -212,7 +271,7 @@ class WebApp:
             session = self.sessions.get(sid)
             if session is None:
                 raise WebError("会话不存在", 404)
-            if session["chapter"] == "01":
+            if session["chapter"] in web_lessons.GUIDE_CHAPTERS:
                 raise WebError("本章只提供架构导览，无需运行演示")
             if any(key in message for key in self.live_secrets.values()):
                 raise WebError("请在模型设置中填写密钥，不要发送到对话")
@@ -261,6 +320,10 @@ class WebApp:
         plan = [("read_file", {"path": str(project / "missing.txt")})] if failed else [
             ("list_dir", {"path": str(project)}),
             ("read_file", {"path": str(project / ("main.py" if code else "README.md"))})]
+        skill_scene = "skill_view" in message or "技能" in message
+        if skill_scene:
+            code = True
+            plan = [("skill_view", {"name":"demo-review"}), ("read_file", {"path":str(project/"main.py")})]
         index = 0
 
         def respond(candidate, messages):
@@ -286,7 +349,11 @@ class WebApp:
                     listing = next((self._tool_payload(m) for m in tools
                                     if '"entries"' in str(m.get("content", ""))), {})
                     names = "、".join(entry["name"] for entry in listing.get("entries", []))
-                    text = "演示项目包含：" + names + "。\n\n"
+                    if skill_scene:
+                        skill_result = self._tool_payload(tools[-2]) if len(tools)>1 else {}
+                        text = ("已按需读取技能 " + str(skill_result["name"]) + "。" if skill_result.get("name") else "技能读取结果：" + str(skill_result.get("error", "未观察到技能正文"))) + "\n\n"
+                    else:
+                        text = "演示项目包含：" + names + "。\n\n"
                     text += ("入口代码 main.py：\n" if code else "README 内容：\n") + content_text
                     text += "\n\n这些内容来自刚才的实际工具结果。你可以在右侧展开每一步，查看原始参数和返回值。"
                 content = {"role": "assistant", "content": text}
@@ -311,8 +378,9 @@ class WebApp:
                 st = set_secret_scope({})
                 evidence = []
                 try:
-                    evidence = web_lessons.run_experiment(session["chapter"], experiment_home,
-                        lambda kind, **data: evidence.append(data))
+                    if session["lab"] is None:
+                        evidence = web_lessons.run_experiment(session["chapter"], experiment_home,
+                            lambda kind, **data: evidence.append(data))
                 finally:
                     reset_secret_scope(st)
                     reset_mini_home_override(ht)
@@ -338,6 +406,9 @@ class WebApp:
                     home.mkdir(exist_ok=True)
                     for name, text in (("SOUL.md", "你是演示用的 mini-hermes 助手。回答以工具读取的内容为依据。"), ("MEMORY.md", "演示记忆：这个项目的入口是 main.py。")):
                         if not (home / name).exists(): (home / name).write_text(text, encoding="utf-8")
+                if session["chapter"] == "13":
+                    folder = home / "skills/demo-review"; folder.mkdir(parents=True, exist_ok=True)
+                    (folder / "SKILL.md").write_text("---\nname: demo-review\ndescription: 检查演示项目入口与输出\n---\nBODY_LOADED_ON_DEMAND\n先读取 main.py，再检查入口函数与输出。", encoding="utf-8")
                 home_token = set_mini_home_override(home)
                 secret_token = set_secret_scope({})
                 spec = {"provider": "demo", "model": "scripted-offline", "api_key": "demo",
@@ -366,6 +437,7 @@ class WebApp:
             home.mkdir(parents=True, exist_ok=True)
             db = SessionDB(home / "state.db")
             db.create_session(session["id"], "web", model=spec["model"])
+            session["db_path"] = home / "state.db"
             if session["agent"] is None:
                 session["agent"] = AIAgent(
                     spec, session_id=session["id"], max_turns=self.max_turns,
@@ -385,10 +457,25 @@ class WebApp:
             # A cached agent must receive a fresh budget for each submitted turn.
             agent.budget = IterationBudget(self.max_turns)
             agent.approval_callback = turn.approve
+            if session["lab"]:
+                lab = session["lab"]
+                agent.ephemeral_system_prompt += " 最新实验操作与参数：" + json.dumps(web_labs.notes(lab), ensure_ascii=False)
             agent.status_callback = lambda text: turn.emit("status", text=text)
             observer = ObserverRegistry()
+            def observe(**payload):
+                with self.lock:
+                    session["trace_log"].append(turn.redact(payload))
+                    if len(session["trace_log"]) > 1000:
+                        session["trace_log"].pop(0)
+                        session["dropped_events"] += 1
+                turn.emit("trace", **payload)
+            if session["observer_fault"]:
+                def failing_observer(**payload):
+                    session["observer_faults"] += 1
+                    raise RuntimeError("实验观察者主动失败")
+                observer.add("pre_llm_call", failing_observer)
             for name in OBSERVER_EVENTS:
-                observer.add(name, lambda **payload: turn.emit("trace", **payload))
+                observer.add(name, observe)
             agent._observers = observer
             if offline:
                 agent._http_post = self._scripted_provider(message, turn, workspace)
@@ -404,7 +491,7 @@ class WebApp:
                     except Exception as exc:
                         raise RuntimeError(turn.redact(str(exc))) from None
                 agent._http_post = sanitized_request
-            if session["chapter"] == "03":
+            if session["chapter"] in web_lessons.CONVERSATION_CHAPTERS:
                 transport = agent._http_post
                 def inspected_request(candidate, messages):
                     # Capture the already assembled request copy, before any provider call.
@@ -412,7 +499,15 @@ class WebApp:
                     with self.lock:
                         session["prompt_requests"].append(snapshot)
                     turn.emit("prompt_request", **{k: snapshot[k] for k in ("id", "turn", "iteration", "model")})
-                    return transport(candidate, messages)
+                    try:
+                        response = transport(candidate, messages)
+                    except Exception as exc:
+                        snapshot["transport_error"] = turn.redact(str(exc))
+                        raise
+                    snapshot["response"] = turn.redact(response)
+                    if session["chapter"] == "06":
+                        snapshot["storage_before_response"] = turn.redact(self._storage_snapshot(db, session))
+                    return response
                 agent._http_post = inspected_request
             with self.lock:
                 session["model"] = agent.model
@@ -426,7 +521,7 @@ class WebApp:
                 turn.emit("status", text="本轮已停止")
                 return
             result = agent.run_conversation(message, conversation_history=session["history"])
-            if lesson["kind"] == "agent" and session["chapter"] != "03":
+            if session["chapter"] in ("02", "15"):
                 if session["chapter"] == "02":
                     calls = [d for d in turn.traces if d["event"] == "pre_tool_call"]
                     returns = [d for d in turn.traces if d["event"] == "post_tool_call"]
@@ -445,6 +540,8 @@ class WebApp:
                 answer = result.get("final_response", "")
                 if answer:
                     session["messages"].append({"role": "assistant", "content": answer})
+            if session["chapter"] == "06":
+                session["storage"] = turn.redact(self._storage_snapshot(db, session))
             with self.lock:
                 session["model"] = agent.model
             turn.emit("result", text=answer, usage=result.get("usage"),
@@ -518,6 +615,12 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"token": self.server.app.token,
                                        "sessions": self.server.app.snapshot(),
                                        "chapters": web_lessons.catalog(), "model_config": self.server.app.model_config()})
+            if path.startswith("/api/chapter/"):
+                parts = path.split("/")
+                if len(parts) != 4: raise WebError("会话不存在", 404)
+                with self.server.app.lock:
+                    detail = self.server.app.chapter_detail(parts[3])
+                return self._json(200, detail, exact=True)
             if path.startswith("/api/prompts/"):
                 parts = path.split("/")
                 app = self.server.app
@@ -578,6 +681,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 raise WebError("无效会话 ID")
             if path == "/api/sessions":
                 return self._json(201, app.create_session(data.get("mode", "offline"), data.get("chapter", "02")))
+            if path == "/api/chapter-action":
+                return self._json(200, app.chapter_action(data), exact=True)
             if path == "/api/model-config":
                 return self._json(200, app.configure_model(data))
             if path == "/api/stop":

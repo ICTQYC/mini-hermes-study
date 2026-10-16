@@ -2846,3 +2846,7 @@ environments/local.py::served_profile_child_env(target_home=, inherit_credential
 >
 > 这一段的价值在于它是一个**范例**：怎么把"并发 + 多租户 + 持久化"这三件事
 > 写成一串**可验证的顺序约束**（先 X 后 Y、读不触发写、owner 在启动读取器前就钉住）。
+
+### 后续维护：可操作的章节演示
+
+Web 工具章可切换 file/default，查看真实注册表与 get_tool_definitions 输出，并对生成文件进行读写/列目录。执行前检查可见性，terminal 仅展示闸门，不实际执行。 操作与验证边界见 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。

@@ -975,3 +975,7 @@ $ git -C ~/.hermes/hermes-agent show f5d1926110:hermes_state_schema.py | sed -n 
 - 原文 §1 逐字：*"a later `SessionDB` open may rebuild under the cross-process admission lock"*。
 - 源码 `hermes_state_schema.py:562-565`（`retry_deferred_fts_recovery` 的 docstring）逐字含：*"a gateway opens state.db once for days, so "next open" never comes"*；派发点在网关 housekeeping tick（`gateway/run.py:4566-4579`，槽位 `:4650`）。
 - **结论**：重建并不只发生在「下一次打开」——长命网关**根本不会再打开**，故另有 tick 上的 `retry_deferred_fts_recovery` 兜底。原文只提「下一次打开」，**操作含义上不完整**。
+
+### 后续维护：可操作的章节演示
+
+Web 恢复章可以依次体检、设置实验库 FTS 降级标记、显式备份修复，再检查保留消息及搜索。只操作生成目录，不物理损坏文件，不冒充覆盖所有坏库情况。 操作与验证边界见 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。

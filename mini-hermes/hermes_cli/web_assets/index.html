@@ -27,6 +27,7 @@
       <div class="lesson-info"><span id="lesson-kind" class="pill"></span><strong id="lesson-title"></strong><p id="lesson-focus"></p><div id="lesson-docs"></div></div>
       <div id="evidence" class="evidence" aria-live="polite"></div>
     </section>
+    <section id="lab-panel" class="panel chapter-lab" hidden><div class="eyebrow">INTERACTIVE EXPERIMENT · 隔离实验</div><h2 id="lab-title"></h2><p class="prompt-intro">操作真实模块，逐步查看输入、决策和输出；数据写入本次服务拥有的临时目录，不调用外部模型。摘要或故障响应会明确标为离线夹具。</p><div id="lab-controls" class="lab-controls"></div><div id="lab-result"><p class="prompt-intro">选择参数并执行一次操作，查看实际过程。</p></div></section>
     <div class="workbench">
       <section class="conversation panel">
         <div class="panel-heading"><div><span class="panel-symbol">↗</span><strong>对话</strong><span id="session-short" class="subtle">新会话</span></div><span id="run-status" class="status-pill">就绪</span></div>
@@ -41,6 +42,7 @@
         <form id="composer" class="composer"><label class="sr-only" for="prompt">输入任务</label><textarea id="prompt" rows="2" maxlength="6000" placeholder="输入一个任务，或选择上方的演示场景…"></textarea><div class="composer-bottom"><span id="composer-hint">Enter 发送 · Shift + Enter 换行</span><div><button id="stop" class="stop-button" type="button" hidden>■ 停止</button><button id="send" class="send-button" type="submit">发送任务 <span>↑</span></button></div></div></form>
       </section>
       <aside class="inspector">
+    <section id="chapter-inspector" class="panel chapter-inspector" hidden><div class="eyebrow">CURRENT CONVERSATION · 当前对话</div><h2 id="chapter-inspector-title"></h2><p id="chapter-inspector-intro" class="prompt-intro"></p><div id="chapter-controls" class="lab-controls"></div><div id="chapter-content"></div></section>
     <section id="prompt-inspector" class="panel prompt-inspector" hidden>
       <div class="prompt-top"><div><div class="eyebrow">PROMPT ASSEMBLY · 当前对话</div><h2>模型这一次看到了什么？</h2></div><label for="prompt-request-select">选择模型请求</label><select id="prompt-request-select"></select></div>
       <p class="prompt-intro">稳定层 → 项目上下文层 → 重建时可能变化的层 → 本次临时指导。点开各层可看本次原文；内容取自真实请求副本，已对已知密钥脱敏。</p>
