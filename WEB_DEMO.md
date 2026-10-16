@@ -4,13 +4,17 @@
 
 ## 启动 / Run
 
-从仓库根运行：
+需要 Python **3.9+**。首次下载与启动（macOS / Linux）：
 
 ```bash
+git clone https://github.com/ICTQYC/mini-hermes-study.git
+cd mini-hermes-study
 ./mini-hermes/mini --web
 ```
 
-打开 `http://127.0.0.1:8765`。更换端口：`./mini-hermes/mini --web --web-port 8766`。
+已下载仓库时，在仓库根目录执行最后一条命令即可。无需安装 Python 包或前端依赖。
+
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765/)。更换端口：`./mini-hermes/mini --web --web-port 8766`。
 按 Ctrl-C 关闭服务；服务只监听本机回环地址。
 
 From the repository root, run the command above and open the local URL. No build or install step is needed. The server binds only to the loopback interface.
@@ -19,16 +23,22 @@ From the repository root, run the command above and open the local URL. No build
 
 | 模式 | 模型决策 | 工具与存储 | 凭据与网络 |
 |---|---|---|---|
-| 离线演示 | 机制章节直接调用对应模块；循环/观察者章节用固定脚本 provider | 生成隔离夹具、真实执行模块或工具；临时数据退出清理 | 不读取使用者凭据，不发网络请求 |
-| 真实模型 | DeepSeek Web 设置优先；未配置则使用后端 provider/model | 先运行本章隔离实验，再由真实 Agent 解读证据；工具可读写当前工作区；消息写入 `<MINI_HOME>/web/state.db` | Web 密钥仅在服务内存；其余沿用 CLI 配置 |
+| 离线演示 | 实验页直接调用对应模块；对话页用固定脚本 provider | 生成隔离夹具、真实执行模块或工具；临时数据退出清理 | 不读取使用者凭据，不发网络请求 |
+| 真实模型 | DeepSeek Web 设置优先；未配置则使用后端 provider/model | 对话页直接使用真实 Agent；实验页可先操作实验再提问，附带本次实测片段；工具可读写当前工作区；消息写入 `<MINI_HOME>/web/state.db` | Web 密钥仅在服务内存；其余沿用 CLI 配置 |
 
-机制实验不调用模型，tokens 显示“—”；循环/观察者离线场景的 tokens 按字符数估算。真实模式显示 provider 响应用量，未返回则为“—”。耗时均实际测量。
+机制实验不调用模型，tokens 显示“—”；对话页离线场景的 tokens 按字符数估算。真实模式显示 provider 响应用量，未返回则为“—”。耗时均实际测量。
 
-Offline mechanism experiments invoke actual modules with isolated fixtures. The agent-loop and observer demos use scripted decisions with real tools. Live mode runs the selected experiment and sends its evidence to the real agent for explanation. It can use a DeepSeek key entered in the UI, or existing backend configuration. No credentials are needed for offline demos.
+Offline mechanism experiments invoke actual modules with isolated fixtures. Conversation demos use scripted decisions with real tools. Live conversation pages run the real agent directly. On lab pages, perform an experiment first, then ask the live agent to explain its measured evidence. It can use a DeepSeek key entered in the UI, or existing backend configuration. No credentials are needed for offline demos.
 
 ## 按章演示 / Chapter focus
 
-选择章节 → 点击“运行本章演示” → 查看绿色/红色实测证据 → 展开详情与轨迹。切换章节会新建会话，旧会话保留本章证据；“阅读精译 / 源码讲解”可打开仓内完整 Markdown 原文。
+选择章节后，按页面类型操作：
+
+- **当前对话**：点击“运行本章演示”或直接输入任务，再查看每次实际请求、响应及本章详情。
+- **互动实验**：调整参数并点击对应操作按钮，在结果面板检查输入、输出和连续操作后的变化。
+- **文档导览**：阅读章节说明与 Markdown，不提供运行按钮。
+
+切换章节或模式会新建会话；左侧可返回已有会话，同一次页面打开期间保留该会话的实验控件选择。“阅读精译 / 源码讲解”可打开仓内完整 Markdown 原文。
 
 当前提供 **5 个当前对话查看器**（循环、提示词、存储、技能、观察者）与 **6 个可操作实验**（工具、压缩、Provider、微压缩、状态恢复、引擎）。其余章节只保留文档导览，不伪造运行过程。逐章操作与边界见 [详细演示指南](WEB_CHAPTER_DEMOS.md)。
 
@@ -86,6 +96,8 @@ The session list is in memory and resets when the server restarts. Live messages
 
 浏览器验收覆盖桌面与 390px 手机断点、发送与停止、失败结果、会话切换，以及 HTML 注入文本的安全呈现；无横向溢出，浏览器未报告脚本错误。章节页与模型设置也以假密钥验证保存、重开不回显及清除；真实外部 DeepSeek 本轮未调用。页面截图见下方。
 
-![按章节运行的实际演示页面](docs/assets/web-chapters.png)
+![当前对话的模型请求与工具回填](docs/assets/web-agent-loop.png)
+
+![压缩前后消息去向与上下文结构](docs/assets/web-compression-lab.png)
 
 ![真实模型设置（未填写密钥）](docs/assets/web-model-settings.png)

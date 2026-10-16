@@ -29,9 +29,19 @@ This repository contains **17 Chinese translation chapters**, **16 source walkth
 
 ## Web demo
 
-Run `./mini-hermes/mini --web` and open `http://127.0.0.1:8765`. Select a chapter to run a focused mechanism experiment and inspect measured evidence. Agent-loop chapters use scripted decisions with real tools offline. Enter a DeepSeek API key in Model settings (server memory only), then switch to live mode; existing backend configuration is also supported. No frontend build or third-party packages are needed. See the [Web demo guide](WEB_DEMO.md). Chapter 03 now shows the actual prompt tiers and each request in the current conversation: [Prompt assembly demo](WEB_PROMPT_ASSEMBLY.md). [Chapter demo guide](WEB_CHAPTER_DEMOS.md).
+Requires **Python 3.9+**, with no `pip install` or `npm install` step. In a macOS / Linux terminal:
 
-![mini-hermes local Web demo](docs/assets/web-chapters.png)
+```bash
+git clone https://github.com/ICTQYC/mini-hermes-study.git
+cd mini-hermes-study
+./mini-hermes/mini --web
+```
+
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765/). Offline mode needs no key or network. If you already have the repository, run only the last command from its root. Press **Ctrl-C** to stop. If the port is in use, run `./mini-hermes/mini --web --web-port 8766` and open that port.
+
+Select a chapter to run a focused mechanism experiment and inspect measured evidence. Agent-loop chapters use scripted decisions with real tools offline. Enter a DeepSeek API key in Model settings (server memory only), then switch to live mode; existing backend configuration is also supported. No frontend build or third-party packages are needed. See the [Web demo guide](WEB_DEMO.md). Chapter 03 now shows the actual prompt tiers and each request in the current conversation: [Prompt assembly demo](WEB_PROMPT_ASSEMBLY.md). [Chapter demo guide](WEB_CHAPTER_DEMOS.md).
+
+![mini-hermes local Web demo](docs/assets/web-agent-loop.png)
 
 ## Quick start
 

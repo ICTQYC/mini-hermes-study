@@ -31,10 +31,18 @@
 
 ## 演示页面
 
-运行 `./mini-hermes/mini --web`，打开 `http://127.0.0.1:8765`，即可体验无需密钥的离线演示。
+需要 Python **3.9+**，无需 `pip install` 或 `npm install`。macOS / Linux 终端执行：
+
+```bash
+git clone https://github.com/ICTQYC/mini-hermes-study.git
+cd mini-hermes-study
+./mini-hermes/mini --web
+```
+
+浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765/)，默认是无需密钥、无需网络的离线演示。已下载仓库时，只需在仓库根目录执行最后一条命令。按 **Ctrl-C** 停止；端口被占用可用 `./mini-hermes/mini --web --web-port 8766`，再打开对应端口。
 选择章节可运行本章重点实验、查看实测证据和配套 Markdown；页面实时展示对话与调用轨迹。“模型设置”支持输入 DeepSeek API Key（仅服务内存），切换真实模型运行。详见 [Web 演示说明](WEB_DEMO.md)。 第 3 章已支持查看当前对话的真实提示词分层与每次请求：[演示操作说明](WEB_PROMPT_ASSEMBLY.md)。 [逐章演示指南](WEB_CHAPTER_DEMOS.md)。
 
-![mini-hermes 本地演示页面](docs/assets/web-chapters.png)
+![mini-hermes 本地演示页面](docs/assets/web-agent-loop.png)
 
 ## 快速开始
 
@@ -124,7 +132,7 @@ for f in tests/test_*.py; do echo "── $f"; python3 "$f" | tail -1; done
 | 源码讲解（差异 / 深挖 / 真问题 / 差距清单） | 16 篇 · 19,028 行 |
 | 跟读文档（消息旅程 / 代码解读 / 测试怎么写） | 3 份 · 2,073 行 |
 | 收尾总览（46 篇图谱 / 差距总账 / 冻结清单 —— 全库的账） | 1 篇 · 466 行 |
-| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 172 行 |
+| 发布前修复记录（问题 → 修复 → 回归与反向验证） | 1 篇 · 180 行 |
 | `mini-hermes/` 源码（`*.py`，不含测试 / demo） | 19,768 行 · 79 个文件 |
 | `mini-hermes/tests/`（18 个测试文件） | 12,942 行 |
 | `mini-hermes/demos/`（故障复现 + 真跑脚本） | 1,794 行 · 10 个 |

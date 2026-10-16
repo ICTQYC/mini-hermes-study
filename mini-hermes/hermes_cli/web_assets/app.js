@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const state = {token: "", sessions: [], session: null, mode: "offline", busy: false, events: 0,
-  promptSelection: null, promptLoad: 0, chapters: [], chapter: "02", config: {}, chapterView: 0, chapterChoice: null, tools: 0, started: 0, usage: false, stopped: false, approval: null};
+  promptSelection: null, promptLoad: 0, chapters: [], chapter: "02", config: {}, chapterView: 0, chapterChoice: null, requestLoad: 0, labDrafts: new Map(), tools: 0, started: 0, usage: false, stopped: false, approval: null};
 const labels = {pre_llm_call: "Agent 请求模型", post_llm_call: "模型返回决策", pre_api_request: "发送模型请求",
   post_api_request: "收到模型响应", api_request_error: "模型请求失败", pre_tool_call: "开始执行工具", post_tool_call: "工具执行完成"};
 function node(tag, className, text) {
@@ -117,6 +117,7 @@ async function watchRunning(id) {
 }
 function selectSession(session) {
   if (state.busy) return;
+  if (state.session?.id !== session.id) { state.chapterChoice = null; state.requestLoad += 1; }
   state.session = session; state.chapter = session.chapter; modeUI(session.mode); resetTrace(); lessonUI(session.evidence || []);
   $("session-short").textContent = session.id.slice(0, 8);
   renderMessages(session);
@@ -127,8 +128,13 @@ function selectSession(session) {
 }
 async function createSession(mode = state.mode) {
   if (state.busy) return;
-  const response = await api("/api/sessions", {mode, chapter: state.chapter});
-  const session = await response.json(); state.sessions.push(session); selectSession(session);
+  setBusy(true, "创建会话"); $("stop").hidden = true;
+  let session;
+  try {
+    const response = await api("/api/sessions", {mode, chapter: state.chapter});
+    session = await response.json();
+  } finally { setBusy(false); }
+  state.sessions.push(session); selectSession(session);
 }
 function trace(title, subtitle, data, kind = "") {
   if (!state.events) $("trace").replaceChildren();
@@ -299,6 +305,13 @@ function labControls(chapter) {
     try { await chapterAction(data); } catch(error){notice(error.message);}
     finally { if(state.session.id===sid)setBusy(false); }
   },box);
+  const draft = state.labDrafts.get(state.session.id);
+  for (const input of box.querySelectorAll("select,input")) {
+    if (draft && Object.hasOwnProperty.call(draft, input.id)) input.value = draft[input.id];
+  }
+  box.oninput = box.onchange = () => {
+    state.labDrafts.set(state.session.id, Object.fromEntries([...box.querySelectorAll("select,input")].map(input => [input.id, input.value])));
+  };
   refreshChapter();
 }
 function rowTable(rows, columns) {
@@ -344,10 +357,10 @@ async function refreshChapter(){
   }catch(error){notice(error.message);}
 }
 async function renderRequest(id, chapter) {
-  const sid=state.session.id; state.chapterChoice=id;
+  const sid=state.session.id, version=++state.requestLoad; state.chapterChoice=id;
   try {
     const row=await(await api(`/api/prompts/${sid}/${id}`)).json();
-    if(sid!==state.session?.id||id!==state.chapterChoice)return;
+    if(version!==state.requestLoad||sid!==state.session?.id||id!==state.chapterChoice||chapter!==state.chapter)return;
     const content=$("chapter-content");content.replaceChildren();
     const reply=row.response?.choices?.[0]?.message;
     const calls=reply?.tool_calls||[];
@@ -357,7 +370,7 @@ async function renderRequest(id, chapter) {
     const list=state.session.prompt_requests||[], index=list.findIndex(item=>item.id===id), next=list[index+1];
     if(calls.length && next && next.turn===row.turn){
       const later=await(await api(`/api/prompts/${sid}/${next.id}`)).json();
-      if(sid!==state.session?.id||id!==state.chapterChoice)return;
+      if(version!==state.requestLoad||sid!==state.session?.id||id!==state.chapterChoice||chapter!==state.chapter)return;
       const ids=new Set(calls.map(c=>c.id)); const tools=later.messages.filter(m=>m.role==="tool"&&ids.has(m.tool_call_id));
       content.append(detailBlock("3. 实际进入下一次请求的工具结果",tools,"用 tool_call_id 关联工具调用和返回；这里只展示确实进入后续请求的内容。",true));
       content.append(detailBlock("4. 下一次请求新增/保留的完整上下文",later.messages,"后续决策来自含工具结果的新请求，而不是模型自行知道了文件或技能内容。"));
